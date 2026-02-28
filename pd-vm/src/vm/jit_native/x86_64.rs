@@ -2712,7 +2712,38 @@ fn write_machine_code(ptr: *mut u8, code: &[u8]) -> VmResult<()> {
 }
 
 #[cfg(target_os = "windows")]
-fn finalize_executable_region(_ptr: *mut u8, _len: usize) -> VmResult<()> {
+fn finalize_executable_region(ptr: *mut u8, len: usize) -> VmResult<()> {
+    use windows_sys::Win32::{
+        Foundation::HANDLE,
+        System::{
+            Diagnostics::Debug::FlushInstructionCache,
+            Memory::{PAGE_EXECUTE_READ, VirtualProtect},
+            Threading::GetCurrentProcess,
+        },
+    };
+
+    if ptr.is_null() {
+        return Ok(());
+    }
+
+    let mut old_protect = 0u32;
+    let ok = unsafe { VirtualProtect(ptr as *mut _, len, PAGE_EXECUTE_READ, &mut old_protect) };
+    if ok == 0 {
+        return Err(VmError::JitNative(format!(
+            "VirtualProtect(PAGE_EXECUTE_READ) failed: {}",
+            std::io::Error::last_os_error()
+        )));
+    }
+
+    let process: HANDLE = unsafe { GetCurrentProcess() };
+    let ok = unsafe { FlushInstructionCache(process, ptr as *const _, len) };
+    if ok == 0 {
+        return Err(VmError::JitNative(format!(
+            "FlushInstructionCache failed: {}",
+            std::io::Error::last_os_error()
+        )));
+    }
+
     Ok(())
 }
 
@@ -2742,7 +2773,7 @@ unsafe extern "C" {
 #[cfg(target_os = "windows")]
 fn alloc_executable_region(len: usize) -> VmResult<*mut u8> {
     use windows_sys::Win32::System::Memory::{
-        MEM_COMMIT, MEM_RESERVE, PAGE_EXECUTE_READWRITE, VirtualAlloc,
+        MEM_COMMIT, MEM_RESERVE, PAGE_READWRITE, VirtualAlloc,
     };
 
     let ptr = unsafe {
@@ -2750,7 +2781,7 @@ fn alloc_executable_region(len: usize) -> VmResult<*mut u8> {
             std::ptr::null_mut(),
             len,
             MEM_COMMIT | MEM_RESERVE,
-            PAGE_EXECUTE_READWRITE,
+            PAGE_READWRITE,
         ) as *mut u8
     };
     if ptr.is_null() {
