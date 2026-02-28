@@ -4,5 +4,6 @@
 .pdr
 .pd-controller
 .pd-edge
+.wasm
 node_modules
 dist
