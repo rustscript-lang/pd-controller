@@ -5,6 +5,7 @@ use std::{
 };
 
 use axum::http::{HeaderMap, HeaderName, HeaderValue};
+use url::Url;
 use vm::{CallOutcome, HostFunction, Value, Vm, VmError};
 
 pub type SharedRateLimiter = Arc<Mutex<RateLimiterStore>>;
@@ -246,7 +247,7 @@ impl HostFunction for SetUpstreamFunction {
         let upstream = expect_string(args, 0)?;
         if !is_valid_upstream(&upstream) {
             return Err(VmError::HostError(format!(
-                "upstream must be host:port, got '{upstream}'",
+                "upstream must be host:port or http(s)://host[:port][/path], got '{upstream}'",
             )));
         }
 
@@ -315,12 +316,23 @@ fn expect_int(args: &[Value], index: usize) -> Result<i64, VmError> {
 
 fn is_valid_upstream(value: &str) -> bool {
     if value.is_empty()
-        || value.contains("://")
         || value.contains('/')
         || value.contains('?')
         || value.contains('#')
         || value.chars().any(|ch| ch.is_whitespace())
     {
+        if let Ok(url) = Url::parse(value) {
+            if url.scheme() != "http" && url.scheme() != "https" {
+                return false;
+            }
+            if url.host_str().is_none() {
+                return false;
+            }
+            if !url.username().is_empty() || url.password().is_some() {
+                return false;
+            }
+            return true;
+        }
         return false;
     }
 
@@ -432,10 +444,20 @@ mod tests {
             assert_eq!(guard.upstream.as_deref(), Some("localhost:8080"));
         }
 
-        let err = function.call(
+        let ok = function.call(
             &mut vm,
-            &[Value::String("http://localhost:8080".to_string())],
+            &[Value::String("https://example.com/path".to_string())],
         );
+        assert!(matches!(ok, Ok(CallOutcome::Return(_))));
+        {
+            let guard = context.lock().expect("vm context lock poisoned");
+            assert_eq!(
+                guard.upstream.as_deref(),
+                Some("https://example.com/path")
+            );
+        }
+
+        let err = function.call(&mut vm, &[Value::String("ftp://localhost".to_string())]);
         assert!(matches!(err, Err(VmError::HostError(_))));
     }
 

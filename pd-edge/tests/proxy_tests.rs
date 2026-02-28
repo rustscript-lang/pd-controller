@@ -254,6 +254,41 @@ async fn upstream_path_proxies_method_path_query_and_body() {
 }
 
 #[tokio::test]
+async fn upstream_accepts_full_url_with_path() {
+    let upstream_app = Router::new().fallback(any(|request: Request<Body>| async move {
+        let path = request
+            .uri()
+            .path_and_query()
+            .map(|value| value.as_str())
+            .unwrap_or("/");
+        Response::new(Body::from(path.to_string()))
+    }));
+    let (upstream_addr, upstream_handle) = spawn_server(upstream_app).await;
+
+    let (data_addr, admin_addr, data_handle, admin_handle) = spawn_proxy(1024 * 1024).await;
+    let client = reqwest::Client::new();
+    let program = build_upstream_program(&format!("http://{upstream_addr}/fixed"), None);
+
+    let upload = upload_program(&client, admin_addr, &program).await;
+    assert_eq!(upload.status(), StatusCode::NO_CONTENT);
+
+    let response = client
+        .get(format!("http://{data_addr}/other?x=1"))
+        .send()
+        .await
+        .expect("request should complete");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.text().await.expect("body should read"),
+        "/fixed"
+    );
+
+    upstream_handle.abort();
+    data_handle.abort();
+    admin_handle.abort();
+}
+
+#[tokio::test]
 async fn vm_response_headers_are_applied_on_short_circuit_and_proxied_paths() {
     let upstream_app = Router::new().fallback(any(|_request: Request<Body>| async move {
         let mut response = Response::new(Body::from("upstream"));

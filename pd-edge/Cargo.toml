@@ -21,6 +21,7 @@ supports-color = "3"
 base64 = "0.22"
 rand = "0.8"
 uuid = { version = "1", features = ["v4"] }
+url = "2"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.58", features = ["Win32_Foundation", "Win32_System_Console"] }

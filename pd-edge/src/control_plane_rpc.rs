@@ -33,6 +33,18 @@ pub struct EdgeTrafficSample {
     pub latency_p90_ms: u64,
     #[serde(default)]
     pub latency_p99_ms: u64,
+    #[serde(default)]
+    pub upstream_latency_p50_ms: u64,
+    #[serde(default)]
+    pub upstream_latency_p90_ms: u64,
+    #[serde(default)]
+    pub upstream_latency_p99_ms: u64,
+    #[serde(default)]
+    pub edge_latency_p50_ms: u64,
+    #[serde(default)]
+    pub edge_latency_p90_ms: u64,
+    #[serde(default)]
+    pub edge_latency_p99_ms: u64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

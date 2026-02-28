@@ -23,6 +23,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use tracing::{info, warn};
 use uuid::Uuid;
+use url::Url;
 use vm::{Program, Vm, VmStatus, decode_program, infer_local_count, validate_program};
 
 use crate::{
@@ -133,8 +134,9 @@ impl SharedState {
         }
     }
 
-    pub fn record_data_plane_latency_ms(&self, latency_ms: u64) {
-        self.runtime_metrics.record_latency_ms(latency_ms);
+    pub fn record_data_plane_latency_ms(&self, total_latency_ms: u64, upstream_latency_ms: u64) {
+        self.runtime_metrics
+            .record_latency_ms(total_latency_ms, upstream_latency_ms);
     }
 
     pub fn record_vm_execution_error(&self) {
@@ -237,8 +239,7 @@ impl SharedState {
     }
 
     pub fn traffic_sample(&self) -> EdgeTrafficSample {
-        let (latency_p50_ms, latency_p90_ms, latency_p99_ms) =
-            self.runtime_metrics.take_latency_percentiles_ms();
+        let latencies = self.runtime_metrics.take_latency_percentiles_ms();
         EdgeTrafficSample {
             requests_total: self
                 .runtime_metrics
@@ -260,9 +261,15 @@ impl SharedState {
                 .runtime_metrics
                 .status_5xx_total
                 .load(Ordering::Relaxed),
-            latency_p50_ms,
-            latency_p90_ms,
-            latency_p99_ms,
+            latency_p50_ms: latencies.total.p50_ms,
+            latency_p90_ms: latencies.total.p90_ms,
+            latency_p99_ms: latencies.total.p99_ms,
+            upstream_latency_p50_ms: latencies.upstream.p50_ms,
+            upstream_latency_p90_ms: latencies.upstream.p90_ms,
+            upstream_latency_p99_ms: latencies.upstream.p99_ms,
+            edge_latency_p50_ms: latencies.edge_added.p50_ms,
+            edge_latency_p90_ms: latencies.edge_added.p90_ms,
+            edge_latency_p99_ms: latencies.edge_added.p99_ms,
         }
     }
 
@@ -321,7 +328,9 @@ struct RuntimeMetrics {
     control_rpc_polls_error_total: AtomicU64,
     control_rpc_results_success_total: AtomicU64,
     control_rpc_results_error_total: AtomicU64,
-    latency_samples_ms: Mutex<VecDeque<u64>>,
+    latency_total_samples_ms: Mutex<VecDeque<u64>>,
+    latency_upstream_samples_ms: Mutex<VecDeque<u64>>,
+    latency_edge_added_samples_ms: Mutex<VecDeque<u64>>,
 }
 
 struct ProxyUpstreamInputs {
@@ -350,40 +359,76 @@ impl Default for RuntimeMetrics {
             control_rpc_polls_error_total: AtomicU64::new(0),
             control_rpc_results_success_total: AtomicU64::new(0),
             control_rpc_results_error_total: AtomicU64::new(0),
-            latency_samples_ms: Mutex::new(VecDeque::new()),
+            latency_total_samples_ms: Mutex::new(VecDeque::new()),
+            latency_upstream_samples_ms: Mutex::new(VecDeque::new()),
+            latency_edge_added_samples_ms: Mutex::new(VecDeque::new()),
         }
     }
 }
 
 impl RuntimeMetrics {
-    fn record_latency_ms(&self, latency_ms: u64) {
-        let mut samples = self
-            .latency_samples_ms
-            .lock()
-            .expect("latency samples lock poisoned");
-        samples.push_back(latency_ms);
+    fn record_latency_ms(&self, total_latency_ms: u64, upstream_latency_ms: u64) {
+        let upstream_latency_ms = upstream_latency_ms.min(total_latency_ms);
+        let edge_added_latency_ms = total_latency_ms.saturating_sub(upstream_latency_ms);
+        self.push_latency_sample(&self.latency_total_samples_ms, total_latency_ms);
+        self.push_latency_sample(&self.latency_upstream_samples_ms, upstream_latency_ms);
+        self.push_latency_sample(&self.latency_edge_added_samples_ms, edge_added_latency_ms);
+    }
+
+    fn push_latency_sample(&self, target: &Mutex<VecDeque<u64>>, value: u64) {
+        let mut samples = target.lock().expect("latency samples lock poisoned");
+        samples.push_back(value);
         while samples.len() > MAX_LATENCY_SAMPLES {
             let _ = samples.pop_front();
         }
     }
 
-    fn take_latency_percentiles_ms(&self) -> (u64, u64, u64) {
-        let mut values = {
-            let mut samples = self
-                .latency_samples_ms
-                .lock()
-                .expect("latency samples lock poisoned");
-            samples.drain(..).collect::<Vec<_>>()
-        };
-        if values.is_empty() {
-            return (0, 0, 0);
+    fn drain_latency_samples(&self, target: &Mutex<VecDeque<u64>>) -> Vec<u64> {
+        let mut samples = target.lock().expect("latency samples lock poisoned");
+        samples.drain(..).collect::<Vec<_>>()
+    }
+
+    fn take_latency_percentiles_ms(&self) -> LatencySampleGroup {
+        let total = latency_percentiles_from_values(self.drain_latency_samples(&self.latency_total_samples_ms));
+        let upstream =
+            latency_percentiles_from_values(self.drain_latency_samples(&self.latency_upstream_samples_ms));
+        let edge_added =
+            latency_percentiles_from_values(self.drain_latency_samples(&self.latency_edge_added_samples_ms));
+        LatencySampleGroup {
+            total,
+            upstream,
+            edge_added,
         }
-        values.sort_unstable();
-        (
-            percentile_ms(&values, 50),
-            percentile_ms(&values, 90),
-            percentile_ms(&values, 99),
-        )
+    }
+}
+
+#[derive(Clone, Copy)]
+struct LatencyPercentiles {
+    p50_ms: u64,
+    p90_ms: u64,
+    p99_ms: u64,
+}
+
+#[derive(Clone, Copy)]
+struct LatencySampleGroup {
+    total: LatencyPercentiles,
+    upstream: LatencyPercentiles,
+    edge_added: LatencyPercentiles,
+}
+
+fn latency_percentiles_from_values(mut values: Vec<u64>) -> LatencyPercentiles {
+    if values.is_empty() {
+        return LatencyPercentiles {
+            p50_ms: 0,
+            p90_ms: 0,
+            p99_ms: 0,
+        };
+    }
+    values.sort_unstable();
+    LatencyPercentiles {
+        p50_ms: percentile_ms(&values, 50),
+        p90_ms: percentile_ms(&values, 90),
+        p99_ms: percentile_ms(&values, 99),
     }
 }
 
@@ -418,13 +463,6 @@ pub fn build_admin_app(state: SharedState) -> Router {
 
 async fn data_plane_handler(State(state): State<SharedState>, request: Request) -> Response<Body> {
     let started = Instant::now();
-    let finalize = |state: &SharedState, response: Response<Body>| -> Response<Body> {
-        state.record_data_plane_status(response.status().as_u16());
-        let elapsed_ms = started.elapsed().as_millis();
-        let latency_ms = u64::try_from(elapsed_ms).unwrap_or(u64::MAX);
-        state.record_data_plane_latency_ms(latency_ms);
-        response
-    };
 
     state.record_data_plane_request();
 
@@ -435,7 +473,12 @@ async fn data_plane_handler(State(state): State<SharedState>, request: Request) 
 
     let Some(program) = snapshot else {
         warn!("{} no program loaded; returning 404", category_program());
-        return finalize(&state, text_response(StatusCode::NOT_FOUND, "not found"));
+        return finalize_data_plane_response(
+            &state,
+            started,
+            text_response(StatusCode::NOT_FOUND, "not found"),
+            0,
+        );
     };
 
     let (parts, body) = request.into_parts();
@@ -443,9 +486,11 @@ async fn data_plane_handler(State(state): State<SharedState>, request: Request) 
         Ok(bytes) => bytes,
         Err(err) => {
             warn!("{} failed to read request body: {err}", category_program());
-            return finalize(
+            return finalize_data_plane_response(
                 &state,
+                started,
                 text_response(StatusCode::BAD_REQUEST, "invalid request body"),
+                0,
             );
         }
     };
@@ -472,12 +517,22 @@ async fn data_plane_handler(State(state): State<SharedState>, request: Request) 
                     "{} failed to register host module: {err}",
                     category_program()
                 );
-                return finalize(&state, text_response(StatusCode::NOT_FOUND, "not found"));
+                return finalize_data_plane_response(
+                    &state,
+                    started,
+                    text_response(StatusCode::NOT_FOUND, "not found"),
+                    0,
+                );
             }
             Err(VmExecutionError::Vm(err)) => {
                 state.record_vm_execution_error();
                 warn!("{} vm execution error: {err}", category_program());
-                return finalize(&state, text_response(StatusCode::NOT_FOUND, "not found"));
+                return finalize_data_plane_response(
+                    &state,
+                    started,
+                    text_response(StatusCode::NOT_FOUND, "not found"),
+                    0,
+                );
             }
             Err(VmExecutionError::NotHalted(status)) => {
                 state.record_vm_execution_error();
@@ -486,14 +541,21 @@ async fn data_plane_handler(State(state): State<SharedState>, request: Request) 
                     category_program(),
                     status
                 );
-                return finalize(&state, text_response(StatusCode::NOT_FOUND, "not found"));
+                return finalize_data_plane_response(
+                    &state,
+                    started,
+                    text_response(StatusCode::NOT_FOUND, "not found"),
+                    0,
+                );
             }
             Err(VmExecutionError::TaskJoin(err)) => {
                 state.record_vm_execution_error();
                 warn!("{} vm execution task failed: {err}", category_program());
-                return finalize(
+                return finalize_data_plane_response(
                     &state,
+                    started,
                     text_response(StatusCode::INTERNAL_SERVER_ERROR, "internal server error"),
+                    0,
                 );
             }
         };
@@ -504,13 +566,15 @@ async fn data_plane_handler(State(state): State<SharedState>, request: Request) 
                 category_program(),
                 body.len()
             );
-            return finalize(
+            return finalize_data_plane_response(
                 &state,
+                started,
                 short_circuit_response(
                     body,
                     vm_outcome.response_headers,
                     vm_outcome.response_status,
                 ),
+                0,
             );
         }
 
@@ -519,7 +583,12 @@ async fn data_plane_handler(State(state): State<SharedState>, request: Request) 
                 "{} vm did not set upstream or response content; returning 404",
                 category_program()
             );
-            return finalize(&state, text_response(StatusCode::NOT_FOUND, "not found"));
+            return finalize_data_plane_response(
+                &state,
+                started,
+                text_response(StatusCode::NOT_FOUND, "not found"),
+                0,
+            );
         };
 
         ProxyUpstreamInputs {
@@ -533,8 +602,21 @@ async fn data_plane_handler(State(state): State<SharedState>, request: Request) 
         }
     };
 
-    let response = proxy_to_upstream(&state, proxy_inputs).await;
-    finalize(&state, response)
+    let (response, upstream_latency_ms) = proxy_to_upstream(&state, proxy_inputs).await;
+    finalize_data_plane_response(&state, started, response, upstream_latency_ms)
+}
+
+fn finalize_data_plane_response(
+    state: &SharedState,
+    started: Instant,
+    response: Response<Body>,
+    upstream_latency_ms: u64,
+) -> Response<Body> {
+    state.record_data_plane_status(response.status().as_u16());
+    let elapsed_ms = started.elapsed().as_millis();
+    let total_latency_ms = u64::try_from(elapsed_ms).unwrap_or(u64::MAX);
+    state.record_data_plane_latency_ms(total_latency_ms, upstream_latency_ms);
+    response
 }
 
 async fn upload_program_handler(
@@ -733,13 +815,12 @@ pub async fn apply_program_from_bytes(state: &SharedState, bytes: &[u8]) -> Prog
     }
 }
 
-async fn proxy_to_upstream(state: &SharedState, inputs: ProxyUpstreamInputs) -> Response<Body> {
-    let path_and_query = inputs
-        .uri
-        .path_and_query()
-        .map(|value| value.as_str())
-        .unwrap_or("/");
-    let upstream_url = format!("http://{}{path_and_query}", inputs.upstream);
+async fn proxy_to_upstream(
+    state: &SharedState,
+    inputs: ProxyUpstreamInputs,
+) -> (Response<Body>, u64) {
+    let upstream_started = Instant::now();
+    let (upstream_url, host_header) = build_upstream_url(&inputs.upstream, &inputs.uri);
 
     let mut outbound = state
         .client
@@ -750,13 +831,20 @@ async fn proxy_to_upstream(state: &SharedState, inputs: ProxyUpstreamInputs) -> 
             outbound = outbound.header(name, value);
         }
     }
-    outbound = outbound.header(HOST, inputs.upstream.as_str());
+    if let Some(host) = host_header {
+        outbound = outbound.header(HOST, host);
+    }
 
     let upstream_response = match outbound.send().await {
         Ok(response) => response,
         Err(err) => {
             warn!("{} upstream request failed: {err}", category_program());
-            return text_response(StatusCode::BAD_GATEWAY, "bad gateway");
+            let elapsed_ms = upstream_started.elapsed().as_millis();
+            let upstream_latency_ms = u64::try_from(elapsed_ms).unwrap_or(u64::MAX);
+            return (
+                text_response(StatusCode::BAD_GATEWAY, "bad gateway"),
+                upstream_latency_ms,
+            );
         }
     };
 
@@ -769,7 +857,12 @@ async fn proxy_to_upstream(state: &SharedState, inputs: ProxyUpstreamInputs) -> 
                 "{} failed reading upstream response body: {err}",
                 category_program()
             );
-            return text_response(StatusCode::BAD_GATEWAY, "bad gateway");
+            let elapsed_ms = upstream_started.elapsed().as_millis();
+            let upstream_latency_ms = u64::try_from(elapsed_ms).unwrap_or(u64::MAX);
+            return (
+                text_response(StatusCode::BAD_GATEWAY, "bad gateway"),
+                upstream_latency_ms,
+            );
         }
     };
 
@@ -788,7 +881,39 @@ async fn proxy_to_upstream(state: &SharedState, inputs: ProxyUpstreamInputs) -> 
         *response.status_mut() = status;
     }
     merge_headers(response.headers_mut(), &inputs.vm_response_headers);
-    response
+    let elapsed_ms = upstream_started.elapsed().as_millis();
+    let upstream_latency_ms = u64::try_from(elapsed_ms).unwrap_or(u64::MAX);
+    (response, upstream_latency_ms)
+}
+
+fn build_upstream_url(upstream: &str, uri: &Uri) -> (String, Option<String>) {
+    let path_and_query = uri
+        .path_and_query()
+        .map(|value| value.as_str())
+        .unwrap_or("/");
+
+    if let Ok(url) = Url::parse(upstream) {
+        let mut final_url = url;
+        let needs_path = final_url.path() == "/" && final_url.query().is_none();
+        if needs_path && path_and_query != "/" {
+            let base = final_url[..url::Position::AfterPort].to_string();
+            let merged = format!("{base}{path_and_query}");
+            if let Ok(joined) = Url::parse(&merged) {
+                final_url = joined;
+            }
+        }
+        let host = final_url.host_str().map(|host| {
+            if let Some(port) = final_url.port() {
+                format!("{host}:{port}")
+            } else {
+                host.to_string()
+            }
+        });
+        return (final_url.to_string(), host);
+    }
+
+    let upstream_url = format!("http://{}{path_and_query}", upstream);
+    (upstream_url, Some(upstream.to_string()))
 }
 
 fn short_circuit_response(
