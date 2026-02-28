@@ -48,15 +48,13 @@ impl FrontendCompiler for JavaScriptCompiler {
 
 impl FrontendCompiler for LuaCompiler {
     fn lower_to_ir(&self, source: &str) -> Result<FrontendIr, ParseError> {
-        let lowered = lua::lower(source)?;
-        parse_with_parser(&lowered, false, false)
+        lua::lower_to_ir(source)
     }
 }
 
 impl FrontendCompiler for SchemeCompiler {
     fn lower_to_ir(&self, source: &str) -> Result<FrontendIr, ParseError> {
-        let lowered = scheme::lower(source)?;
-        parse_with_parser(&lowered, false, false)
+        scheme::lower_to_ir(source)
     }
 }
 

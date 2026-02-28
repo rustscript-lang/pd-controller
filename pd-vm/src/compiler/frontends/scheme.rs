@@ -1,7 +1,8 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::super::ParseError;
+use super::super::ir::{Expr, FrontendIr, Stmt};
 use super::{is_ident_continue, is_ident_start};
 
 static GENSYM_COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -25,6 +26,432 @@ fn wrap_statement_sequence(stmts: Vec<String>, expr: String) -> String {
         out = format!("if true => {{ {stmt} {out} }} else => {{ false }}");
     }
     out
+}
+
+pub(super) fn lower_to_ir(source: &str) -> Result<FrontendIr, ParseError> {
+    if let Some(ir) = try_lower_direct_subset_to_ir(source)? {
+        return Ok(ir);
+    }
+    let lowered = lower(source)?;
+    super::parse_with_parser(&lowered, false, false)
+}
+
+fn try_lower_direct_subset_to_ir(source: &str) -> Result<Option<FrontendIr>, ParseError> {
+    let mut parser = SchemeParser::new(source)?;
+    let forms = parser.parse_program()?;
+
+    let mut builder = SchemeDirectIrBuilder::new();
+    let mut stmts = Vec::<Stmt>::new();
+    for form in &forms {
+        let Some(mut lowered) = lower_scheme_direct_stmt(form, &mut builder)? else {
+            return Ok(None);
+        };
+        stmts.append(&mut lowered);
+    }
+    Ok(Some(builder.finish(stmts)))
+}
+
+struct SchemeDirectIrBuilder {
+    locals: HashMap<String, u8>,
+    next_local: u8,
+}
+
+impl SchemeDirectIrBuilder {
+    fn new() -> Self {
+        Self {
+            locals: HashMap::new(),
+            next_local: 0,
+        }
+    }
+
+    fn lower_local(&mut self, name: &str, expr: Expr, line: u32) -> Result<Stmt, ParseError> {
+        let index = if let Some(index) = self.locals.get(name).copied() {
+            index
+        } else {
+            let index = self.alloc_local()?;
+            self.locals.insert(name.to_string(), index);
+            index
+        };
+        Ok(Stmt::Let { index, expr, line })
+    }
+
+    fn lower_assign(&self, name: &str, expr: Expr, line: u32) -> Result<Stmt, ParseError> {
+        let Some(index) = self.locals.get(name).copied() else {
+            return Err(ParseError {
+                line: line as usize,
+                message: format!("unknown local '{name}'"),
+            });
+        };
+        Ok(Stmt::Assign { index, expr, line })
+    }
+
+    fn resolve_local_expr(&self, name: &str) -> Option<Expr> {
+        self.locals.get(name).copied().map(Expr::Var)
+    }
+
+    fn finish(self, stmts: Vec<Stmt>) -> FrontendIr {
+        let mut local_bindings = self.locals.into_iter().collect::<Vec<_>>();
+        local_bindings.sort_by_key(|(_, index)| *index);
+        FrontendIr {
+            stmts,
+            locals: self.next_local as usize,
+            local_bindings,
+            functions: Vec::new(),
+            function_impls: HashMap::new(),
+        }
+    }
+
+    fn alloc_local(&mut self) -> Result<u8, ParseError> {
+        let index = self.next_local;
+        self.next_local = self.next_local.checked_add(1).ok_or(ParseError {
+            line: 1,
+            message: "local index overflow".to_string(),
+        })?;
+        Ok(index)
+    }
+}
+
+fn lower_scheme_direct_stmt(
+    form: &SchemeForm,
+    builder: &mut SchemeDirectIrBuilder,
+) -> Result<Option<Vec<Stmt>>, ParseError> {
+    if let Some(items) = form.as_list()
+        && let Some(head) = items.first().and_then(|item| item.as_symbol())
+    {
+        let args = &items[1..];
+        let line = u32::try_from(form.line).unwrap_or(u32::MAX);
+        match head {
+            "define" => {
+                if args.len() != 2 {
+                    return Ok(None);
+                }
+                let Some(name_raw) = args[0].as_symbol() else {
+                    return Ok(None);
+                };
+                let name = normalize_identifier(name_raw, args[0].line, "define target")?;
+                let Some(expr) = lower_scheme_direct_expr(&args[1], builder)? else {
+                    return Ok(None);
+                };
+                return Ok(Some(vec![builder.lower_local(&name, expr, line)?]));
+            }
+            "set!" => {
+                if args.len() != 2 {
+                    return Ok(None);
+                }
+                let Some(name_raw) = args[0].as_symbol() else {
+                    return Ok(None);
+                };
+                let name = normalize_identifier(name_raw, args[0].line, "set! target")?;
+                let Some(expr) = lower_scheme_direct_expr(&args[1], builder)? else {
+                    return Ok(None);
+                };
+                return Ok(Some(vec![builder.lower_assign(&name, expr, line)?]));
+            }
+            "if" => {
+                if !(2..=3).contains(&args.len()) {
+                    return Ok(None);
+                }
+                let Some(condition) = lower_scheme_direct_expr(&args[0], builder)? else {
+                    return Ok(None);
+                };
+                let Some(then_branch) = lower_scheme_direct_branch(&args[1], builder)? else {
+                    return Ok(None);
+                };
+                let else_branch = if args.len() == 3 {
+                    let Some(branch) = lower_scheme_direct_branch(&args[2], builder)? else {
+                        return Ok(None);
+                    };
+                    branch
+                } else {
+                    Vec::new()
+                };
+                return Ok(Some(vec![Stmt::IfElse {
+                    condition,
+                    then_branch,
+                    else_branch,
+                    line,
+                }]));
+            }
+            "while" => {
+                if args.is_empty() {
+                    return Ok(None);
+                }
+                let Some(condition) = lower_scheme_direct_expr(&args[0], builder)? else {
+                    return Ok(None);
+                };
+                let mut body = Vec::new();
+                for body_form in &args[1..] {
+                    let Some(mut lowered) = lower_scheme_direct_stmt(body_form, builder)? else {
+                        return Ok(None);
+                    };
+                    body.append(&mut lowered);
+                }
+                return Ok(Some(vec![Stmt::While {
+                    condition,
+                    body,
+                    line,
+                }]));
+            }
+            "begin" => {
+                let mut out = Vec::new();
+                for expr in args {
+                    let Some(mut lowered) = lower_scheme_direct_stmt(expr, builder)? else {
+                        return Ok(None);
+                    };
+                    out.append(&mut lowered);
+                }
+                return Ok(Some(out));
+            }
+            _ => {}
+        }
+    }
+
+    let line = u32::try_from(form.line).unwrap_or(u32::MAX);
+    let Some(expr) = lower_scheme_direct_expr(form, builder)? else {
+        return Ok(None);
+    };
+    Ok(Some(vec![Stmt::Expr { expr, line }]))
+}
+
+fn lower_scheme_direct_branch(
+    form: &SchemeForm,
+    builder: &mut SchemeDirectIrBuilder,
+) -> Result<Option<Vec<Stmt>>, ParseError> {
+    if let Some(items) = form.as_list()
+        && items
+            .first()
+            .and_then(|item| item.as_symbol())
+            .is_some_and(|head| head == "begin")
+    {
+        let mut out = Vec::new();
+        for nested in &items[1..] {
+            let Some(mut lowered) = lower_scheme_direct_stmt(nested, builder)? else {
+                return Ok(None);
+            };
+            out.append(&mut lowered);
+        }
+        return Ok(Some(out));
+    }
+    let line = u32::try_from(form.line).unwrap_or(u32::MAX);
+    let Some(expr) = lower_scheme_direct_expr(form, builder)? else {
+        return Ok(None);
+    };
+    Ok(Some(vec![Stmt::Expr { expr, line }]))
+}
+
+fn lower_scheme_direct_expr(
+    form: &SchemeForm,
+    builder: &SchemeDirectIrBuilder,
+) -> Result<Option<Expr>, ParseError> {
+    match &form.node {
+        SchemeNode::Int(value) => Ok(Some(Expr::Int(*value))),
+        SchemeNode::Float(_) => Ok(None),
+        SchemeNode::Bool(value) => Ok(Some(Expr::Bool(*value))),
+        SchemeNode::Char(_) => Ok(None),
+        SchemeNode::String(value) => Ok(Some(Expr::String(value.clone()))),
+        SchemeNode::Symbol(symbol) => {
+            if symbol == "null" || symbol == "nil" {
+                return Ok(Some(Expr::Null));
+            }
+            if symbol == "true" {
+                return Ok(Some(Expr::Bool(true)));
+            }
+            if symbol == "false" {
+                return Ok(Some(Expr::Bool(false)));
+            }
+            let name = normalize_identifier(symbol, form.line, "symbol")?;
+            Ok(builder.resolve_local_expr(&name))
+        }
+        SchemeNode::List(items) => lower_scheme_direct_list_expr(items, form.line, builder),
+    }
+}
+
+fn lower_scheme_direct_list_expr(
+    items: &[SchemeForm],
+    line: usize,
+    builder: &SchemeDirectIrBuilder,
+) -> Result<Option<Expr>, ParseError> {
+    let Some(head) = items.first().and_then(|item| item.as_symbol()) else {
+        return Ok(None);
+    };
+    let args = &items[1..];
+
+    match head {
+        "+" => lower_scheme_direct_fold(args, builder, line, Expr::Add),
+        "*" => lower_scheme_direct_fold(args, builder, line, Expr::Mul),
+        "-" => {
+            if args.is_empty() {
+                return Ok(None);
+            }
+            if args.len() == 1 {
+                let Some(inner) = lower_scheme_direct_expr(&args[0], builder)? else {
+                    return Ok(None);
+                };
+                return Ok(Some(Expr::Neg(Box::new(inner))));
+            }
+            lower_scheme_direct_fold(args, builder, line, Expr::Sub)
+        }
+        "/" => lower_scheme_direct_fold(args, builder, line, Expr::Div),
+        "modulo" | "remainder" => lower_scheme_direct_binary(args, builder, Expr::Mod),
+        "=" => lower_scheme_direct_compare_fold(args, builder, Expr::Eq),
+        "/=" => {
+            let Some(eq) = lower_scheme_direct_compare_fold(args, builder, Expr::Eq)? else {
+                return Ok(None);
+            };
+            Ok(Some(Expr::Not(Box::new(eq))))
+        }
+        "<" => lower_scheme_direct_compare_fold(args, builder, Expr::Lt),
+        ">" => lower_scheme_direct_compare_fold(args, builder, Expr::Gt),
+        "<=" => {
+            let Some(gt) = lower_scheme_direct_compare_fold(args, builder, Expr::Gt)? else {
+                return Ok(None);
+            };
+            Ok(Some(Expr::Not(Box::new(gt))))
+        }
+        ">=" => {
+            let Some(lt) = lower_scheme_direct_compare_fold(args, builder, Expr::Lt)? else {
+                return Ok(None);
+            };
+            Ok(Some(Expr::Not(Box::new(lt))))
+        }
+        "and" => {
+            if args.is_empty() {
+                return Ok(Some(Expr::Bool(true)));
+            }
+            let mut it = args.iter();
+            let Some(first_form) = it.next() else {
+                return Ok(Some(Expr::Bool(true)));
+            };
+            let Some(mut expr) = lower_scheme_direct_expr(first_form, builder)? else {
+                return Ok(None);
+            };
+            for arg in it {
+                let Some(rhs) = lower_scheme_direct_expr(arg, builder)? else {
+                    return Ok(None);
+                };
+                expr = Expr::And(Box::new(expr), Box::new(rhs));
+            }
+            Ok(Some(expr))
+        }
+        "or" => {
+            if args.is_empty() {
+                return Ok(Some(Expr::Bool(false)));
+            }
+            let mut it = args.iter();
+            let Some(first_form) = it.next() else {
+                return Ok(Some(Expr::Bool(false)));
+            };
+            let Some(mut expr) = lower_scheme_direct_expr(first_form, builder)? else {
+                return Ok(None);
+            };
+            for arg in it {
+                let Some(rhs) = lower_scheme_direct_expr(arg, builder)? else {
+                    return Ok(None);
+                };
+                expr = Expr::Or(Box::new(expr), Box::new(rhs));
+            }
+            Ok(Some(expr))
+        }
+        "not" => {
+            if args.len() != 1 {
+                return Ok(None);
+            }
+            let Some(inner) = lower_scheme_direct_expr(&args[0], builder)? else {
+                return Ok(None);
+            };
+            Ok(Some(Expr::Not(Box::new(inner))))
+        }
+        "if" => {
+            if !(2..=3).contains(&args.len()) {
+                return Ok(None);
+            }
+            let Some(condition) = lower_scheme_direct_expr(&args[0], builder)? else {
+                return Ok(None);
+            };
+            let Some(then_expr) = lower_scheme_direct_expr(&args[1], builder)? else {
+                return Ok(None);
+            };
+            let else_expr = if args.len() == 3 {
+                let Some(expr) = lower_scheme_direct_expr(&args[2], builder)? else {
+                    return Ok(None);
+                };
+                expr
+            } else {
+                Expr::Bool(false)
+            };
+            Ok(Some(Expr::IfElse {
+                condition: Box::new(condition),
+                then_expr: Box::new(then_expr),
+                else_expr: Box::new(else_expr),
+            }))
+        }
+        _ => {
+            let _ = line;
+            Ok(None)
+        }
+    }
+}
+
+fn lower_scheme_direct_binary<F>(
+    args: &[SchemeForm],
+    builder: &SchemeDirectIrBuilder,
+    build: F,
+) -> Result<Option<Expr>, ParseError>
+where
+    F: Fn(Box<Expr>, Box<Expr>) -> Expr,
+{
+    if args.len() != 2 {
+        return Ok(None);
+    }
+    let Some(lhs) = lower_scheme_direct_expr(&args[0], builder)? else {
+        return Ok(None);
+    };
+    let Some(rhs) = lower_scheme_direct_expr(&args[1], builder)? else {
+        return Ok(None);
+    };
+    Ok(Some(build(Box::new(lhs), Box::new(rhs))))
+}
+
+fn lower_scheme_direct_fold<F>(
+    args: &[SchemeForm],
+    builder: &SchemeDirectIrBuilder,
+    _line: usize,
+    build: F,
+) -> Result<Option<Expr>, ParseError>
+where
+    F: Fn(Box<Expr>, Box<Expr>) -> Expr + Copy,
+{
+    if args.len() < 2 {
+        return Ok(None);
+    }
+    let mut iter = args.iter();
+    let Some(first) = iter.next() else {
+        return Ok(None);
+    };
+    let Some(mut expr) = lower_scheme_direct_expr(first, builder)? else {
+        return Ok(None);
+    };
+    for arg in iter {
+        let Some(rhs) = lower_scheme_direct_expr(arg, builder)? else {
+            return Ok(None);
+        };
+        expr = build(Box::new(expr), Box::new(rhs));
+    }
+    Ok(Some(expr))
+}
+
+fn lower_scheme_direct_compare_fold<F>(
+    args: &[SchemeForm],
+    builder: &SchemeDirectIrBuilder,
+    build: F,
+) -> Result<Option<Expr>, ParseError>
+where
+    F: Fn(Box<Expr>, Box<Expr>) -> Expr + Copy,
+{
+    if args.len() != 2 {
+        return Ok(None);
+    }
+    lower_scheme_direct_binary(args, builder, build)
 }
 
 pub(super) fn lower(source: &str) -> Result<String, ParseError> {
