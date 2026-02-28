@@ -1633,10 +1633,10 @@ fn flow_action_statement(
         "set_upstream" => {
             let upstream = block_value(block, "upstream", "127.0.0.1:8088");
             Ok(FlowActionStatement {
-                rustscript: format!("vm::set_upstream({});", rust_string(upstream)),
-                javascript: format!("vm.set_upstream({});", js_string(upstream)),
-                lua: format!("vm.set_upstream({})", lua_string(upstream)),
-                scheme: format!("(vm.set_upstream {})", scheme_string(upstream)),
+                rustscript: format!("vm::set_upstream({});", render_expr_rss(upstream)),
+                javascript: format!("vm.set_upstream({});", render_expr_js(upstream)),
+                lua: format!("vm.set_upstream({})", render_expr_lua(upstream)),
+                scheme: format!("(vm.set_upstream {})", render_expr_scheme(upstream)),
             })
         }
         other => Err(bad_request(&format!(
@@ -2137,10 +2137,10 @@ fn render_single_block(
         }
         "set_upstream" => {
             let upstream = block_value(block, "upstream", "127.0.0.1:8088");
-            rss.push(format!("vm::set_upstream({});", rust_string(upstream)));
-            js.push(format!("vm.set_upstream({});", js_string(upstream)));
-            lua.push(format!("vm.set_upstream({})", lua_string(upstream)));
-            scm.push(format!("(vm.set_upstream {})", scheme_string(upstream)));
+            rss.push(format!("vm::set_upstream({});", render_expr_rss(upstream)));
+            js.push(format!("vm.set_upstream({});", render_expr_js(upstream)));
+            lua.push(format!("vm.set_upstream({})", render_expr_lua(upstream)));
+            scm.push(format!("(vm.set_upstream {})", render_expr_scheme(upstream)));
         }
         "rate_limit_if_else" => {
             let key_expr = block_value(block, "key_expr", "$header");

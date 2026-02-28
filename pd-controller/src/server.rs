@@ -42,7 +42,8 @@ const PERSISTENCE_SCHEMA_VERSION: u32 = 1;
 const RECORDINGS_SCHEMA_VERSION: u32 = 1;
 const DEBUG_SESSIONS_SCHEMA_VERSION: u32 = 1;
 const TIMESERIES_SCHEMA_VERSION_V1: u32 = 1;
-const TIMESERIES_SCHEMA_VERSION: u32 = 2;
+const TIMESERIES_SCHEMA_VERSION_V2: u32 = 2;
+const TIMESERIES_SCHEMA_VERSION: u32 = 3;
 const TIMESERIES_BINARY_MAGIC: [u8; 4] = *b"PDTS";
 const DEBUG_RESUME_GRACE_MS: u64 = 1_500;
 const DEFAULT_RECORDING_COUNT: u32 = 1;
@@ -904,7 +905,9 @@ fn default_true() -> bool {
 }
 
 fn is_supported_timeseries_schema_version(value: u32) -> bool {
-    value == TIMESERIES_SCHEMA_VERSION_V1 || value == TIMESERIES_SCHEMA_VERSION
+    value == TIMESERIES_SCHEMA_VERSION_V1
+        || value == TIMESERIES_SCHEMA_VERSION_V2
+        || value == TIMESERIES_SCHEMA_VERSION
 }
 
 fn load_snapshot_from_disk(
@@ -1235,6 +1238,12 @@ fn encode_timeseries_snapshot(snapshot: &ControllerTimeseriesSnapshot) -> Result
             put_u64(&mut bytes, point.latency_p50_ms);
             put_u64(&mut bytes, point.latency_p90_ms);
             put_u64(&mut bytes, point.latency_p99_ms);
+            put_u64(&mut bytes, point.upstream_latency_p50_ms);
+            put_u64(&mut bytes, point.upstream_latency_p90_ms);
+            put_u64(&mut bytes, point.upstream_latency_p99_ms);
+            put_u64(&mut bytes, point.edge_latency_p50_ms);
+            put_u64(&mut bytes, point.edge_latency_p90_ms);
+            put_u64(&mut bytes, point.edge_latency_p99_ms);
         }
 
         match &record.last_traffic_cumulative {
@@ -1248,6 +1257,12 @@ fn encode_timeseries_snapshot(snapshot: &ControllerTimeseriesSnapshot) -> Result
                 put_u64(&mut bytes, sample.latency_p50_ms);
                 put_u64(&mut bytes, sample.latency_p90_ms);
                 put_u64(&mut bytes, sample.latency_p99_ms);
+                put_u64(&mut bytes, sample.upstream_latency_p50_ms);
+                put_u64(&mut bytes, sample.upstream_latency_p90_ms);
+                put_u64(&mut bytes, sample.upstream_latency_p99_ms);
+                put_u64(&mut bytes, sample.edge_latency_p50_ms);
+                put_u64(&mut bytes, sample.edge_latency_p90_ms);
+                put_u64(&mut bytes, sample.edge_latency_p99_ms);
             }
             None => put_u8(&mut bytes, 0),
         }
@@ -1281,11 +1296,25 @@ fn decode_timeseries_snapshot(bytes: &[u8]) -> Result<ControllerTimeseriesSnapsh
                 latency_p50_ms: 0,
                 latency_p90_ms: 0,
                 latency_p99_ms: 0,
+                upstream_latency_p50_ms: 0,
+                upstream_latency_p90_ms: 0,
+                upstream_latency_p99_ms: 0,
+                edge_latency_p50_ms: 0,
+                edge_latency_p90_ms: 0,
+                edge_latency_p99_ms: 0,
             };
-            if schema_version >= TIMESERIES_SCHEMA_VERSION {
+            if schema_version >= TIMESERIES_SCHEMA_VERSION_V2 {
                 point.latency_p50_ms = cursor.read_u64()?;
                 point.latency_p90_ms = cursor.read_u64()?;
                 point.latency_p99_ms = cursor.read_u64()?;
+            }
+            if schema_version >= TIMESERIES_SCHEMA_VERSION {
+                point.upstream_latency_p50_ms = cursor.read_u64()?;
+                point.upstream_latency_p90_ms = cursor.read_u64()?;
+                point.upstream_latency_p99_ms = cursor.read_u64()?;
+                point.edge_latency_p50_ms = cursor.read_u64()?;
+                point.edge_latency_p90_ms = cursor.read_u64()?;
+                point.edge_latency_p99_ms = cursor.read_u64()?;
             }
             traffic_points.push_back(point);
         }
@@ -1302,11 +1331,25 @@ fn decode_timeseries_snapshot(bytes: &[u8]) -> Result<ControllerTimeseriesSnapsh
                     latency_p50_ms: 0,
                     latency_p90_ms: 0,
                     latency_p99_ms: 0,
+                    upstream_latency_p50_ms: 0,
+                    upstream_latency_p90_ms: 0,
+                    upstream_latency_p99_ms: 0,
+                    edge_latency_p50_ms: 0,
+                    edge_latency_p90_ms: 0,
+                    edge_latency_p99_ms: 0,
                 };
-                if schema_version >= TIMESERIES_SCHEMA_VERSION {
+                if schema_version >= TIMESERIES_SCHEMA_VERSION_V2 {
                     sample.latency_p50_ms = cursor.read_u64()?;
                     sample.latency_p90_ms = cursor.read_u64()?;
                     sample.latency_p99_ms = cursor.read_u64()?;
+                }
+                if schema_version >= TIMESERIES_SCHEMA_VERSION {
+                    sample.upstream_latency_p50_ms = cursor.read_u64()?;
+                    sample.upstream_latency_p90_ms = cursor.read_u64()?;
+                    sample.upstream_latency_p99_ms = cursor.read_u64()?;
+                    sample.edge_latency_p50_ms = cursor.read_u64()?;
+                    sample.edge_latency_p90_ms = cursor.read_u64()?;
+                    sample.edge_latency_p99_ms = cursor.read_u64()?;
                 }
                 Some(sample)
             }
@@ -1455,6 +1498,18 @@ pub struct EdgeTrafficPoint {
     pub latency_p90_ms: u64,
     #[serde(default)]
     pub latency_p99_ms: u64,
+    #[serde(default)]
+    pub upstream_latency_p50_ms: u64,
+    #[serde(default)]
+    pub upstream_latency_p90_ms: u64,
+    #[serde(default)]
+    pub upstream_latency_p99_ms: u64,
+    #[serde(default)]
+    pub edge_latency_p50_ms: u64,
+    #[serde(default)]
+    pub edge_latency_p90_ms: u64,
+    #[serde(default)]
+    pub edge_latency_p99_ms: u64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1984,6 +2039,12 @@ fn append_traffic_sample(record: &mut EdgeRecord, sample: EdgeTrafficSample, uni
         latency_p50_ms: sample.latency_p50_ms,
         latency_p90_ms: sample.latency_p90_ms,
         latency_p99_ms: sample.latency_p99_ms,
+        upstream_latency_p50_ms: sample.upstream_latency_p50_ms,
+        upstream_latency_p90_ms: sample.upstream_latency_p90_ms,
+        upstream_latency_p99_ms: sample.upstream_latency_p99_ms,
+        edge_latency_p50_ms: sample.edge_latency_p50_ms,
+        edge_latency_p90_ms: sample.edge_latency_p90_ms,
+        edge_latency_p99_ms: sample.edge_latency_p99_ms,
     };
     record.traffic_points.push_back(point);
     while record.traffic_points.len() > MAX_TRAFFIC_POINTS {

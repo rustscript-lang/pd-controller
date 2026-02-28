@@ -107,6 +107,12 @@ async fn poll_delivers_enqueued_command_and_results_are_queryable() {
                 latency_p50_ms: 0,
                 latency_p90_ms: 0,
                 latency_p99_ms: 0,
+                upstream_latency_p50_ms: 0,
+                upstream_latency_p90_ms: 0,
+                upstream_latency_p99_ms: 0,
+                edge_latency_p50_ms: 0,
+                edge_latency_p90_ms: 0,
+                edge_latency_p99_ms: 0,
             }),
         })
         .send()
@@ -143,6 +149,12 @@ async fn poll_delivers_enqueued_command_and_results_are_queryable() {
                 latency_p50_ms: 0,
                 latency_p90_ms: 0,
                 latency_p99_ms: 0,
+                upstream_latency_p50_ms: 0,
+                upstream_latency_p90_ms: 0,
+                upstream_latency_p99_ms: 0,
+                edge_latency_p50_ms: 0,
+                edge_latency_p90_ms: 0,
+                edge_latency_p99_ms: 0,
             }),
         })
         .send()
@@ -270,6 +282,12 @@ async fn poll_traffic_series_dedupes_when_counters_do_not_change() {
             latency_p50_ms: 10,
             latency_p90_ms: 20,
             latency_p99_ms: 30,
+            upstream_latency_p50_ms: 7,
+            upstream_latency_p90_ms: 15,
+            upstream_latency_p99_ms: 21,
+            edge_latency_p50_ms: 3,
+            edge_latency_p90_ms: 5,
+            edge_latency_p99_ms: 9,
         },
         EdgeTrafficSample {
             requests_total: 10,
@@ -280,6 +298,12 @@ async fn poll_traffic_series_dedupes_when_counters_do_not_change() {
             latency_p50_ms: 10,
             latency_p90_ms: 20,
             latency_p99_ms: 30,
+            upstream_latency_p50_ms: 7,
+            upstream_latency_p90_ms: 15,
+            upstream_latency_p99_ms: 21,
+            edge_latency_p50_ms: 3,
+            edge_latency_p90_ms: 5,
+            edge_latency_p99_ms: 9,
         },
         EdgeTrafficSample {
             requests_total: 12,
@@ -290,6 +314,12 @@ async fn poll_traffic_series_dedupes_when_counters_do_not_change() {
             latency_p50_ms: 11,
             latency_p90_ms: 22,
             latency_p99_ms: 33,
+            upstream_latency_p50_ms: 8,
+            upstream_latency_p90_ms: 16,
+            upstream_latency_p99_ms: 24,
+            edge_latency_p50_ms: 3,
+            edge_latency_p90_ms: 6,
+            edge_latency_p99_ms: 9,
         },
     ] {
         let response = client
@@ -319,6 +349,12 @@ async fn poll_traffic_series_dedupes_when_counters_do_not_change() {
     assert_eq!(detail_body.traffic_series.len(), 2);
     assert_eq!(detail_body.traffic_series[1].requests, 2);
     assert_eq!(detail_body.traffic_series[1].status_2xx, 2);
+    assert_eq!(detail_body.traffic_series[1].upstream_latency_p50_ms, 8);
+    assert_eq!(detail_body.traffic_series[1].upstream_latency_p90_ms, 16);
+    assert_eq!(detail_body.traffic_series[1].upstream_latency_p99_ms, 24);
+    assert_eq!(detail_body.traffic_series[1].edge_latency_p50_ms, 3);
+    assert_eq!(detail_body.traffic_series[1].edge_latency_p90_ms, 6);
+    assert_eq!(detail_body.traffic_series[1].edge_latency_p99_ms, 9);
 
     handle.abort();
 }
@@ -937,6 +973,70 @@ async fn ui_render_graph_connections_produce_identifier_expressions() {
 }
 
 #[tokio::test]
+async fn ui_render_set_upstream_uses_connected_identifier_expression() {
+    let (addr, handle, _state) = spawn_controller(ControllerConfig::default()).await;
+    let client = reqwest::Client::new();
+
+    let render = client
+        .post(format!("http://{addr}/v1/ui/render"))
+        .json(&serde_json::json!({
+            "nodes": [
+                {
+                    "id": "n1",
+                    "block_id": "get_header",
+                    "values": { "var": "target_upstream", "name": "x-upstream" }
+                },
+                {
+                    "id": "n2",
+                    "block_id": "set_upstream",
+                    "values": { "upstream": "127.0.0.1:8088" }
+                },
+                {
+                    "id": "n3",
+                    "block_id": "set_response_content",
+                    "values": { "value": "proxied" }
+                }
+            ],
+            "edges": [
+                {
+                    "source": "n1",
+                    "source_output": "value",
+                    "target": "n2",
+                    "target_input": "upstream"
+                },
+                {
+                    "source": "n2",
+                    "source_output": "next",
+                    "target": "n3",
+                    "target_input": "__flow"
+                }
+            ]
+        }))
+        .send()
+        .await
+        .expect("render request should complete");
+    assert_eq!(render.status(), reqwest::StatusCode::OK);
+    let render_json = render
+        .json::<serde_json::Value>()
+        .await
+        .expect("render payload should decode");
+
+    let rustscript = render_json["source"]["rustscript"]
+        .as_str()
+        .expect("rustscript source should be a string");
+    assert!(
+        rustscript.contains("vm::set_upstream(target_upstream);"),
+        "expected set_upstream to use connected identifier in rustscript, got: {rustscript}"
+    );
+    assert!(
+        !rustscript.contains("vm::set_upstream(\"$target_upstream\");"),
+        "set_upstream should not treat connected identifier as quoted literal, got: {rustscript}"
+    );
+
+    handle.abort();
+}
+
+#[tokio::test]
 async fn ui_render_rate_limit_flow_branches_to_actions() {
     let (addr, handle, _state) = spawn_controller(ControllerConfig::default()).await;
     let client = reqwest::Client::new();
@@ -1511,6 +1611,12 @@ async fn controller_persists_programs_applied_versions_and_traffic_series() {
                 latency_p50_ms: 0,
                 latency_p90_ms: 0,
                 latency_p99_ms: 0,
+                upstream_latency_p50_ms: 0,
+                upstream_latency_p90_ms: 0,
+                upstream_latency_p99_ms: 0,
+                edge_latency_p50_ms: 0,
+                edge_latency_p90_ms: 0,
+                edge_latency_p99_ms: 0,
             }),
         })
         .send()
@@ -1541,6 +1647,12 @@ async fn controller_persists_programs_applied_versions_and_traffic_series() {
                 latency_p50_ms: 0,
                 latency_p90_ms: 0,
                 latency_p99_ms: 0,
+                upstream_latency_p50_ms: 0,
+                upstream_latency_p90_ms: 0,
+                upstream_latency_p99_ms: 0,
+                edge_latency_p50_ms: 0,
+                edge_latency_p90_ms: 0,
+                edge_latency_p99_ms: 0,
             }),
         })
         .send()
