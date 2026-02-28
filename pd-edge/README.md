@@ -103,7 +103,7 @@ You can pass a relative sample path explicitly, for example:
 cargo run -p pd-edge --example build_sample_program -- examples/sample_proxy_program.js
 ```
 
-Expected output includes `admin response: 204 No Content`.
+Expected output includes `control response: 204 No Content`.
 
 ### Compile with `pd-vm-run` and upload via Admin API
 
