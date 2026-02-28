@@ -524,7 +524,7 @@ async fn data_plane_handler(State(state): State<SharedState>, request: Request) 
                 return finalize_data_plane_response(
                     &state,
                     started,
-                    text_response(StatusCode::NOT_FOUND, "not found"),
+                    text_response(StatusCode::INTERNAL_SERVER_ERROR, "internal server error"),
                     0,
                 );
             }
@@ -534,7 +534,7 @@ async fn data_plane_handler(State(state): State<SharedState>, request: Request) 
                 return finalize_data_plane_response(
                     &state,
                     started,
-                    text_response(StatusCode::NOT_FOUND, "not found"),
+                    text_response(StatusCode::INTERNAL_SERVER_ERROR, "internal server error"),
                     0,
                 );
             }
@@ -548,7 +548,7 @@ async fn data_plane_handler(State(state): State<SharedState>, request: Request) 
                 return finalize_data_plane_response(
                     &state,
                     started,
-                    text_response(StatusCode::NOT_FOUND, "not found"),
+                    text_response(StatusCode::INTERNAL_SERVER_ERROR, "internal server error"),
                     0,
                 );
             }
@@ -977,7 +977,7 @@ fn is_octet_stream(value: Option<&HeaderValue>) -> bool {
 
 fn is_hop_by_hop(name: &HeaderName) -> bool {
     matches!(
-        name.as_str().to_ascii_lowercase().as_str(),
+        name.as_str(),
         "connection"
             | "keep-alive"
             | "proxy-authenticate"
