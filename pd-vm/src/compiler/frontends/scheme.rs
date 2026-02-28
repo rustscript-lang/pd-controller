@@ -1376,8 +1376,7 @@ fn lower_expr(form: &SchemeForm) -> Result<String, ParseError> {
                 return Ok("false".to_string());
             }
             if name == "null" || name == "nil" {
-                // RustScript surface syntax has no null literal; optional access on an empty map yields null.
-                return Ok("({})?.__null".to_string());
+                return Ok("null".to_string());
             }
             if let Some(chain) = lower_optional_chain_symbol(name, form.line)? {
                 return Ok(chain);
@@ -2207,7 +2206,8 @@ fn lower_let_expr(
                 message: "let binding name must be a symbol".to_string(),
             })?;
             let name = normalize_identifier(name_raw, pair[0].line, "let binding")?;
-            if let Some(function_stmt) = lower_letrec_lambda_binding(&name, &pair[1], binding.line)? {
+            if let Some(function_stmt) = lower_letrec_lambda_binding(&name, &pair[1], binding.line)?
+            {
                 stmts.push(function_stmt);
             } else {
                 stmts.push(format!("let {name} = false;"));
@@ -2311,10 +2311,7 @@ fn lower_named_let_expr(
 
     // fn func_name(params...) = body; func_name(init_vals...)
     let call = format!("{}({})", func_name, init_vals.join(", "));
-    Ok(wrap_statement_sequence(
-        vec![function_stmt],
-        call,
-    ))
+    Ok(wrap_statement_sequence(vec![function_stmt], call))
 }
 
 fn lower_letrec_lambda_binding(

@@ -290,3 +290,19 @@ fn scheme_modulo_uses_native_operator() {
     assert_eq!(status, VmStatus::Halted);
     assert_eq!(vm.stack(), &[Value::Int(4)]);
 }
+
+#[test]
+fn scheme_null_and_nil_lower_to_null_literal() {
+    let source = r#"
+        (if (and (null? null) (null? nil))
+            42
+            0)
+    "#;
+
+    let compiled =
+        compile_source_with_flavor(source, SourceFlavor::Scheme).expect("compile should succeed");
+    let mut vm = Vm::with_locals(compiled.program, compiled.locals);
+    let status = vm.run().expect("vm should run");
+    assert_eq!(status, VmStatus::Halted);
+    assert_eq!(vm.stack(), &[Value::Int(42)]);
+}

@@ -6,13 +6,21 @@ enum LuaBlock {
     If,
     For,
     While,
+    Do,
+    Repeat,
     FunctionDecl,
+}
+
+#[derive(Default)]
+struct LuaLoweringContext {
+    needs_string_sub_helpers: bool,
 }
 
 pub(super) fn lower(source: &str) -> Result<String, ParseError> {
     let cleaned_source = remove_lua_comments(source)?;
     let mut out = Vec::new();
     let mut blocks = Vec::new();
+    let mut lowering_context = LuaLoweringContext::default();
     let mut vm_namespace_aliases = HashSet::new();
     let mut vm_import_emitted = false;
 
@@ -41,13 +49,28 @@ pub(super) fn lower(source: &str) -> Result<String, ParseError> {
         let rewritten = rewrite_lua_inline_function_literal(trimmed_raw, line_no)?;
         let trimmed = rewritten.trim();
 
+        if let Some(rest) = trimmed.strip_prefix("local function ") {
+            let signature = rest.trim().trim_end_matches(';').trim();
+            if !signature.ends_with(')') {
+                return Err(ParseError {
+                    line: line_no,
+                    message: "lua local function declaration must end with ')'".to_string(),
+                });
+            }
+            out.push(format!("fn {signature} {{"));
+            blocks.push(LuaBlock::FunctionDecl);
+            continue;
+        }
+
         if let Some(rest) = trimmed.strip_prefix("local ") {
             out.push(format!(
                 "let {};",
                 rewrite_lua_expr(
                     rest.trim().trim_end_matches(';').trim(),
-                    &vm_namespace_aliases
-                )
+                    &vm_namespace_aliases,
+                    &mut lowering_context,
+                    line_no
+                )?,
             ));
             continue;
         }
@@ -60,8 +83,10 @@ pub(super) fn lower(source: &str) -> Result<String, ParseError> {
                     message: "lua function declaration must end with ')'".to_string(),
                 });
             }
-            out.push(format!("fn {signature};"));
-            if !trimmed.ends_with(';') {
+            if trimmed.ends_with(';') {
+                out.push(format!("fn {signature};"));
+            } else {
+                out.push(format!("fn {signature} {{"));
                 blocks.push(LuaBlock::FunctionDecl);
             }
             continue;
@@ -72,7 +97,12 @@ pub(super) fn lower(source: &str) -> Result<String, ParseError> {
         {
             out.push(format!(
                 "if {} {{",
-                rewrite_lua_expr(condition.trim(), &vm_namespace_aliases)
+                rewrite_lua_expr(
+                    condition.trim(),
+                    &vm_namespace_aliases,
+                    &mut lowering_context,
+                    line_no
+                )?
             ));
             blocks.push(LuaBlock::If);
             continue;
@@ -83,7 +113,12 @@ pub(super) fn lower(source: &str) -> Result<String, ParseError> {
         {
             out.push(format!(
                 "while {} {{",
-                rewrite_lua_expr(condition.trim(), &vm_namespace_aliases)
+                rewrite_lua_expr(
+                    condition.trim(),
+                    &vm_namespace_aliases,
+                    &mut lowering_context,
+                    line_no
+                )?
             ));
             blocks.push(LuaBlock::While);
             continue;
@@ -117,12 +152,24 @@ pub(super) fn lower(source: &str) -> Result<String, ParseError> {
                         .to_string(),
                 });
             }
-            let start_expr = rewrite_lua_expr(parts[0].trim(), &vm_namespace_aliases);
-            let end_expr = rewrite_lua_expr(parts[1].trim(), &vm_namespace_aliases);
+            let start_expr = rewrite_lua_expr(
+                parts[0].trim(),
+                &vm_namespace_aliases,
+                &mut lowering_context,
+                line_no,
+            )?;
+            let end_expr = rewrite_lua_expr(
+                parts[1].trim(),
+                &vm_namespace_aliases,
+                &mut lowering_context,
+                line_no,
+            )?;
             let step_expr = rewrite_lua_expr(
                 parts.get(2).map(|s| s.trim()).unwrap_or("1"),
                 &vm_namespace_aliases,
-            );
+                &mut lowering_context,
+                line_no,
+            )?;
             if step_expr.starts_with('-') {
                 return Err(ParseError {
                     line: line_no,
@@ -133,6 +180,37 @@ pub(super) fn lower(source: &str) -> Result<String, ParseError> {
                 "for (let {name} = {start_expr}; {name} < (({end_expr}) + 1); {name} = {name} + ({step_expr})) {{"
             ));
             blocks.push(LuaBlock::For);
+            continue;
+        }
+
+        if trimmed == "do" {
+            out.push("if true {".to_string());
+            blocks.push(LuaBlock::Do);
+            continue;
+        }
+
+        if trimmed == "repeat" {
+            out.push("while true {".to_string());
+            blocks.push(LuaBlock::Repeat);
+            continue;
+        }
+
+        if let Some(rest) = trimmed.strip_prefix("until ") {
+            if !matches!(blocks.last(), Some(LuaBlock::Repeat)) {
+                return Err(ParseError {
+                    line: line_no,
+                    message: "lua 'until' without matching 'repeat'".to_string(),
+                });
+            }
+            let condition = rewrite_lua_expr(
+                rest.trim().trim_end_matches(';').trim(),
+                &vm_namespace_aliases,
+                &mut lowering_context,
+                line_no,
+            )?;
+            out.push(format!("if {condition} {{ break; }}"));
+            let _ = blocks.pop();
+            out.push("}".to_string());
             continue;
         }
 
@@ -147,7 +225,12 @@ pub(super) fn lower(source: &str) -> Result<String, ParseError> {
             }
             out.push(format!(
                 "}} else if {} {{",
-                rewrite_lua_expr(condition.trim(), &vm_namespace_aliases)
+                rewrite_lua_expr(
+                    condition.trim(),
+                    &vm_namespace_aliases,
+                    &mut lowering_context,
+                    line_no
+                )?
             ));
             continue;
         }
@@ -169,8 +252,17 @@ pub(super) fn lower(source: &str) -> Result<String, ParseError> {
                 message: "lua 'end' without matching block".to_string(),
             })?;
             match block {
-                LuaBlock::FunctionDecl => out.push(String::new()),
-                LuaBlock::If | LuaBlock::For | LuaBlock::While => out.push("}".to_string()),
+                LuaBlock::Repeat => {
+                    return Err(ParseError {
+                        line: line_no,
+                        message: "lua 'repeat' block must be closed with 'until'".to_string(),
+                    });
+                }
+                LuaBlock::FunctionDecl
+                | LuaBlock::If
+                | LuaBlock::For
+                | LuaBlock::While
+                | LuaBlock::Do => out.push("}".to_string()),
             }
             continue;
         }
@@ -190,15 +282,22 @@ pub(super) fn lower(source: &str) -> Result<String, ParseError> {
                 "{};",
                 rewrite_lua_expr(
                     rest.trim().trim_end_matches(';').trim(),
-                    &vm_namespace_aliases
-                )
+                    &vm_namespace_aliases,
+                    &mut lowering_context,
+                    line_no
+                )?,
             ));
             continue;
         }
 
         out.push(format!(
             "{};",
-            rewrite_lua_expr(trimmed.trim_end_matches(';'), &vm_namespace_aliases)
+            rewrite_lua_expr(
+                trimmed.trim_end_matches(';'),
+                &vm_namespace_aliases,
+                &mut lowering_context,
+                line_no
+            )?
         ));
     }
 
@@ -207,6 +306,13 @@ pub(super) fn lower(source: &str) -> Result<String, ParseError> {
             line: source.lines().count().max(1),
             message: "unterminated lua block: expected 'end'".to_string(),
         });
+    }
+
+    let helper_lines = emit_lua_helpers(&lowering_context);
+    if !helper_lines.is_empty() {
+        let mut combined = helper_lines;
+        combined.extend(out);
+        out = combined;
     }
 
     Ok(out.join("\n"))
@@ -418,32 +524,497 @@ fn rewrite_lua_inline_function_literal(line: &str, line_no: usize) -> Result<Str
     Ok(format!("{prefix}|{params}| {body}"))
 }
 
-fn rewrite_lua_expr(expr: &str, vm_namespace_aliases: &HashSet<String>) -> String {
+fn rewrite_lua_expr(
+    expr: &str,
+    vm_namespace_aliases: &HashSet<String>,
+    lowering_context: &mut LuaLoweringContext,
+    line_no: usize,
+) -> Result<String, ParseError> {
+    let method_rewritten = rewrite_lua_method_calls(expr, lowering_context, line_no)?;
+    let length_rewritten = rewrite_lua_length_operator(&method_rewritten, line_no)?;
+    Ok(rewrite_lua_expr_tokens(
+        &length_rewritten,
+        vm_namespace_aliases,
+    ))
+}
+
+fn rewrite_lua_length_operator(expr: &str, line_no: usize) -> Result<String, ParseError> {
     let bytes = expr.as_bytes();
     let mut out = String::with_capacity(expr.len());
     let mut i = 0usize;
-    let mut in_string = false;
+    let mut string_delim: Option<u8> = None;
     let mut escaped = false;
 
     while i < bytes.len() {
         let b = bytes[i];
-        if in_string {
+        if let Some(delim) = string_delim {
             out.push(b as char);
             if escaped {
                 escaped = false;
             } else if b == b'\\' {
                 escaped = true;
-            } else if b == b'"' {
-                in_string = false;
+            } else if b == delim {
+                string_delim = None;
             }
             i += 1;
             continue;
         }
 
-        if b == b'"' {
-            out.push('"');
-            in_string = true;
+        if b == b'"' || b == b'\'' {
+            out.push(b as char);
+            string_delim = Some(b);
+            escaped = false;
             i += 1;
+            continue;
+        }
+
+        if b != b'#' {
+            out.push(b as char);
+            i += 1;
+            continue;
+        }
+
+        let operand_start = skip_inline_whitespace(bytes, i + 1);
+        if operand_start >= bytes.len() {
+            return Err(ParseError {
+                line: line_no,
+                message: "lua length operator '#' missing operand".to_string(),
+            });
+        }
+        let operand_end = parse_lua_length_operand_end(expr, operand_start, line_no)?;
+        out.push_str("len(");
+        out.push_str(&expr[operand_start..operand_end]);
+        out.push(')');
+        i = operand_end;
+    }
+
+    Ok(out)
+}
+
+fn parse_lua_length_operand_end(
+    input: &str,
+    start: usize,
+    line_no: usize,
+) -> Result<usize, ParseError> {
+    let bytes = input.as_bytes();
+    let first = bytes[start];
+    if first == b'(' {
+        return parse_balanced_segment(input, start, b'(', b')', line_no);
+    }
+    if first == b'[' {
+        return parse_balanced_segment(input, start, b'[', b']', line_no);
+    }
+    if first == b'{' {
+        return parse_balanced_segment(input, start, b'{', b'}', line_no);
+    }
+    if first == b'"' || first == b'\'' {
+        return parse_lua_string_end(input, start, line_no);
+    }
+    if !is_ident_start(first as char) {
+        return Err(ParseError {
+            line: line_no,
+            message: "unsupported operand for lua length operator '#'".to_string(),
+        });
+    }
+
+    let mut cursor = start + 1;
+    while cursor < bytes.len() && is_ident_continue(bytes[cursor] as char) {
+        cursor += 1;
+    }
+
+    loop {
+        let ws = skip_inline_whitespace(bytes, cursor);
+        if ws >= bytes.len() {
+            return Ok(cursor);
+        }
+        if bytes[ws] == b'.' {
+            let member_start = skip_inline_whitespace(bytes, ws + 1);
+            if member_start >= bytes.len() || !is_ident_start(bytes[member_start] as char) {
+                return Ok(cursor);
+            }
+            let mut member_end = member_start + 1;
+            while member_end < bytes.len() && is_ident_continue(bytes[member_end] as char) {
+                member_end += 1;
+            }
+            cursor = member_end;
+            continue;
+        }
+        if bytes[ws] == b'?' {
+            let dot = skip_inline_whitespace(bytes, ws + 1);
+            if dot >= bytes.len() || bytes[dot] != b'.' {
+                return Ok(cursor);
+            }
+            let target_start = skip_inline_whitespace(bytes, dot + 1);
+            if target_start >= bytes.len() {
+                return Ok(cursor);
+            }
+            if bytes[target_start] == b'[' {
+                cursor = parse_balanced_segment(input, target_start, b'[', b']', line_no)?;
+                continue;
+            }
+            if !is_ident_start(bytes[target_start] as char) {
+                return Ok(cursor);
+            }
+            let mut target_end = target_start + 1;
+            while target_end < bytes.len() && is_ident_continue(bytes[target_end] as char) {
+                target_end += 1;
+            }
+            cursor = target_end;
+            continue;
+        }
+        if bytes[ws] == b'[' {
+            cursor = parse_balanced_segment(input, ws, b'[', b']', line_no)?;
+            continue;
+        }
+        if bytes[ws] == b'(' {
+            cursor = parse_balanced_segment(input, ws, b'(', b')', line_no)?;
+            continue;
+        }
+        return Ok(cursor);
+    }
+}
+
+fn parse_balanced_segment(
+    input: &str,
+    start: usize,
+    open: u8,
+    close: u8,
+    line_no: usize,
+) -> Result<usize, ParseError> {
+    let bytes = input.as_bytes();
+    if start >= bytes.len() || bytes[start] != open {
+        return Err(ParseError {
+            line: line_no,
+            message: "malformed lua expression while parsing '#' operand".to_string(),
+        });
+    }
+
+    let mut i = start;
+    let mut depth = 0usize;
+    let mut string_delim: Option<u8> = None;
+    let mut escaped = false;
+
+    while i < bytes.len() {
+        let b = bytes[i];
+        if let Some(delim) = string_delim {
+            if escaped {
+                escaped = false;
+            } else if b == b'\\' {
+                escaped = true;
+            } else if b == delim {
+                string_delim = None;
+            }
+            i += 1;
+            continue;
+        }
+
+        if b == b'"' || b == b'\'' {
+            string_delim = Some(b);
+            escaped = false;
+            i += 1;
+            continue;
+        }
+
+        if b == open {
+            depth += 1;
+            i += 1;
+            continue;
+        }
+        if b == close {
+            depth = depth.saturating_sub(1);
+            i += 1;
+            if depth == 0 {
+                return Ok(i);
+            }
+            continue;
+        }
+
+        i += 1;
+    }
+
+    Err(ParseError {
+        line: line_no,
+        message: "unterminated lua expression while parsing '#' operand".to_string(),
+    })
+}
+
+fn parse_lua_string_end(input: &str, start: usize, line_no: usize) -> Result<usize, ParseError> {
+    let bytes = input.as_bytes();
+    let quote = bytes[start];
+    let mut i = start + 1;
+    let mut escaped = false;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if escaped {
+            escaped = false;
+        } else if b == b'\\' {
+            escaped = true;
+        } else if b == quote {
+            return Ok(i + 1);
+        }
+        i += 1;
+    }
+    Err(ParseError {
+        line: line_no,
+        message: "unterminated lua string while parsing '#' operand".to_string(),
+    })
+}
+
+fn rewrite_lua_method_calls(
+    expr: &str,
+    lowering_context: &mut LuaLoweringContext,
+    line_no: usize,
+) -> Result<String, ParseError> {
+    let bytes = expr.as_bytes();
+    let mut out = String::with_capacity(expr.len());
+    let mut i = 0usize;
+    let mut string_delim: Option<u8> = None;
+    let mut escaped = false;
+
+    while i < bytes.len() {
+        let b = bytes[i];
+        if let Some(delim) = string_delim {
+            out.push(b as char);
+            if escaped {
+                escaped = false;
+            } else if b == b'\\' {
+                escaped = true;
+            } else if b == delim {
+                string_delim = None;
+            }
+            i += 1;
+            continue;
+        }
+
+        if b == b'"' || b == b'\'' {
+            out.push(b as char);
+            string_delim = Some(b);
+            escaped = false;
+            i += 1;
+            continue;
+        }
+
+        if !is_ident_start(b as char) {
+            out.push(b as char);
+            i += 1;
+            continue;
+        }
+
+        let receiver_start = i;
+        i += 1;
+        while i < bytes.len() && is_ident_continue(bytes[i] as char) {
+            i += 1;
+        }
+        let receiver = &expr[receiver_start..i];
+        let mut cursor = skip_inline_whitespace(bytes, i);
+        if cursor >= bytes.len() || bytes[cursor] != b':' {
+            out.push_str(receiver);
+            continue;
+        }
+        cursor += 1;
+        cursor = skip_inline_whitespace(bytes, cursor);
+        if cursor >= bytes.len() || !is_ident_start(bytes[cursor] as char) {
+            out.push_str(receiver);
+            out.push(':');
+            i = cursor;
+            continue;
+        }
+        let method_start = cursor;
+        cursor += 1;
+        while cursor < bytes.len() && is_ident_continue(bytes[cursor] as char) {
+            cursor += 1;
+        }
+        let method = &expr[method_start..cursor];
+        cursor = skip_inline_whitespace(bytes, cursor);
+        if cursor >= bytes.len() || bytes[cursor] != b'(' {
+            out.push_str(receiver);
+            out.push(':');
+            out.push_str(method);
+            i = cursor;
+            continue;
+        }
+
+        let (args_raw, next_index) = parse_balanced_call_args(expr, cursor, line_no)?;
+        let rewritten =
+            rewrite_lua_method_invocation(receiver, method, &args_raw, lowering_context, line_no)?;
+        out.push_str(&rewritten);
+        i = next_index;
+    }
+
+    Ok(out)
+}
+
+fn rewrite_lua_method_invocation(
+    receiver: &str,
+    method: &str,
+    args_raw: &str,
+    lowering_context: &mut LuaLoweringContext,
+    line_no: usize,
+) -> Result<String, ParseError> {
+    let mut args = Vec::new();
+    for arg in split_top_level_csv(args_raw) {
+        args.push(rewrite_lua_method_calls(
+            arg.trim(),
+            lowering_context,
+            line_no,
+        )?);
+    }
+
+    let rewritten = match method {
+        "len" => {
+            if !args.is_empty() {
+                return Err(ParseError {
+                    line: line_no,
+                    message: "lua string method ':len' expects no arguments".to_string(),
+                });
+            }
+            format!("len({receiver})")
+        }
+        "sub" => match args.as_slice() {
+            [start] => {
+                lowering_context.needs_string_sub_helpers = true;
+                format!("__lua_string_sub_from({receiver}, {start})")
+            }
+            [start, end] => {
+                lowering_context.needs_string_sub_helpers = true;
+                format!("__lua_string_sub_range({receiver}, {start}, {end})")
+            }
+            _ => {
+                return Err(ParseError {
+                    line: line_no,
+                    message: "lua string method ':sub' expects 1 or 2 arguments".to_string(),
+                });
+            }
+        },
+        "find" | "match" | "gsub" => {
+            return Err(ParseError {
+                line: line_no,
+                message: format!(
+                    "lua string method ':{method}' (Lua pattern API) is not supported in this subset yet"
+                ),
+            });
+        }
+        _ => {
+            if args.is_empty() {
+                format!("{method}({receiver})")
+            } else {
+                format!("{method}({receiver}, {})", args.join(", "))
+            }
+        }
+    };
+    Ok(rewritten)
+}
+
+fn parse_balanced_call_args(
+    input: &str,
+    open_paren_index: usize,
+    line_no: usize,
+) -> Result<(String, usize), ParseError> {
+    let bytes = input.as_bytes();
+    let mut i = open_paren_index;
+    let mut depth = 0usize;
+    let mut string_delim: Option<u8> = None;
+    let mut escaped = false;
+
+    while i < bytes.len() {
+        let b = bytes[i];
+        if let Some(delim) = string_delim {
+            if escaped {
+                escaped = false;
+            } else if b == b'\\' {
+                escaped = true;
+            } else if b == delim {
+                string_delim = None;
+            }
+            i += 1;
+            continue;
+        }
+
+        if b == b'"' || b == b'\'' {
+            string_delim = Some(b);
+            escaped = false;
+            i += 1;
+            continue;
+        }
+
+        if b == b'(' {
+            depth += 1;
+            i += 1;
+            continue;
+        }
+        if b == b')' {
+            if depth == 0 {
+                return Err(ParseError {
+                    line: line_no,
+                    message: "malformed lua method call argument list".to_string(),
+                });
+            }
+            depth -= 1;
+            if depth == 0 {
+                let args = input[open_paren_index + 1..i].to_string();
+                return Ok((args, i + 1));
+            }
+            i += 1;
+            continue;
+        }
+        i += 1;
+    }
+
+    Err(ParseError {
+        line: line_no,
+        message: "unterminated lua method call argument list".to_string(),
+    })
+}
+
+fn skip_inline_whitespace(bytes: &[u8], mut index: usize) -> usize {
+    while index < bytes.len()
+        && bytes[index].is_ascii_whitespace()
+        && bytes[index] != b'\n'
+        && bytes[index] != b'\r'
+    {
+        index += 1;
+    }
+    index
+}
+
+fn rewrite_lua_expr_tokens(expr: &str, vm_namespace_aliases: &HashSet<String>) -> String {
+    let bytes = expr.as_bytes();
+    let mut out = String::with_capacity(expr.len());
+    let mut i = 0usize;
+    let mut string_delim: Option<u8> = None;
+    let mut escaped = false;
+
+    while i < bytes.len() {
+        let b = bytes[i];
+        if let Some(delim) = string_delim {
+            if escaped {
+                out.push(b as char);
+                escaped = false;
+            } else if b == b'\\' {
+                out.push('\\');
+                escaped = true;
+            } else if b == delim {
+                out.push('"');
+                string_delim = None;
+            } else if delim == b'\'' && b == b'"' {
+                out.push_str("\\\"");
+            } else {
+                out.push(b as char);
+            }
+            i += 1;
+            continue;
+        }
+
+        if b == b'"' || b == b'\'' {
+            out.push('"');
+            string_delim = Some(b);
+            i += 1;
+            continue;
+        }
+
+        if b == b'.' && i + 1 < bytes.len() && bytes[i + 1] == b'.' {
+            out.push('+');
+            i += 2;
             continue;
         }
 
@@ -527,6 +1098,8 @@ fn rewrite_lua_expr(expr: &str, vm_namespace_aliases: &HashSet<String>) -> Strin
                 out.push_str("&&");
             } else if ident == "or" {
                 out.push_str("||");
+            } else if ident == "nil" {
+                out.push_str("null");
             } else {
                 out.push_str(ident);
             }
@@ -540,29 +1113,85 @@ fn rewrite_lua_expr(expr: &str, vm_namespace_aliases: &HashSet<String>) -> Strin
     out
 }
 
+const LUA_STRING_SUB_HELPERS: &str = r#"fn __lua_string_norm_start_index(total_len, raw_index) {
+    let normalized = 0;
+    if raw_index < 0 {
+        normalized = total_len + raw_index;
+    } else {
+        normalized = raw_index - 1;
+    }
+    if normalized < 0 {
+        normalized = 0;
+    }
+    if normalized > total_len {
+        normalized = total_len;
+    }
+    normalized;
+}
+
+fn __lua_string_norm_end_exclusive(total_len, raw_index) {
+    let normalized = 0;
+    if raw_index < 0 {
+        normalized = total_len + raw_index + 1;
+    } else {
+        normalized = raw_index;
+    }
+    if normalized < 0 {
+        normalized = 0;
+    }
+    if normalized > total_len {
+        normalized = total_len;
+    }
+    normalized;
+}
+
+fn __lua_string_sub_from(value, start_raw) {
+    let total_len = len(value);
+    let start = __lua_string_norm_start_index(total_len, start_raw);
+    slice(value, start, total_len - start);
+}
+
+fn __lua_string_sub_range(value, start_raw, end_raw) {
+    let total_len = len(value);
+    let start = __lua_string_norm_start_index(total_len, start_raw);
+    let end_exclusive = __lua_string_norm_end_exclusive(total_len, end_raw);
+    slice(value, start, end_exclusive - start);
+}"#;
+
+fn emit_lua_helpers(lowering_context: &LuaLoweringContext) -> Vec<String> {
+    let mut helper_lines = Vec::new();
+    if lowering_context.needs_string_sub_helpers {
+        helper_lines.extend(LUA_STRING_SUB_HELPERS.lines().map(str::to_string));
+        helper_lines.push(String::new());
+    }
+    helper_lines
+}
+
 fn split_top_level_csv(input: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut current = String::new();
     let mut paren_depth = 0usize;
-    let mut in_string = false;
+    let mut bracket_depth = 0usize;
+    let mut brace_depth = 0usize;
+    let mut string_delim: Option<char> = None;
     let mut escaped = false;
 
     for ch in input.chars() {
-        if in_string {
+        if let Some(delim) = string_delim {
             current.push(ch);
             if escaped {
                 escaped = false;
             } else if ch == '\\' {
                 escaped = true;
-            } else if ch == '"' {
-                in_string = false;
+            } else if ch == delim {
+                string_delim = None;
             }
             continue;
         }
 
         match ch {
-            '"' => {
-                in_string = true;
+            '"' | '\'' => {
+                string_delim = Some(ch);
                 current.push(ch);
             }
             '(' => {
@@ -573,7 +1202,23 @@ fn split_top_level_csv(input: &str) -> Vec<String> {
                 paren_depth = paren_depth.saturating_sub(1);
                 current.push(ch);
             }
-            ',' if paren_depth == 0 => {
+            '[' => {
+                bracket_depth += 1;
+                current.push(ch);
+            }
+            ']' => {
+                bracket_depth = bracket_depth.saturating_sub(1);
+                current.push(ch);
+            }
+            '{' => {
+                brace_depth += 1;
+                current.push(ch);
+            }
+            '}' => {
+                brace_depth = brace_depth.saturating_sub(1);
+                current.push(ch);
+            }
+            ',' if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
                 out.push(current.trim().to_string());
                 current.clear();
             }
@@ -592,7 +1237,7 @@ fn remove_lua_comments(source: &str) -> Result<String, ParseError> {
     let mut out = String::with_capacity(source.len());
     let mut i = 0usize;
     let mut line = 1usize;
-    let mut in_string = false;
+    let mut string_delim: Option<u8> = None;
     let mut escaped = false;
     let mut in_line_comment = false;
     let mut in_block_comment = false;
@@ -624,14 +1269,14 @@ fn remove_lua_comments(source: &str) -> Result<String, ParseError> {
             continue;
         }
 
-        if in_string {
+        if let Some(delim) = string_delim {
             out.push(b as char);
             if escaped {
                 escaped = false;
             } else if b == b'\\' {
                 escaped = true;
-            } else if b == b'"' {
-                in_string = false;
+            } else if b == delim {
+                string_delim = None;
             } else if b == b'\n' {
                 line += 1;
             }
@@ -650,9 +1295,9 @@ fn remove_lua_comments(source: &str) -> Result<String, ParseError> {
             continue;
         }
 
-        if b == b'"' {
-            in_string = true;
-            out.push('"');
+        if b == b'"' || b == b'\'' {
+            string_delim = Some(b);
+            out.push(b as char);
             i += 1;
             continue;
         }

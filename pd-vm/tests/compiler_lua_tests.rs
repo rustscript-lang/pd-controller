@@ -281,3 +281,118 @@ fn lua_logical_operators_work() {
     assert_eq!(status, VmStatus::Halted);
     assert_eq!(vm.stack(), &[Value::Int(42)]);
 }
+
+#[test]
+fn lua_local_function_declaration_is_supported() {
+    let source = r#"
+        local function inc(v)
+            return v + 1
+        end
+        inc(41)
+    "#;
+
+    let compiled =
+        compile_source_with_flavor(source, SourceFlavor::Lua).expect("compile should succeed");
+    let mut vm = Vm::with_locals(compiled.program, compiled.locals);
+    let status = vm.run().expect("vm should run");
+    assert_eq!(status, VmStatus::Halted);
+    assert_eq!(vm.stack(), &[Value::Int(42)]);
+}
+
+#[test]
+fn lua_repeat_until_is_supported() {
+    let source = r#"
+        local i = 0
+        repeat
+            i = i + 1
+        until i > 2
+        i
+    "#;
+
+    let compiled =
+        compile_source_with_flavor(source, SourceFlavor::Lua).expect("compile should succeed");
+    let mut vm = Vm::with_locals(compiled.program, compiled.locals);
+    let status = vm.run().expect("vm should run");
+    assert_eq!(status, VmStatus::Halted);
+    assert_eq!(vm.stack(), &[Value::Int(3)]);
+}
+
+#[test]
+fn lua_do_end_block_is_supported() {
+    let source = r#"
+        local value = 1
+        do
+            value = value + 41
+        end
+        value
+    "#;
+
+    let compiled =
+        compile_source_with_flavor(source, SourceFlavor::Lua).expect("compile should succeed");
+    let mut vm = Vm::with_locals(compiled.program, compiled.locals);
+    let status = vm.run().expect("vm should run");
+    assert_eq!(status, VmStatus::Halted);
+    assert_eq!(vm.stack(), &[Value::Int(42)]);
+}
+
+#[test]
+fn lua_nil_and_concat_and_single_quoted_strings_are_supported() {
+    let source = r#"
+        local s = 'a' .. 'b'
+        if type_of(nil) == "null" and s == "ab" then
+            42
+        else
+            0
+        end
+    "#;
+
+    let compiled =
+        compile_source_with_flavor(source, SourceFlavor::Lua).expect("compile should succeed");
+    let mut vm = Vm::with_locals(compiled.program, compiled.locals);
+    let status = vm.run().expect("vm should run");
+    assert_eq!(status, VmStatus::Halted);
+    assert_eq!(vm.stack(), &[Value::Int(42)]);
+}
+
+#[test]
+fn lua_string_method_calls_and_length_operator_are_lowered() {
+    let source = r#"
+        local s = "hello123world"
+        local arr = { 1, 2, 3 }
+        local left = s:sub(1, 5)
+        local right = s:sub(-5, -1)
+        local count = #s
+        local arr_count = #arr
+        if left == "hello" and right == "world" and count == 13 and arr_count == 3 then
+            42
+        else
+            0
+        end
+    "#;
+
+    let compiled =
+        compile_source_with_flavor(source, SourceFlavor::Lua).expect("compile should succeed");
+    let mut vm = Vm::with_locals(compiled.program, compiled.locals);
+    let status = vm.run().expect("vm should run");
+    assert_eq!(status, VmStatus::Halted);
+    assert_eq!(vm.stack(), &[Value::Int(42)]);
+}
+
+#[test]
+fn lua_string_pattern_methods_are_rejected() {
+    let source = r##"
+        local s = "v1 id=2048 done"
+        s:find("%d+")
+    "##;
+
+    let err = match compile_source_with_flavor(source, SourceFlavor::Lua) {
+        Ok(_) => panic!("lua pattern methods should fail in this subset"),
+        Err(err) => err,
+    };
+    match err {
+        vm::SourceError::Parse(parse) => {
+            assert!(parse.message.contains("Lua pattern API"));
+        }
+        other => panic!("unexpected error: {other}"),
+    }
+}

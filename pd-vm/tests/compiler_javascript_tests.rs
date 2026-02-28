@@ -288,3 +288,18 @@ fn javascript_modulo_and_logical_operators_work() {
     assert_eq!(status, VmStatus::Halted);
     assert_eq!(vm.stack(), &[Value::Int(4)]);
 }
+
+#[test]
+fn javascript_null_literal_is_supported() {
+    let source = r#"
+        const value = null;
+        type_of(value) == "null";
+    "#;
+
+    let compiled = compile_source_with_flavor(source, SourceFlavor::JavaScript)
+        .expect("compile should succeed");
+    let mut vm = Vm::with_locals(compiled.program, compiled.locals);
+    let status = vm.run().expect("vm should run");
+    assert_eq!(status, VmStatus::Halted);
+    assert_eq!(vm.stack(), &[Value::Bool(true)]);
+}

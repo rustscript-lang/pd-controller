@@ -650,3 +650,31 @@ fn rustscript_modulo_and_logical_operators_work() {
     assert_eq!(status, VmStatus::Halted);
     assert_eq!(vm.stack(), &[Value::Int(4)]);
 }
+
+#[test]
+fn rustscript_null_literal_is_supported() {
+    let source = r#"
+        let v = null;
+        type_of(v) == "null";
+    "#;
+
+    let compiled = compile_source(source).expect("compile should succeed");
+    let mut vm = Vm::with_locals(compiled.program, compiled.locals);
+    let status = vm.run().expect("vm should run");
+    assert_eq!(status, VmStatus::Halted);
+    assert_eq!(vm.stack(), &[Value::Bool(true)]);
+}
+
+#[test]
+fn rustscript_null_literal_can_be_used_as_map_key() {
+    let source = r#"
+        let m = { null: 42 };
+        m[null];
+    "#;
+
+    let compiled = compile_source(source).expect("compile should succeed");
+    let mut vm = Vm::with_locals(compiled.program, compiled.locals);
+    let status = vm.run().expect("vm should run");
+    assert_eq!(status, VmStatus::Halted);
+    assert_eq!(vm.stack(), &[Value::Int(42)]);
+}

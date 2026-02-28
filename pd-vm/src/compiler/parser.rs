@@ -14,6 +14,7 @@ enum TokenKind {
     String(String),
     True,
     False,
+    Null,
     Pub,
     Use,
     As,
@@ -228,6 +229,7 @@ impl<'a> Lexer<'a> {
                     "continue" => TokenKind::Continue,
                     "true" => TokenKind::True,
                     "false" => TokenKind::False,
+                    "null" => TokenKind::Null,
                     _ => TokenKind::Ident(ident),
                 }
             }
@@ -1054,6 +1056,9 @@ impl Parser {
         if self.match_kind(&TokenKind::False) {
             return Ok(Expr::Bool(false));
         }
+        if self.match_kind(&TokenKind::Null) {
+            return Ok(Expr::Null);
+        }
         if let Some(value) = self.match_int() {
             return Ok(Expr::Int(value));
         }
@@ -1700,9 +1705,12 @@ impl Parser {
         if self.match_kind(&TokenKind::False) {
             return Ok(Expr::Bool(false));
         }
+        if self.match_kind(&TokenKind::Null) {
+            return Ok(Expr::Null);
+        }
         Err(ParseError {
             line: self.current_line(),
-            message: "map keys must be identifier/string/int/bool literals".to_string(),
+            message: "map keys must be identifier/string/int/bool/null literals".to_string(),
         })
     }
 
@@ -1720,6 +1728,7 @@ impl Parser {
                 | TokenKind::Int(_)
                 | TokenKind::True
                 | TokenKind::False
+                | TokenKind::Null
         );
         let is_delim = matches!(next.kind, TokenKind::Colon | TokenKind::Equal);
         is_key && is_delim
