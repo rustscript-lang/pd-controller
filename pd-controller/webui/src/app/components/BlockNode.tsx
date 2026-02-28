@@ -7,6 +7,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type { FlowNode } from "@/app/types";
 
+const CONNECTED_INPUT_PLACEHOLDER = "Value comes from connected output";
+
 function BlockNode({ id, data }: NodeProps<FlowNode>) {
   return (
     <div className="min-w-[280px] rounded-lg border border-slate-700 bg-slate-900 text-slate-100 shadow-xl">
@@ -31,6 +33,8 @@ function BlockNode({ id, data }: NodeProps<FlowNode>) {
 
         {data.definition.inputs.map((input) => {
           const connected = data.connectedInputs[input.key] ?? false;
+          const displayedValue = connected ? "" : (data.values[input.key] ?? "");
+          const placeholder = connected ? CONNECTED_INPUT_PLACEHOLDER : input.placeholder;
           return (
             <div key={`${id}-${input.key}`} className="relative space-y-1 rounded-md bg-slate-800/70 p-2">
               <Label htmlFor={`${id}-${input.key}`} className="text-xs text-slate-300">
@@ -39,10 +43,10 @@ function BlockNode({ id, data }: NodeProps<FlowNode>) {
               <Input
                 id={`${id}-${input.key}`}
                 type={input.input_type === "number" ? "number" : "text"}
-                value={data.values[input.key] ?? ""}
+                value={displayedValue}
                 disabled={connected}
                 className="h-8 border-slate-600 bg-slate-900 text-xs text-slate-100"
-                placeholder={input.placeholder}
+                placeholder={placeholder}
                 onChange={(event) => data.onValueChange(id, input.key, event.target.value)}
               />
               {input.connectable ? (

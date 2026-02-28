@@ -254,9 +254,6 @@ export function DebugSessionsView({
                       <div className="min-w-0">
                         <div className="truncate font-medium">{session.edge_name}</div>
                         <div className="mt-1 truncate text-xs text-muted-foreground">session={session.session_id}</div>
-                        {session.request_id ? (
-                          <div className="truncate text-[11px] text-muted-foreground">request={session.request_id}</div>
-                        ) : null}
                       </div>
                       <div className="text-xs uppercase text-muted-foreground">{session.mode}</div>
                       <div>
