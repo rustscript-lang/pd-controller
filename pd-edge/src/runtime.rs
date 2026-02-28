@@ -22,8 +22,8 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use tracing::{info, warn};
-use uuid::Uuid;
 use url::Url;
+use uuid::Uuid;
 use vm::{Program, Vm, VmStatus, decode_program, infer_local_count, validate_program};
 
 use crate::{
@@ -389,11 +389,15 @@ impl RuntimeMetrics {
     }
 
     fn take_latency_percentiles_ms(&self) -> LatencySampleGroup {
-        let total = latency_percentiles_from_values(self.drain_latency_samples(&self.latency_total_samples_ms));
-        let upstream =
-            latency_percentiles_from_values(self.drain_latency_samples(&self.latency_upstream_samples_ms));
-        let edge_added =
-            latency_percentiles_from_values(self.drain_latency_samples(&self.latency_edge_added_samples_ms));
+        let total = latency_percentiles_from_values(
+            self.drain_latency_samples(&self.latency_total_samples_ms),
+        );
+        let upstream = latency_percentiles_from_values(
+            self.drain_latency_samples(&self.latency_upstream_samples_ms),
+        );
+        let edge_added = latency_percentiles_from_values(
+            self.drain_latency_samples(&self.latency_edge_added_samples_ms),
+        );
         LatencySampleGroup {
             total,
             upstream,

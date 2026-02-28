@@ -451,10 +451,7 @@ mod tests {
         assert!(matches!(ok, Ok(CallOutcome::Return(_))));
         {
             let guard = context.lock().expect("vm context lock poisoned");
-            assert_eq!(
-                guard.upstream.as_deref(),
-                Some("https://example.com/path")
-            );
+            assert_eq!(guard.upstream.as_deref(), Some("https://example.com/path"));
         }
 
         let err = function.call(&mut vm, &[Value::String("ftp://localhost".to_string())]);

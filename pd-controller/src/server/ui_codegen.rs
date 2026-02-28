@@ -2140,7 +2140,10 @@ fn render_single_block(
             rss.push(format!("vm::set_upstream({});", render_expr_rss(upstream)));
             js.push(format!("vm.set_upstream({});", render_expr_js(upstream)));
             lua.push(format!("vm.set_upstream({})", render_expr_lua(upstream)));
-            scm.push(format!("(vm.set_upstream {})", render_expr_scheme(upstream)));
+            scm.push(format!(
+                "(vm.set_upstream {})",
+                render_expr_scheme(upstream)
+            ));
         }
         "rate_limit_if_else" => {
             let key_expr = block_value(block, "key_expr", "$header");
