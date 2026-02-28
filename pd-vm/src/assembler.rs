@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::debug_info::DebugInfoBuilder;
-use crate::vm::{OpCode, Program, Value};
+use crate::{OpCode, Program, Value};
 
 pub struct BytecodeBuilder {
     code: Vec<u8>,

@@ -1,3 +1,4 @@
+#![cfg(feature = "runtime")]
 use vm::{
     CallOutcome, HostFunction, JitConfig, JitTraceTerminal, OpCode, Value, Vm, VmStatus,
     compile_source,

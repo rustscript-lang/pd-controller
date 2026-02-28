@@ -31,6 +31,21 @@ pub struct VmRecording {
     pub terminal_status: Option<VmStatus>,
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct VmRecordingReplayState {
+    pub cursor: usize,
+    pub offset_breakpoints: HashSet<usize>,
+    pub line_breakpoints: HashSet<u32>,
+}
+
+#[derive(Clone, Debug)]
+pub struct VmRecordingReplayResponse {
+    pub output: String,
+    pub current_line: Option<u32>,
+    pub at_end: bool,
+    pub exited: bool,
+}
+
 #[derive(Debug)]
 pub enum VmRecordingError {
     Io(io::Error),
@@ -1284,6 +1299,58 @@ impl ReplayBreakpoints {
     }
 }
 
+pub fn run_recording_replay_command(
+    recording: &VmRecording,
+    state: &mut VmRecordingReplayState,
+    command: &str,
+) -> VmRecordingReplayResponse {
+    if recording.frames.is_empty() {
+        return VmRecordingReplayResponse {
+            output: "recording has no captured frames".to_string(),
+            current_line: None,
+            at_end: true,
+            exited: false,
+        };
+    }
+
+    if state.cursor >= recording.frames.len() {
+        state.cursor = recording.frames.len().saturating_sub(1);
+    }
+
+    let mut replay_breakpoints = ReplayBreakpoints {
+        offset_breakpoints: state.offset_breakpoints.clone(),
+        line_breakpoints: state.line_breakpoints.clone(),
+    };
+    let mut output = Vec::<u8>::new();
+    let action = handle_replay_command(
+        command,
+        recording,
+        &mut state.cursor,
+        &mut replay_breakpoints,
+        &mut output,
+    );
+
+    state.offset_breakpoints = replay_breakpoints.offset_breakpoints;
+    state.line_breakpoints = replay_breakpoints.line_breakpoints;
+    let current_line = replay_current_line(recording, state.cursor);
+
+    VmRecordingReplayResponse {
+        output: String::from_utf8_lossy(&output).to_string(),
+        current_line,
+        at_end: replay_at_end(recording, state.cursor),
+        exited: action.is_exit(),
+    }
+}
+
+fn replay_current_line(recording: &VmRecording, cursor: usize) -> Option<u32> {
+    let frame = recording.frames.get(cursor)?;
+    recording
+        .program
+        .debug
+        .as_ref()
+        .and_then(|info| info.line_for_offset(frame.ip))
+}
+
 fn print_replay_locals(recording: &VmRecording, frame: &VmRecordingFrame, out: &mut dyn Write) {
     let Some(info) = recording.program.debug.as_ref() else {
         let _ = writeln!(out, "locals: {:?}", frame.locals);
@@ -1794,5 +1861,47 @@ mod tests {
         let text = String::from_utf8(out).expect("output should be utf-8");
         assert!(text.contains("frame 1/2"));
         assert_eq!(cursor, 1);
+    }
+
+    #[test]
+    fn public_replay_api_updates_cursor_and_reports_line() {
+        let program = Program::with_debug(
+            vec![],
+            vec![],
+            Some(DebugInfo {
+                source: None,
+                lines: vec![crate::debug_info::LineInfo {
+                    offset: 0,
+                    line: 11,
+                }],
+                functions: vec![],
+                locals: vec![],
+            }),
+        );
+        let recording = VmRecording {
+            program,
+            frames: vec![
+                VmRecordingFrame {
+                    ip: 0,
+                    call_depth: 0,
+                    stack: vec![],
+                    locals: vec![],
+                },
+                VmRecordingFrame {
+                    ip: 5,
+                    call_depth: 0,
+                    stack: vec![],
+                    locals: vec![],
+                },
+            ],
+            terminal_status: Some(VmStatus::Halted),
+        };
+        let mut state = super::VmRecordingReplayState::default();
+
+        let response = super::run_recording_replay_command(&recording, &mut state, "step");
+        assert!(!response.exited);
+        assert_eq!(state.cursor, 1);
+        assert!(response.at_end);
+        assert_eq!(response.current_line, Some(11));
     }
 }

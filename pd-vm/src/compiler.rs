@@ -3,7 +3,9 @@ use std::path::{Path, PathBuf};
 
 use crate::assembler::{Assembler, AssemblerError};
 use crate::builtins::BuiltinFunction;
-use crate::vm::{HostImport, Program, Value, Vm};
+#[cfg(feature = "runtime")]
+use crate::vm::Vm;
+use crate::{HostImport, Program, Value};
 
 #[derive(Debug)]
 pub enum CompileError {
@@ -276,6 +278,7 @@ pub struct CompiledProgram {
 }
 
 impl CompiledProgram {
+    #[cfg(feature = "runtime")]
     pub fn into_vm(self) -> Vm {
         Vm::with_locals(self.program, self.locals)
     }

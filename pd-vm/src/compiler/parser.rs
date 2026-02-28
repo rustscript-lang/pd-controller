@@ -1262,9 +1262,31 @@ impl Parser {
     fn parse_postfix_access(&mut self, mut expr: Expr) -> Result<Expr, ParseError> {
         loop {
             if self.match_kind(&TokenKind::LBracket) {
-                let key = self.parse_expr()?;
+                if self.match_kind(&TokenKind::Colon) {
+                    let end = if self.check(&TokenKind::RBracket) {
+                        None
+                    } else {
+                        Some(self.parse_expr()?)
+                    };
+                    self.expect(&TokenKind::RBracket, "expected ']' after slice expression")?;
+                    expr = self.build_slice_access_expr(expr, None, end)?;
+                    continue;
+                }
+
+                let first = self.parse_expr()?;
+                if self.match_kind(&TokenKind::Colon) {
+                    let end = if self.check(&TokenKind::RBracket) {
+                        None
+                    } else {
+                        Some(self.parse_expr()?)
+                    };
+                    self.expect(&TokenKind::RBracket, "expected ']' after slice expression")?;
+                    expr = self.build_slice_access_expr(expr, Some(first), end)?;
+                    continue;
+                }
+
                 self.expect(&TokenKind::RBracket, "expected ']' after index expression")?;
-                expr = self.build_builtin_call_expr(BuiltinFunction::Get, vec![expr, key])?;
+                expr = self.build_builtin_call_expr(BuiltinFunction::Get, vec![expr, first])?;
                 continue;
             }
             if self.match_kind(&TokenKind::Dot) {
@@ -1293,6 +1315,47 @@ impl Parser {
             break;
         }
         Ok(expr)
+    }
+
+    fn build_slice_access_expr(
+        &mut self,
+        container: Expr,
+        start: Option<Expr>,
+        end: Option<Expr>,
+    ) -> Result<Expr, ParseError> {
+        let container_slot = self.allocate_hidden_local()?;
+        let start_slot = self.allocate_hidden_local()?;
+        let start_expr = start.unwrap_or(Expr::Int(0));
+
+        let slice_len = if let Some(end_expr) = end {
+            let end_slot = self.allocate_hidden_local()?;
+            let end_var = Expr::Var(end_slot);
+            let end_is_negative = Expr::Lt(Box::new(end_var.clone()), Box::new(Expr::Int(0)));
+            let len_expr = self
+                .build_builtin_call_expr(BuiltinFunction::Len, vec![Expr::Var(container_slot)])?;
+            let adjusted_end = Expr::IfElse {
+                condition: Box::new(end_is_negative),
+                then_expr: Box::new(Expr::Add(Box::new(len_expr), Box::new(end_var.clone()))),
+                else_expr: Box::new(end_var),
+            };
+            let slice_len = Expr::Sub(Box::new(adjusted_end), Box::new(Expr::Var(start_slot)));
+            let slice_expr = self.build_builtin_call_expr(
+                BuiltinFunction::Slice,
+                vec![Expr::Var(container_slot), Expr::Var(start_slot), slice_len],
+            )?;
+            let with_end = self.bind_hidden_local_expr(end_slot, end_expr, slice_expr)?;
+            self.bind_hidden_local_expr(start_slot, start_expr, with_end)?
+        } else {
+            let end_expr = self
+                .build_builtin_call_expr(BuiltinFunction::Len, vec![Expr::Var(container_slot)])?;
+            let slice_len = Expr::Sub(Box::new(end_expr), Box::new(Expr::Var(start_slot)));
+            let slice_expr = self.build_builtin_call_expr(
+                BuiltinFunction::Slice,
+                vec![Expr::Var(container_slot), Expr::Var(start_slot), slice_len],
+            )?;
+            self.bind_hidden_local_expr(start_slot, start_expr, slice_expr)?
+        };
+        self.bind_hidden_local_expr(container_slot, container, slice_len)
     }
 
     fn build_optional_get_expr(&mut self, container: Expr, key: Expr) -> Result<Expr, ParseError> {

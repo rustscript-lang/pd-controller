@@ -129,6 +129,20 @@ Scheme loop forms include `(while condition body...)` and Guile-style
 JavaScript/Lua external declarations can use module forms (`import ...` / `require(...)`); calls
 to unresolved names are treated as host externs in those flavors.
 
+## Wasm parser/compiler mode
+
+For browser/editor linting scenarios, `pd-vm` now supports a compiler-only build that excludes VM runtime/JIT/debugger/CLI.
+
+Build the wasm target with compiler/parser APIs only:
+
+```powershell
+cargo check -p pd-vm --target wasm32-unknown-unknown --no-default-features
+```
+
+Linting entrypoint for editor integrations:
+- `lint_source_with_flavor(source, flavor) -> LintReport`
+- `lint_source(source) -> LintReport` (RustScript default)
+
 ## Trace JIT (x86_64 + aarch64)
 
 The VM includes a trace-based JIT path inspired by LuaJIT's hot-loop tracing model:

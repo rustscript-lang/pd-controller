@@ -1,3 +1,4 @@
+#![cfg(feature = "runtime")]
 use std::path::Path;
 
 use vm::{Value, Vm, VmStatus, compile_source_file};

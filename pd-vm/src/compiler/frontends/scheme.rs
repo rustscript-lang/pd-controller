@@ -951,6 +951,40 @@ fn lower_list_expr(items: &[SchemeForm], line: usize) -> Result<String, ParseErr
             let key = lower_hash_key_expr(&args[1])?;
             Ok(format!("({container})[{key}]"))
         }
+        "slice-range" => {
+            if args.len() != 3 {
+                return Err(ParseError {
+                    line,
+                    message: "slice-range expects exactly three arguments".to_string(),
+                });
+            }
+            let container = lower_expr(&args[0])?;
+            let start = lower_expr(&args[1])?;
+            let end = lower_expr(&args[2])?;
+            Ok(format!("({container})[{start}:{end}]"))
+        }
+        "slice-to" => {
+            if args.len() != 2 {
+                return Err(ParseError {
+                    line,
+                    message: "slice-to expects exactly two arguments".to_string(),
+                });
+            }
+            let container = lower_expr(&args[0])?;
+            let end = lower_expr(&args[1])?;
+            Ok(format!("({container})[:{end}]"))
+        }
+        "slice-from" => {
+            if args.len() != 2 {
+                return Err(ParseError {
+                    line,
+                    message: "slice-from expects exactly two arguments".to_string(),
+                });
+            }
+            let container = lower_expr(&args[0])?;
+            let start = lower_expr(&args[1])?;
+            Ok(format!("({container})[{start}:]"))
+        }
         "lambda" => lower_lambda_expr(args, line),
         "if" | "while" | "do" | "for" | "define" | "set!" | "declare" | "break" | "continue"
         | "begin" | "vector-set!" | "hash-set!" => Err(ParseError {

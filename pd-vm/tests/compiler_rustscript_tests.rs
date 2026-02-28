@@ -1,3 +1,4 @@
+#![cfg(feature = "runtime")]
 mod common;
 use common::*;
 
@@ -57,6 +58,32 @@ fn rustscript_array_primitives_are_supported_without_namespace() {
     let status = vm.run().expect("vm should run");
     assert_eq!(status, VmStatus::Halted);
     assert_eq!(vm.stack(), &[Value::Int(8)]);
+}
+
+#[test]
+fn rustscript_bracket_slice_syntax_is_supported() {
+    let source = r#"
+        let text = "abcdef";
+        let end = -2;
+        let a = text[1:4];
+        let b = text[:3];
+        let c = text[2:];
+        let d = text[:-1];
+        let e = text[1:end];
+
+        let arr = [1, 2, 3, 4, 5];
+        let f = arr[1:4];
+        let g = arr[:2];
+        let h = arr[3:];
+        let i = arr[:-2];
+        len(a) + len(b) + len(c) + len(d) + len(e) + len(f) + len(g) + len(h) + len(i);
+    "#;
+    let compiled = compile_source(source).expect("compile should succeed");
+    let mut vm = Vm::with_locals(compiled.program, compiled.locals);
+
+    let status = vm.run().expect("vm should run");
+    assert_eq!(status, VmStatus::Halted);
+    assert_eq!(vm.stack(), &[Value::Int(28)]);
 }
 
 #[test]

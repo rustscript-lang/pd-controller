@@ -1,0 +1,12 @@
+[package]
+name = "pd-vm-lint-wasm"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+vm = { package = "pd-vm", path = "../pd-vm", default-features = false }

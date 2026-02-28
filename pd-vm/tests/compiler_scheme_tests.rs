@@ -1,3 +1,4 @@
+#![cfg(feature = "runtime")]
 mod common;
 use common::*;
 

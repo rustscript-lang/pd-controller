@@ -1,3 +1,4 @@
+#![cfg(feature = "runtime")]
 mod common;
 use common::*;
 
@@ -343,6 +344,85 @@ fn string_and_array_concat_work_via_plus_in_all_frontends() {
         let status = vm.run().expect("vm should run");
         assert_eq!(status, VmStatus::Halted);
         assert_eq!(vm.stack(), &[Value::Int(8)]);
+    }
+}
+
+#[test]
+fn slice_ranges_work_in_all_frontends() {
+    let rustscript = r#"
+        let text = "abcdef";
+        let end_pos = -2;
+        let a = text[1:4];
+        let b = text[:3];
+        let c = text[2:];
+        let d = text[:-1];
+        let e = text[1:end_pos];
+        let arr = [1, 2, 3, 4, 5];
+        let f = arr[1:4];
+        let g = arr[:2];
+        let h = arr[3:];
+        let i = arr[:-2];
+        len(a) + len(b) + len(c) + len(d) + len(e) + len(f) + len(g) + len(h) + len(i);
+    "#;
+    let javascript = r#"
+        let text = "abcdef";
+        let end_pos = -2;
+        let a = text[1:4];
+        let b = text[:3];
+        let c = text[2:];
+        let d = text[:-1];
+        let e = text[1:end_pos];
+        let arr = [1, 2, 3, 4, 5];
+        let f = arr[1:4];
+        let g = arr[:2];
+        let h = arr[3:];
+        let i = arr[:-2];
+        len(a) + len(b) + len(c) + len(d) + len(e) + len(f) + len(g) + len(h) + len(i);
+    "#;
+    let lua = r#"
+        local text = "abcdef"
+        local end_pos = -2
+        local a = text[1:4]
+        local b = text[:3]
+        local c = text[2:]
+        local d = text[:-1]
+        local e = text[1:end_pos]
+        local arr = {1, 2, 3, 4, 5}
+        local f = arr[1:4]
+        local g = arr[:2]
+        local h = arr[3:]
+        local i = arr[:-2]
+        len(a) + len(b) + len(c) + len(d) + len(e) + len(f) + len(g) + len(h) + len(i)
+    "#;
+    let scheme = r#"
+        (define text "abcdef")
+        (define end_pos -2)
+        (define a (slice-range text 1 4))
+        (define b (slice-to text 3))
+        (define c (slice-from text 2))
+        (define d (slice-to text -1))
+        (define e (slice-range text 1 end_pos))
+        (define arr (vector 1 2 3 4 5))
+        (define f (slice-range arr 1 4))
+        (define g (slice-to arr 2))
+        (define h (slice-from arr 3))
+        (define i (slice-to arr -2))
+        (+ (len a) (len b) (len c) (len d) (len e) (len f) (len g) (len h) (len i))
+    "#;
+
+    let cases = [
+        (SourceFlavor::RustScript, rustscript),
+        (SourceFlavor::JavaScript, javascript),
+        (SourceFlavor::Lua, lua),
+        (SourceFlavor::Scheme, scheme),
+    ];
+
+    for (flavor, source) in cases {
+        let compiled = compile_source_with_flavor(source, flavor).expect("compile should succeed");
+        let mut vm = Vm::with_locals(compiled.program, compiled.locals);
+        let status = vm.run().expect("vm should run");
+        assert_eq!(status, VmStatus::Halted);
+        assert_eq!(vm.stack(), &[Value::Int(28)]);
     }
 }
 

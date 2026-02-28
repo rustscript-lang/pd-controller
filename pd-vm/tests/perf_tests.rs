@@ -1,3 +1,4 @@
+#![cfg(feature = "runtime")]
 use std::hint::black_box;
 use std::time::Instant;
 

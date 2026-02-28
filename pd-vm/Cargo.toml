@@ -6,12 +6,18 @@ edition.workspace = true
 [lib]
 name = "vm"
 
+[features]
+default = ["runtime", "cli"]
+runtime = []
+cli = ["dep:rustyline", "runtime"]
+
 [[bin]]
 name = "pd-vm-run"
 path = "src/bin/pd-vm-run.rs"
+required-features = ["cli"]
 
 [dependencies]
-rustyline = "14"
+rustyline = { version = "14", optional = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_System_Memory", "Win32_System_ProcessStatus", "Win32_System_Threading"] }

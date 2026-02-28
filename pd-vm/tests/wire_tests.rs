@@ -1,3 +1,4 @@
+#![cfg(feature = "runtime")]
 use vm::{
     ArgInfo, Assembler, BytecodeBuilder, DebugFunction, DebugInfo, DisassembleOptions, HostImport,
     LineInfo, LocalInfo, Program, ValidationError, Value, WireError, decode_program,
