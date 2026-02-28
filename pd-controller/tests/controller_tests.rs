@@ -476,6 +476,55 @@ async fn ui_blocks_and_deploy_endpoints_work() {
             .iter()
             .any(|item| item["id"].as_str() == Some("map_set"))
     );
+    assert!(
+        blocks_json["blocks"]
+            .as_array()
+            .expect("blocks should be an array")
+            .iter()
+            .any(|item| item["id"].as_str() == Some("get_request_method"))
+    );
+    assert!(
+        blocks_json["blocks"]
+            .as_array()
+            .expect("blocks should be an array")
+            .iter()
+            .any(|item| item["id"].as_str() == Some("set_request_path"))
+    );
+    assert!(
+        blocks_json["blocks"]
+            .as_array()
+            .expect("blocks should be an array")
+            .iter()
+            .any(|item| item["id"].as_str() == Some("remove_response_header"))
+    );
+    assert!(
+        blocks_json["blocks"]
+            .as_array()
+            .expect("blocks should be an array")
+            .iter()
+            .any(|item| item["id"].as_str() == Some("rate_limit_allow"))
+    );
+    assert!(
+        blocks_json["blocks"]
+            .as_array()
+            .expect("blocks should be an array")
+            .iter()
+            .any(|item| item["id"].as_str() == Some("get_request_headers"))
+    );
+    assert!(
+        blocks_json["blocks"]
+            .as_array()
+            .expect("blocks should be an array")
+            .iter()
+            .any(|item| item["id"].as_str() == Some("set_request_query_arg"))
+    );
+    assert!(
+        blocks_json["blocks"]
+            .as_array()
+            .expect("blocks should be an array")
+            .iter()
+            .any(|item| item["id"].as_str() == Some("get_response_headers"))
+    );
     let blocks = blocks_json["blocks"]
         .as_array()
         .expect("blocks should be an array");
@@ -505,6 +554,24 @@ async fn ui_blocks_and_deploy_endpoints_work() {
         set_upstream["category"].as_str(),
         Some("routing"),
         "set_upstream should be routing scoped"
+    );
+    let get_request_method = blocks
+        .iter()
+        .find(|item| item["id"].as_str() == Some("get_request_method"))
+        .expect("get_request_method block should exist");
+    assert_eq!(
+        get_request_method["category"].as_str(),
+        Some("http_request"),
+        "get_request_method should be request-http scoped"
+    );
+    let remove_response_header = blocks
+        .iter()
+        .find(|item| item["id"].as_str() == Some("remove_response_header"))
+        .expect("remove_response_header block should exist");
+    assert_eq!(
+        remove_response_header["category"].as_str(),
+        Some("http_response"),
+        "remove_response_header should be response-http scoped"
     );
 
     let deploy = client
@@ -845,7 +912,7 @@ async fn ui_render_extended_value_blocks_work_with_flow_graph() {
         "expected array_push line, got: {rustscript}"
     );
     assert!(
-        rustscript.contains("vm::set_response_content(status_plus_len);"),
+        rustscript.contains("vm::http::response::set_body(status_plus_len);"),
         "expected data edge into flow action, got: {rustscript}"
     );
 
@@ -967,7 +1034,7 @@ async fn ui_render_graph_connections_produce_identifier_expressions() {
         .as_str()
         .expect("rustscript source should be a string");
     assert!(
-        rustscript.contains("vm::set_response_content(client_id);"),
+        rustscript.contains("vm::http::response::set_body(client_id);"),
         "expected downstream value to reference connected identifier, got: {rustscript}"
     );
 
@@ -1027,13 +1094,124 @@ async fn ui_render_set_upstream_uses_connected_identifier_expression() {
         .as_str()
         .expect("rustscript source should be a string");
     assert!(
-        rustscript.contains("vm::set_upstream(target_upstream);"),
+        rustscript.contains("vm::http::upstream::request::set_target(target_upstream);"),
         "expected set_upstream to use connected identifier in rustscript, got: {rustscript}"
     );
     assert!(
-        !rustscript.contains("vm::set_upstream(\"$target_upstream\");"),
+        !rustscript.contains("vm::http::upstream::request::set_target(\"$target_upstream\");"),
         "set_upstream should not treat connected identifier as quoted literal, got: {rustscript}"
     );
+
+    handle.abort();
+}
+
+#[tokio::test]
+async fn ui_render_new_http_blocks_generate_expected_calls() {
+    let (addr, handle, _state) = spawn_controller(ControllerConfig::default()).await;
+    let client = reqwest::Client::new();
+
+    let render = client
+        .post(format!("http://{addr}/v1/ui/render"))
+        .json(&serde_json::json!({
+            "blocks": [
+                { "block_id": "const_string", "values": { "var": "method_next", "value": "PATCH" } },
+                { "block_id": "const_string", "values": { "var": "path_next", "value": "/rewritten" } },
+                { "block_id": "const_string", "values": { "var": "query_next", "value": "from=ui" } },
+                { "block_id": "get_request_id", "values": { "var": "req_id" } },
+                { "block_id": "get_request_method", "values": { "var": "req_method" } },
+                { "block_id": "get_request_path", "values": { "var": "req_path" } },
+                { "block_id": "get_request_query", "values": { "var": "req_query" } },
+                { "block_id": "get_request_raw_query", "values": { "var": "req_raw_query" } },
+                { "block_id": "get_request_path_with_query", "values": { "var": "req_path_query" } },
+                { "block_id": "get_request_query_arg", "values": { "var": "req_token", "name": "token" } },
+                { "block_id": "get_request_query_args", "values": { "var": "req_query_args" } },
+                { "block_id": "get_request_scheme", "values": { "var": "req_scheme" } },
+                { "block_id": "get_request_host", "values": { "var": "req_host" } },
+                { "block_id": "get_request_http_version", "values": { "var": "req_http_version" } },
+                { "block_id": "get_request_port", "values": { "var": "req_port" } },
+                { "block_id": "get_request_client_ip", "values": { "var": "req_ip" } },
+                { "block_id": "get_request_body", "values": { "var": "req_body" } },
+                { "block_id": "get_request_headers", "values": { "var": "req_headers" } },
+                { "block_id": "set_request_header", "values": { "name": "x-added", "value": "yes" } },
+                { "block_id": "add_request_header", "values": { "name": "x-added", "value": "yes-2" } },
+                { "block_id": "remove_request_header", "values": { "name": "x-remove" } },
+                { "block_id": "clear_request_header", "values": { "name": "x-clear" } },
+                { "block_id": "set_request_headers", "values": { "headers": "$req_headers" } },
+                { "block_id": "set_request_method", "values": { "method": "$method_next" } },
+                { "block_id": "set_request_path", "values": { "path": "$path_next" } },
+                { "block_id": "set_request_query", "values": { "query": "$query_next" } },
+                { "block_id": "set_request_raw_query", "values": { "query": "$query_next" } },
+                { "block_id": "set_request_query_arg", "values": { "name": "token", "value": "$req_id" } },
+                { "block_id": "set_request_body", "values": { "value": "$req_body" } },
+                { "block_id": "remove_response_header", "values": { "name": "x-hidden" } },
+                { "block_id": "clear_response_header", "values": { "name": "x-clear" } },
+                { "block_id": "add_response_header", "values": { "name": "set-cookie", "value": "a=1" } },
+                { "block_id": "set_response_headers", "values": { "headers": "$req_headers" } },
+                { "block_id": "get_response_status", "values": { "var": "resp_status" } },
+                { "block_id": "get_response_header", "values": { "var": "resp_header", "name": "x-vm" } },
+                { "block_id": "get_response_headers", "values": { "var": "resp_headers" } },
+                { "block_id": "get_response_body", "values": { "var": "resp_body" } },
+                {
+                    "block_id": "rate_limit_allow",
+                    "values": { "var": "allowed", "key_expr": "$req_id", "limit": "5", "window_seconds": "60" }
+                }
+            ]
+        }))
+        .send()
+        .await
+        .expect("render request should complete");
+    assert_eq!(render.status(), reqwest::StatusCode::OK);
+    let render_json = render
+        .json::<serde_json::Value>()
+        .await
+        .expect("render payload should decode");
+
+    let rustscript = render_json["source"]["rustscript"]
+        .as_str()
+        .expect("rustscript source should be a string");
+    assert!(rustscript.contains("let req_id = vm::http::request::get_id();"));
+    assert!(rustscript.contains("let req_method = vm::http::request::get_method();"));
+    assert!(rustscript.contains("let req_path = vm::http::request::get_path();"));
+    assert!(rustscript.contains("let req_query = vm::http::request::get_query();"));
+    assert!(rustscript.contains("let req_raw_query = vm::http::request::get_raw_query();"));
+    assert!(rustscript.contains("let req_path_query = vm::http::request::get_path_with_query();"));
+    assert!(rustscript.contains("let req_token = vm::http::request::get_query_arg(\"token\");"));
+    assert!(rustscript.contains("let req_query_args = vm::http::request::get_query_args();"));
+    assert!(rustscript.contains("let req_scheme = vm::http::request::get_scheme();"));
+    assert!(rustscript.contains("let req_host = vm::http::request::get_host();"));
+    assert!(rustscript.contains("let req_http_version = vm::http::request::get_http_version();"));
+    assert!(rustscript.contains("let req_port = vm::http::request::get_port();"));
+    assert!(rustscript.contains("let req_ip = vm::http::request::get_client_ip();"));
+    assert!(rustscript.contains("let req_body = vm::http::request::get_body();"));
+    assert!(rustscript.contains("let req_headers = vm::http::request::get_headers();"));
+    assert!(rustscript.contains("vm::http::upstream::request::set_header(\"x-added\", \"yes\");"));
+    assert!(
+        rustscript.contains("vm::http::upstream::request::add_header(\"x-added\", \"yes-2\");")
+    );
+    assert!(rustscript.contains("vm::http::upstream::request::remove_header(\"x-remove\");"));
+    assert!(rustscript.contains("vm::http::upstream::request::clear_header(\"x-clear\");"));
+    assert!(rustscript.contains("vm::http::upstream::request::set_headers(req_headers);"));
+    assert!(rustscript.contains("vm::http::upstream::request::set_method(method_next);"));
+    assert!(rustscript.contains("vm::http::upstream::request::set_path(path_next);"));
+    assert!(rustscript.contains("vm::http::upstream::request::set_query(query_next);"));
+    assert!(rustscript.contains("vm::http::upstream::request::set_raw_query(query_next);"));
+    assert!(rustscript.contains("vm::http::upstream::request::set_query_arg(\"token\", req_id);"));
+    assert!(rustscript.contains("vm::http::upstream::request::set_body(req_body);"));
+    assert!(rustscript.contains("vm::http::response::remove_header(\"x-hidden\");"));
+    assert!(rustscript.contains("vm::http::response::clear_header(\"x-clear\");"));
+    assert!(rustscript.contains("vm::http::response::add_header(\"set-cookie\", \"a=1\");"));
+    assert!(rustscript.contains("vm::http::response::set_headers(req_headers);"));
+    assert!(rustscript.contains("let resp_status = vm::http::response::get_status();"));
+    assert!(rustscript.contains("let resp_header = vm::http::response::get_header(\"x-vm\");"));
+    assert!(rustscript.contains("let resp_headers = vm::http::response::get_headers();"));
+    assert!(rustscript.contains("let resp_body = vm::http::response::get_body();"));
+    assert!(rustscript.contains("let allowed = vm::http::rate_limit::allow(req_id, 5, 60);"));
+
+    let javascript = render_json["source"]["javascript"]
+        .as_str()
+        .expect("javascript source should be a string");
+    assert!(javascript.contains("vm.http.upstream.request.set_path(path_next);"));
+    assert!(javascript.contains("vm.http.response.remove_header(\"x-hidden\");"));
 
     handle.abort();
 }
@@ -1176,11 +1354,11 @@ async fn ui_render_rate_limit_flow_branches_to_actions() {
         .as_str()
         .expect("rustscript source should be a string");
     assert!(
-        rustscript.contains("if vm::rate_limit_allow(client_id, 3, 60) {"),
+        rustscript.contains("if vm::http::rate_limit::allow(client_id, 3, 60) {"),
         "expected rate limit branch in rustscript, got: {rustscript}"
     );
     assert!(
-        rustscript.contains("vm::set_response_status(429);"),
+        rustscript.contains("vm::http::response::set_status(429);"),
         "expected blocked branch to set status, got: {rustscript}"
     );
 
@@ -1292,15 +1470,15 @@ async fn ui_render_plain_if_and_loop_flow() {
         "expected plain loop in rustscript, got: {rustscript}"
     );
     assert!(
-        rustscript.contains("vm::set_header(\"x-loop\", \"tick\");"),
+        rustscript.contains("vm::http::response::set_header(\"x-loop\", \"tick\");"),
         "expected loop body action in rustscript, got: {rustscript}"
     );
     assert!(
-        rustscript.contains("vm::set_response_content(\"if true done\");"),
+        rustscript.contains("vm::http::response::set_body(\"if true done\");"),
         "expected loop done action in rustscript, got: {rustscript}"
     );
     assert!(
-        rustscript.contains("vm::set_response_status(403);"),
+        rustscript.contains("vm::http::response::set_status(403);"),
         "expected if false branch action in rustscript, got: {rustscript}"
     );
 
@@ -1686,7 +1864,8 @@ async fn controller_persists_programs_applied_versions_and_traffic_series() {
     assert_eq!(post_result.status(), reqwest::StatusCode::NO_CONTENT);
 
     handle.abort();
-    let (programs_path, timeseries_path, recordings_path, debug_sessions_path) = snapshot_sidecar_paths(&state_path);
+    let (programs_path, timeseries_path, recordings_path, debug_sessions_path) =
+        snapshot_sidecar_paths(&state_path);
     assert!(state_path.exists(), "core state file should exist");
     assert!(programs_path.exists(), "program snapshot should exist");
     assert!(timeseries_path.exists(), "timeseries snapshot should exist");

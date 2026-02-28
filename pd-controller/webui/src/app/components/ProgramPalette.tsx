@@ -1,5 +1,5 @@
-import type { DragEvent } from "react";
-import { Blocks, Maximize2, Minimize2, Plus } from "lucide-react";
+import { useMemo, useState, type DragEvent } from "react";
+import { Blocks, ChevronDown, ChevronRight, Maximize2, Minimize2, Plus } from "lucide-react";
 
 import type { UiBlockDefinition } from "@/app/types";
 import { Badge } from "@/components/ui/badge";
@@ -30,6 +30,23 @@ export function ProgramPalette({
   onToggleMinimized
 }: ProgramPaletteProps) {
   const minimizedFloating = floating && minimized;
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const hasSearch = search.trim().length > 0;
+  const groupedDefinitions = useMemo(() => {
+    const grouped = new Map<string, UiBlockDefinition[]>();
+    for (const definition of definitions) {
+      const existing = grouped.get(definition.category);
+      if (existing) {
+        existing.push(definition);
+      } else {
+        grouped.set(definition.category, [definition]);
+      }
+    }
+    return Array.from(grouped.entries()).map(([category, items]) => ({
+      category,
+      items
+    }));
+  }, [definitions]);
 
   if (minimizedFloating) {
     return (
@@ -89,7 +106,7 @@ export function ProgramPalette({
       >
         <div className="h-full min-h-0 overflow-hidden">
           <CardContent className={floating ? "h-full space-y-3 overflow-auto" : "space-y-3"}>
-            <div className="space-y-1">
+            <div className="sticky top-0 z-10 -mx-4 mb-1 space-y-1 border-b bg-white/95 px-4 pb-3 pt-2 backdrop-blur">
               <Label htmlFor={floating ? "block-search" : "block-search-mobile"}>Search blocks</Label>
               <Input
                 id={floating ? "block-search" : "block-search-mobile"}
@@ -98,24 +115,57 @@ export function ProgramPalette({
                 placeholder="if, header, rate, set..."
               />
             </div>
-            {definitions.map((definition) => (
-              <div
-                key={floating ? definition.id : `mobile-${definition.id}`}
-                className="cursor-grab rounded-md border bg-muted/40 p-3 active:cursor-grabbing"
-                draggable
-                onDragStart={(event) => onPaletteDragStart(event, definition.id)}
-              >
-                <div className="mb-1 flex items-center justify-between gap-2">
-                  <div className="text-sm font-semibold">{definition.title}</div>
-                  <Badge>{definition.category}</Badge>
+            {groupedDefinitions.map(({ category, items }) => {
+              const isCollapsed = hasSearch ? false : collapsed[category] ?? false;
+              return (
+                <div key={`category-${category}`} className="space-y-2">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    className="flex w-full items-center justify-between gap-2 px-2"
+                    onClick={() =>
+                      setCollapsed((current) => ({
+                        ...current,
+                        [category]: !isCollapsed
+                      }))
+                    }
+                  >
+                    <div className="flex items-center gap-2 text-left">
+                      {isCollapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                      <span className="text-sm font-semibold">{category}</span>
+                    </div>
+                    <Badge>{items.length}</Badge>
+                  </Button>
+                  {!isCollapsed ? (
+                    <div className="space-y-3">
+                      {items.map((definition) => (
+                        <div
+                          key={floating ? definition.id : `mobile-${definition.id}`}
+                          className="cursor-grab rounded-md border bg-muted/40 p-3 active:cursor-grabbing"
+                          draggable
+                          onDragStart={(event) => onPaletteDragStart(event, definition.id)}
+                        >
+                          <div className="mb-1 flex items-center justify-between gap-2">
+                            <div className="text-sm font-semibold">{definition.title}</div>
+                            <Badge>{definition.category}</Badge>
+                          </div>
+                          <p className="mb-2 text-xs text-muted-foreground">{definition.description}</p>
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            className="w-full"
+                            onClick={() => onAddNode(definition.id)}
+                          >
+                            <Plus className="mr-1 h-3.5 w-3.5" />
+                            Add to canvas
+                          </Button>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
                 </div>
-                <p className="mb-2 text-xs text-muted-foreground">{definition.description}</p>
-                <Button size="sm" variant="secondary" className="w-full" onClick={() => onAddNode(definition.id)}>
-                  <Plus className="mr-1 h-3.5 w-3.5" />
-                  Add to canvas
-                </Button>
-              </div>
-            ))}
+              );
+            })}
           </CardContent>
         </div>
       </div>

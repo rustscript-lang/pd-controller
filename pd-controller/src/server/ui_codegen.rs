@@ -93,6 +93,316 @@ pub(super) fn ui_block_catalog() -> Vec<UiBlockDefinition> {
             accepts_flow: false,
         },
         UiBlockDefinition {
+            id: "get_request_headers",
+            title: "Get Request Headers",
+            category: "http_request",
+            description: "Read all request headers into a map variable.",
+            inputs: vec![UiBlockInput {
+                key: "var",
+                label: "Variable",
+                input_type: UiInputType::Text,
+                default_value: "request_headers",
+                placeholder: "request_headers",
+                connectable: false,
+            }],
+            outputs: vec![UiBlockOutput {
+                key: "value",
+                label: "value",
+                expr_from_input: Some("var"),
+            }],
+            accepts_flow: false,
+        },
+        UiBlockDefinition {
+            id: "get_request_query_arg",
+            title: "Get Query Arg",
+            category: "http_request",
+            description: "Read one query parameter value into a variable.",
+            inputs: vec![
+                UiBlockInput {
+                    key: "var",
+                    label: "Variable",
+                    input_type: UiInputType::Text,
+                    default_value: "query_value",
+                    placeholder: "query_value",
+                    connectable: false,
+                },
+                UiBlockInput {
+                    key: "name",
+                    label: "Query Name",
+                    input_type: UiInputType::Text,
+                    default_value: "id",
+                    placeholder: "id",
+                    connectable: false,
+                },
+            ],
+            outputs: vec![UiBlockOutput {
+                key: "value",
+                label: "value",
+                expr_from_input: Some("var"),
+            }],
+            accepts_flow: false,
+        },
+        UiBlockDefinition {
+            id: "get_request_query_args",
+            title: "Get Query Args",
+            category: "http_request",
+            description: "Read all query parameters into a map variable.",
+            inputs: vec![UiBlockInput {
+                key: "var",
+                label: "Variable",
+                input_type: UiInputType::Text,
+                default_value: "query_args",
+                placeholder: "query_args",
+                connectable: false,
+            }],
+            outputs: vec![UiBlockOutput {
+                key: "value",
+                label: "value",
+                expr_from_input: Some("var"),
+            }],
+            accepts_flow: false,
+        },
+        UiBlockDefinition {
+            id: "get_request_id",
+            title: "Get Request ID",
+            category: "http_request",
+            description: "Read request id into a variable.",
+            inputs: vec![UiBlockInput {
+                key: "var",
+                label: "Variable",
+                input_type: UiInputType::Text,
+                default_value: "request_id",
+                placeholder: "request_id",
+                connectable: false,
+            }],
+            outputs: vec![UiBlockOutput {
+                key: "value",
+                label: "value",
+                expr_from_input: Some("var"),
+            }],
+            accepts_flow: false,
+        },
+        UiBlockDefinition {
+            id: "get_request_method",
+            title: "Get Request Method",
+            category: "http_request",
+            description: "Read request method into a variable.",
+            inputs: vec![UiBlockInput {
+                key: "var",
+                label: "Variable",
+                input_type: UiInputType::Text,
+                default_value: "request_method",
+                placeholder: "request_method",
+                connectable: false,
+            }],
+            outputs: vec![UiBlockOutput {
+                key: "value",
+                label: "value",
+                expr_from_input: Some("var"),
+            }],
+            accepts_flow: false,
+        },
+        UiBlockDefinition {
+            id: "get_request_path",
+            title: "Get Request Path",
+            category: "http_request",
+            description: "Read request path into a variable.",
+            inputs: vec![UiBlockInput {
+                key: "var",
+                label: "Variable",
+                input_type: UiInputType::Text,
+                default_value: "request_path",
+                placeholder: "request_path",
+                connectable: false,
+            }],
+            outputs: vec![UiBlockOutput {
+                key: "value",
+                label: "value",
+                expr_from_input: Some("var"),
+            }],
+            accepts_flow: false,
+        },
+        UiBlockDefinition {
+            id: "get_request_query",
+            title: "Get Request Query",
+            category: "http_request",
+            description: "Read request query into a variable.",
+            inputs: vec![UiBlockInput {
+                key: "var",
+                label: "Variable",
+                input_type: UiInputType::Text,
+                default_value: "request_query",
+                placeholder: "request_query",
+                connectable: false,
+            }],
+            outputs: vec![UiBlockOutput {
+                key: "value",
+                label: "value",
+                expr_from_input: Some("var"),
+            }],
+            accepts_flow: false,
+        },
+        UiBlockDefinition {
+            id: "get_request_raw_query",
+            title: "Get Raw Query",
+            category: "http_request",
+            description: "Read raw request query into a variable.",
+            inputs: vec![UiBlockInput {
+                key: "var",
+                label: "Variable",
+                input_type: UiInputType::Text,
+                default_value: "request_raw_query",
+                placeholder: "request_raw_query",
+                connectable: false,
+            }],
+            outputs: vec![UiBlockOutput {
+                key: "value",
+                label: "value",
+                expr_from_input: Some("var"),
+            }],
+            accepts_flow: false,
+        },
+        UiBlockDefinition {
+            id: "get_request_path_with_query",
+            title: "Get Path+Query",
+            category: "http_request",
+            description: "Read request path and query into a variable.",
+            inputs: vec![UiBlockInput {
+                key: "var",
+                label: "Variable",
+                input_type: UiInputType::Text,
+                default_value: "request_path_with_query",
+                placeholder: "request_path_with_query",
+                connectable: false,
+            }],
+            outputs: vec![UiBlockOutput {
+                key: "value",
+                label: "value",
+                expr_from_input: Some("var"),
+            }],
+            accepts_flow: false,
+        },
+        UiBlockDefinition {
+            id: "get_request_scheme",
+            title: "Get Request Scheme",
+            category: "http_request",
+            description: "Read request scheme into a variable.",
+            inputs: vec![UiBlockInput {
+                key: "var",
+                label: "Variable",
+                input_type: UiInputType::Text,
+                default_value: "request_scheme",
+                placeholder: "request_scheme",
+                connectable: false,
+            }],
+            outputs: vec![UiBlockOutput {
+                key: "value",
+                label: "value",
+                expr_from_input: Some("var"),
+            }],
+            accepts_flow: false,
+        },
+        UiBlockDefinition {
+            id: "get_request_http_version",
+            title: "Get HTTP Version",
+            category: "http_request",
+            description: "Read request HTTP version into a variable.",
+            inputs: vec![UiBlockInput {
+                key: "var",
+                label: "Variable",
+                input_type: UiInputType::Text,
+                default_value: "request_http_version",
+                placeholder: "request_http_version",
+                connectable: false,
+            }],
+            outputs: vec![UiBlockOutput {
+                key: "value",
+                label: "value",
+                expr_from_input: Some("var"),
+            }],
+            accepts_flow: false,
+        },
+        UiBlockDefinition {
+            id: "get_request_port",
+            title: "Get Request Port",
+            category: "http_request",
+            description: "Read request port into a variable.",
+            inputs: vec![UiBlockInput {
+                key: "var",
+                label: "Variable",
+                input_type: UiInputType::Text,
+                default_value: "request_port",
+                placeholder: "request_port",
+                connectable: false,
+            }],
+            outputs: vec![UiBlockOutput {
+                key: "value",
+                label: "value",
+                expr_from_input: Some("var"),
+            }],
+            accepts_flow: false,
+        },
+        UiBlockDefinition {
+            id: "get_request_body",
+            title: "Get Request Body",
+            category: "http_request",
+            description: "Read request body into a variable.",
+            inputs: vec![UiBlockInput {
+                key: "var",
+                label: "Variable",
+                input_type: UiInputType::Text,
+                default_value: "request_body",
+                placeholder: "request_body",
+                connectable: false,
+            }],
+            outputs: vec![UiBlockOutput {
+                key: "value",
+                label: "value",
+                expr_from_input: Some("var"),
+            }],
+            accepts_flow: false,
+        },
+        UiBlockDefinition {
+            id: "get_request_host",
+            title: "Get Request Host",
+            category: "http_request",
+            description: "Read request host into a variable.",
+            inputs: vec![UiBlockInput {
+                key: "var",
+                label: "Variable",
+                input_type: UiInputType::Text,
+                default_value: "request_host",
+                placeholder: "request_host",
+                connectable: false,
+            }],
+            outputs: vec![UiBlockOutput {
+                key: "value",
+                label: "value",
+                expr_from_input: Some("var"),
+            }],
+            accepts_flow: false,
+        },
+        UiBlockDefinition {
+            id: "get_request_client_ip",
+            title: "Get Client IP",
+            category: "http_request",
+            description: "Read request client ip into a variable.",
+            inputs: vec![UiBlockInput {
+                key: "var",
+                label: "Variable",
+                input_type: UiInputType::Text,
+                default_value: "client_ip",
+                placeholder: "client_ip",
+                connectable: false,
+            }],
+            outputs: vec![UiBlockOutput {
+                key: "value",
+                label: "value",
+                expr_from_input: Some("var"),
+            }],
+            accepts_flow: false,
+        },
+        UiBlockDefinition {
             id: "string_concat",
             title: "String Concat",
             category: "string",
@@ -605,10 +915,260 @@ pub(super) fn ui_block_catalog() -> Vec<UiBlockDefinition> {
             accepts_flow: false,
         },
         UiBlockDefinition {
+            id: "set_request_header",
+            title: "Set Upstream Request Header",
+            category: "http_upstream_request",
+            description: "Set outbound request header via vm.http.upstream.request.set_header.",
+            inputs: vec![
+                UiBlockInput {
+                    key: "name",
+                    label: "Header Name",
+                    input_type: UiInputType::Text,
+                    default_value: "x-added",
+                    placeholder: "x-added",
+                    connectable: false,
+                },
+                UiBlockInput {
+                    key: "value",
+                    label: "Value",
+                    input_type: UiInputType::Text,
+                    default_value: "1",
+                    placeholder: "1 or $var",
+                    connectable: true,
+                },
+            ],
+            outputs: vec![UiBlockOutput {
+                key: "next",
+                label: "next",
+                expr_from_input: None,
+            }],
+            accepts_flow: true,
+        },
+        UiBlockDefinition {
+            id: "add_request_header",
+            title: "Add Upstream Request Header",
+            category: "http_upstream_request",
+            description: "Append outbound request header via vm.http.upstream.request.add_header.",
+            inputs: vec![
+                UiBlockInput {
+                    key: "name",
+                    label: "Header Name",
+                    input_type: UiInputType::Text,
+                    default_value: "x-added",
+                    placeholder: "x-added",
+                    connectable: false,
+                },
+                UiBlockInput {
+                    key: "value",
+                    label: "Value",
+                    input_type: UiInputType::Text,
+                    default_value: "1",
+                    placeholder: "1 or $var",
+                    connectable: true,
+                },
+            ],
+            outputs: vec![UiBlockOutput {
+                key: "next",
+                label: "next",
+                expr_from_input: None,
+            }],
+            accepts_flow: true,
+        },
+        UiBlockDefinition {
+            id: "remove_request_header",
+            title: "Remove Upstream Request Header",
+            category: "http_upstream_request",
+            description: "Remove outbound request header via vm.http.upstream.request.remove_header.",
+            inputs: vec![UiBlockInput {
+                key: "name",
+                label: "Header Name",
+                input_type: UiInputType::Text,
+                default_value: "x-remove",
+                placeholder: "x-remove",
+                connectable: false,
+            }],
+            outputs: vec![UiBlockOutput {
+                key: "next",
+                label: "next",
+                expr_from_input: None,
+            }],
+            accepts_flow: true,
+        },
+        UiBlockDefinition {
+            id: "clear_request_header",
+            title: "Clear Upstream Request Header",
+            category: "http_upstream_request",
+            description: "Clear outbound request header via vm.http.upstream.request.clear_header.",
+            inputs: vec![UiBlockInput {
+                key: "name",
+                label: "Header Name",
+                input_type: UiInputType::Text,
+                default_value: "x-remove",
+                placeholder: "x-remove",
+                connectable: false,
+            }],
+            outputs: vec![UiBlockOutput {
+                key: "next",
+                label: "next",
+                expr_from_input: None,
+            }],
+            accepts_flow: true,
+        },
+        UiBlockDefinition {
+            id: "set_request_headers",
+            title: "Set Upstream Request Headers",
+            category: "http_upstream_request",
+            description: "Set multiple outbound request headers from a map variable.",
+            inputs: vec![UiBlockInput {
+                key: "headers",
+                label: "Headers",
+                input_type: UiInputType::Text,
+                default_value: "$request_headers",
+                placeholder: "$request_headers",
+                connectable: true,
+            }],
+            outputs: vec![UiBlockOutput {
+                key: "next",
+                label: "next",
+                expr_from_input: None,
+            }],
+            accepts_flow: true,
+        },
+        UiBlockDefinition {
+            id: "set_request_method",
+            title: "Set Upstream Request Method",
+            category: "http_upstream_request",
+            description: "Set outbound request method via vm.http.upstream.request.set_method.",
+            inputs: vec![UiBlockInput {
+                key: "method",
+                label: "Method",
+                input_type: UiInputType::Text,
+                default_value: "GET",
+                placeholder: "GET or $var",
+                connectable: true,
+            }],
+            outputs: vec![UiBlockOutput {
+                key: "next",
+                label: "next",
+                expr_from_input: None,
+            }],
+            accepts_flow: true,
+        },
+        UiBlockDefinition {
+            id: "set_request_path",
+            title: "Set Upstream Request Path",
+            category: "http_upstream_request",
+            description: "Set outbound request path via vm.http.upstream.request.set_path.",
+            inputs: vec![UiBlockInput {
+                key: "path",
+                label: "Path",
+                input_type: UiInputType::Text,
+                default_value: "/",
+                placeholder: "/new-path or $var",
+                connectable: true,
+            }],
+            outputs: vec![UiBlockOutput {
+                key: "next",
+                label: "next",
+                expr_from_input: None,
+            }],
+            accepts_flow: true,
+        },
+        UiBlockDefinition {
+            id: "set_request_query",
+            title: "Set Upstream Request Query",
+            category: "http_upstream_request",
+            description: "Set outbound request query via vm.http.upstream.request.set_query.",
+            inputs: vec![UiBlockInput {
+                key: "query",
+                label: "Query",
+                input_type: UiInputType::Text,
+                default_value: "x=1",
+                placeholder: "x=1 or $var",
+                connectable: true,
+            }],
+            outputs: vec![UiBlockOutput {
+                key: "next",
+                label: "next",
+                expr_from_input: None,
+            }],
+            accepts_flow: true,
+        },
+        UiBlockDefinition {
+            id: "set_request_raw_query",
+            title: "Set Upstream Raw Query",
+            category: "http_upstream_request",
+            description: "Set outbound request raw query via vm.http.upstream.request.set_raw_query.",
+            inputs: vec![UiBlockInput {
+                key: "query",
+                label: "Query",
+                input_type: UiInputType::Text,
+                default_value: "x=1",
+                placeholder: "x=1 or $var",
+                connectable: true,
+            }],
+            outputs: vec![UiBlockOutput {
+                key: "next",
+                label: "next",
+                expr_from_input: None,
+            }],
+            accepts_flow: true,
+        },
+        UiBlockDefinition {
+            id: "set_request_query_arg",
+            title: "Set Upstream Query Arg",
+            category: "http_upstream_request",
+            description: "Set one outbound request query argument.",
+            inputs: vec![
+                UiBlockInput {
+                    key: "name",
+                    label: "Query Name",
+                    input_type: UiInputType::Text,
+                    default_value: "id",
+                    placeholder: "id",
+                    connectable: false,
+                },
+                UiBlockInput {
+                    key: "value",
+                    label: "Value",
+                    input_type: UiInputType::Text,
+                    default_value: "1",
+                    placeholder: "1 or $var",
+                    connectable: true,
+                },
+            ],
+            outputs: vec![UiBlockOutput {
+                key: "next",
+                label: "next",
+                expr_from_input: None,
+            }],
+            accepts_flow: true,
+        },
+        UiBlockDefinition {
+            id: "set_request_body",
+            title: "Set Upstream Request Body",
+            category: "http_upstream_request",
+            description: "Set outbound request body via vm.http.upstream.request.set_body.",
+            inputs: vec![UiBlockInput {
+                key: "value",
+                label: "Body",
+                input_type: UiInputType::Text,
+                default_value: "payload",
+                placeholder: "payload or $var",
+                connectable: true,
+            }],
+            outputs: vec![UiBlockOutput {
+                key: "next",
+                label: "next",
+                expr_from_input: None,
+            }],
+            accepts_flow: true,
+        },
+        UiBlockDefinition {
             id: "set_header",
             title: "Set Header",
             category: "http_response",
-            description: "Set response header via vm.set_header.",
+            description: "Set response header via vm.http.response.set_header.",
             inputs: vec![
                 UiBlockInput {
                     key: "name",
@@ -627,6 +1187,96 @@ pub(super) fn ui_block_catalog() -> Vec<UiBlockDefinition> {
                     connectable: true,
                 },
             ],
+            outputs: vec![UiBlockOutput {
+                key: "next",
+                label: "next",
+                expr_from_input: None,
+            }],
+            accepts_flow: true,
+        },
+        UiBlockDefinition {
+            id: "add_response_header",
+            title: "Add Response Header",
+            category: "http_response",
+            description: "Append response header via vm.http.response.add_header.",
+            inputs: vec![
+                UiBlockInput {
+                    key: "name",
+                    label: "Header Name",
+                    input_type: UiInputType::Text,
+                    default_value: "set-cookie",
+                    placeholder: "set-cookie",
+                    connectable: false,
+                },
+                UiBlockInput {
+                    key: "value",
+                    label: "Value",
+                    input_type: UiInputType::Text,
+                    default_value: "a=1",
+                    placeholder: "a=1 or $var",
+                    connectable: true,
+                },
+            ],
+            outputs: vec![UiBlockOutput {
+                key: "next",
+                label: "next",
+                expr_from_input: None,
+            }],
+            accepts_flow: true,
+        },
+        UiBlockDefinition {
+            id: "remove_response_header",
+            title: "Remove Response Header",
+            category: "http_response",
+            description: "Remove response header via vm.http.response.remove_header.",
+            inputs: vec![UiBlockInput {
+                key: "name",
+                label: "Header Name",
+                input_type: UiInputType::Text,
+                default_value: "x-remove",
+                placeholder: "x-remove",
+                connectable: false,
+            }],
+            outputs: vec![UiBlockOutput {
+                key: "next",
+                label: "next",
+                expr_from_input: None,
+            }],
+            accepts_flow: true,
+        },
+        UiBlockDefinition {
+            id: "clear_response_header",
+            title: "Clear Response Header",
+            category: "http_response",
+            description: "Clear response header via vm.http.response.clear_header.",
+            inputs: vec![UiBlockInput {
+                key: "name",
+                label: "Header Name",
+                input_type: UiInputType::Text,
+                default_value: "x-remove",
+                placeholder: "x-remove",
+                connectable: false,
+            }],
+            outputs: vec![UiBlockOutput {
+                key: "next",
+                label: "next",
+                expr_from_input: None,
+            }],
+            accepts_flow: true,
+        },
+        UiBlockDefinition {
+            id: "set_response_headers",
+            title: "Set Response Headers",
+            category: "http_response",
+            description: "Set multiple response headers from a map variable.",
+            inputs: vec![UiBlockInput {
+                key: "headers",
+                label: "Headers",
+                input_type: UiInputType::Text,
+                default_value: "$response_headers",
+                placeholder: "$response_headers",
+                connectable: true,
+            }],
             outputs: vec![UiBlockOutput {
                 key: "next",
                 label: "next",
@@ -675,10 +1325,190 @@ pub(super) fn ui_block_catalog() -> Vec<UiBlockDefinition> {
             accepts_flow: true,
         },
         UiBlockDefinition {
+            id: "get_response_status",
+            title: "Get Response Status",
+            category: "http_response",
+            description: "Read response status into a variable.",
+            inputs: vec![UiBlockInput {
+                key: "var",
+                label: "Variable",
+                input_type: UiInputType::Text,
+                default_value: "response_status",
+                placeholder: "response_status",
+                connectable: false,
+            }],
+            outputs: vec![UiBlockOutput {
+                key: "value",
+                label: "value",
+                expr_from_input: Some("var"),
+            }],
+            accepts_flow: false,
+        },
+        UiBlockDefinition {
+            id: "get_response_header",
+            title: "Get Response Header",
+            category: "http_response",
+            description: "Read response header into a variable.",
+            inputs: vec![
+                UiBlockInput {
+                    key: "var",
+                    label: "Variable",
+                    input_type: UiInputType::Text,
+                    default_value: "response_header",
+                    placeholder: "response_header",
+                    connectable: false,
+                },
+                UiBlockInput {
+                    key: "name",
+                    label: "Header Name",
+                    input_type: UiInputType::Text,
+                    default_value: "x-vm",
+                    placeholder: "x-vm",
+                    connectable: false,
+                },
+            ],
+            outputs: vec![UiBlockOutput {
+                key: "value",
+                label: "value",
+                expr_from_input: Some("var"),
+            }],
+            accepts_flow: false,
+        },
+        UiBlockDefinition {
+            id: "get_response_headers",
+            title: "Get Response Headers",
+            category: "http_response",
+            description: "Read all response headers into a map variable.",
+            inputs: vec![UiBlockInput {
+                key: "var",
+                label: "Variable",
+                input_type: UiInputType::Text,
+                default_value: "response_headers",
+                placeholder: "response_headers",
+                connectable: false,
+            }],
+            outputs: vec![UiBlockOutput {
+                key: "value",
+                label: "value",
+                expr_from_input: Some("var"),
+            }],
+            accepts_flow: false,
+        },
+        UiBlockDefinition {
+            id: "get_response_body",
+            title: "Get Response Body",
+            category: "http_response",
+            description: "Read response body into a variable.",
+            inputs: vec![UiBlockInput {
+                key: "var",
+                label: "Variable",
+                input_type: UiInputType::Text,
+                default_value: "response_body",
+                placeholder: "response_body",
+                connectable: false,
+            }],
+            outputs: vec![UiBlockOutput {
+                key: "value",
+                label: "value",
+                expr_from_input: Some("var"),
+            }],
+            accepts_flow: false,
+        },
+        UiBlockDefinition {
+            id: "get_upstream_response_status",
+            title: "Get Upstream Response Status",
+            category: "http_upstream_response",
+            description: "Read upstream response status into a variable.",
+            inputs: vec![UiBlockInput {
+                key: "var",
+                label: "Variable",
+                input_type: UiInputType::Text,
+                default_value: "upstream_status",
+                placeholder: "upstream_status",
+                connectable: false,
+            }],
+            outputs: vec![UiBlockOutput {
+                key: "value",
+                label: "value",
+                expr_from_input: Some("var"),
+            }],
+            accepts_flow: false,
+        },
+        UiBlockDefinition {
+            id: "get_upstream_response_header",
+            title: "Get Upstream Response Header",
+            category: "http_upstream_response",
+            description: "Read upstream response header into a variable.",
+            inputs: vec![
+                UiBlockInput {
+                    key: "var",
+                    label: "Variable",
+                    input_type: UiInputType::Text,
+                    default_value: "upstream_header",
+                    placeholder: "upstream_header",
+                    connectable: false,
+                },
+                UiBlockInput {
+                    key: "name",
+                    label: "Header Name",
+                    input_type: UiInputType::Text,
+                    default_value: "x-upstream",
+                    placeholder: "x-upstream",
+                    connectable: false,
+                },
+            ],
+            outputs: vec![UiBlockOutput {
+                key: "value",
+                label: "value",
+                expr_from_input: Some("var"),
+            }],
+            accepts_flow: false,
+        },
+        UiBlockDefinition {
+            id: "get_upstream_response_headers",
+            title: "Get Upstream Response Headers",
+            category: "http_upstream_response",
+            description: "Read all upstream response headers into a map variable.",
+            inputs: vec![UiBlockInput {
+                key: "var",
+                label: "Variable",
+                input_type: UiInputType::Text,
+                default_value: "upstream_headers",
+                placeholder: "upstream_headers",
+                connectable: false,
+            }],
+            outputs: vec![UiBlockOutput {
+                key: "value",
+                label: "value",
+                expr_from_input: Some("var"),
+            }],
+            accepts_flow: false,
+        },
+        UiBlockDefinition {
+            id: "get_upstream_response_body",
+            title: "Get Upstream Response Body",
+            category: "http_upstream_response",
+            description: "Read upstream response body into a variable.",
+            inputs: vec![UiBlockInput {
+                key: "var",
+                label: "Variable",
+                input_type: UiInputType::Text,
+                default_value: "upstream_body",
+                placeholder: "upstream_body",
+                connectable: false,
+            }],
+            outputs: vec![UiBlockOutput {
+                key: "value",
+                label: "value",
+                expr_from_input: Some("var"),
+            }],
+            accepts_flow: false,
+        },
+        UiBlockDefinition {
             id: "set_upstream",
             title: "Set Upstream",
             category: "routing",
-            description: "Forward request to upstream host:port.",
+            description: "Forward request to upstream host:port via vm.http.upstream.request.set_target.",
             inputs: vec![UiBlockInput {
                 key: "upstream",
                 label: "Upstream",
@@ -695,10 +1525,56 @@ pub(super) fn ui_block_catalog() -> Vec<UiBlockDefinition> {
             accepts_flow: true,
         },
         UiBlockDefinition {
+            id: "rate_limit_allow",
+            title: "Rate Limit Allow",
+            category: "control",
+            description: "Evaluate vm.http.rate_limit.allow and store a boolean result.",
+            inputs: vec![
+                UiBlockInput {
+                    key: "var",
+                    label: "Variable",
+                    input_type: UiInputType::Text,
+                    default_value: "rate_allowed",
+                    placeholder: "rate_allowed",
+                    connectable: false,
+                },
+                UiBlockInput {
+                    key: "key_expr",
+                    label: "Key Expr",
+                    input_type: UiInputType::Text,
+                    default_value: "$header",
+                    placeholder: "$header or literal",
+                    connectable: true,
+                },
+                UiBlockInput {
+                    key: "limit",
+                    label: "Limit",
+                    input_type: UiInputType::Number,
+                    default_value: "3",
+                    placeholder: "3 or $var",
+                    connectable: true,
+                },
+                UiBlockInput {
+                    key: "window_seconds",
+                    label: "Window Seconds",
+                    input_type: UiInputType::Number,
+                    default_value: "60",
+                    placeholder: "60 or $var",
+                    connectable: true,
+                },
+            ],
+            outputs: vec![UiBlockOutput {
+                key: "value",
+                label: "value",
+                expr_from_input: Some("var"),
+            }],
+            accepts_flow: false,
+        },
+        UiBlockDefinition {
             id: "rate_limit_if_else",
             title: "Rate Limit If/Else",
             category: "control",
-            description: "Use vm.rate_limit_allow and branch to allowed/blocked flow outputs.",
+            description: "Use vm.http.rate_limit.allow and branch to allowed/blocked flow outputs.",
             inputs: vec![
                 UiBlockInput {
                     key: "key_expr",
@@ -1171,6 +2047,29 @@ fn is_value_block(block_id: &str) -> bool {
         "const_string"
             | "const_number"
             | "get_header"
+            | "get_request_headers"
+            | "get_request_query_arg"
+            | "get_request_query_args"
+            | "get_request_id"
+            | "get_request_method"
+            | "get_request_path"
+            | "get_request_query"
+            | "get_request_raw_query"
+            | "get_request_path_with_query"
+            | "get_request_scheme"
+            | "get_request_host"
+            | "get_request_http_version"
+            | "get_request_port"
+            | "get_request_client_ip"
+            | "get_request_body"
+            | "get_response_status"
+            | "get_response_header"
+            | "get_response_headers"
+            | "get_response_body"
+            | "get_upstream_response_status"
+            | "get_upstream_response_header"
+            | "get_upstream_response_headers"
+            | "get_upstream_response_body"
             | "string_concat"
             | "string_length"
             | "string_slice"
@@ -1185,13 +2084,29 @@ fn is_value_block(block_id: &str) -> bool {
             | "map_new"
             | "map_get"
             | "map_set"
+            | "rate_limit_allow"
     )
 }
 
 fn is_flow_block(block_id: &str) -> bool {
     matches!(
         block_id,
-        "set_header"
+        "set_request_header"
+            | "add_request_header"
+            | "remove_request_header"
+            | "clear_request_header"
+            | "set_request_headers"
+            | "set_request_method"
+            | "set_request_path"
+            | "set_request_query"
+            | "set_request_raw_query"
+            | "set_request_query_arg"
+            | "set_request_body"
+            | "set_header"
+            | "add_response_header"
+            | "remove_response_header"
+            | "clear_response_header"
+            | "set_response_headers"
             | "set_response_content"
             | "set_response_status"
             | "set_upstream"
@@ -1241,7 +2156,25 @@ fn render_flow_node(
         .ok_or_else(|| bad_request("flow path references missing node"))?;
 
     let result = match block.block_id.as_str() {
-        "set_header" | "set_response_content" | "set_response_status" | "set_upstream" => {
+        "set_request_header"
+        | "add_request_header"
+        | "remove_request_header"
+        | "clear_request_header"
+        | "set_request_headers"
+        | "set_request_method"
+        | "set_request_path"
+        | "set_request_query"
+        | "set_request_raw_query"
+        | "set_request_query_arg"
+        | "set_request_body"
+        | "set_header"
+        | "add_response_header"
+        | "remove_response_header"
+        | "clear_response_header"
+        | "set_response_headers"
+        | "set_response_content"
+        | "set_response_status"
+        | "set_upstream" => {
             let mut statements = FlowStatements::default();
             let action = flow_action_statement(block)?;
             statements
@@ -1296,7 +2229,7 @@ fn render_flow_node(
             statements.rustscript.push(indent_line(
                 indent,
                 format!(
-                    "if vm::rate_limit_allow({}, {}, {}) {{",
+                    "if vm::http::rate_limit::allow({}, {}, {}) {{",
                     render_expr_rss(key_expr),
                     limit,
                     window
@@ -1318,7 +2251,7 @@ fn render_flow_node(
             statements.javascript.push(indent_line(
                 indent,
                 format!(
-                    "if (vm.rate_limit_allow({}, {}, {})) {{",
+                    "if (vm.http.rate_limit.allow({}, {}, {})) {{",
                     render_expr_js(key_expr),
                     limit,
                     window
@@ -1340,7 +2273,7 @@ fn render_flow_node(
             statements.lua.push(indent_line(
                 indent,
                 format!(
-                    "if vm.rate_limit_allow({}, {}, {}) then",
+                    "if vm.http.rate_limit.allow({}, {}, {}) then",
                     render_expr_lua(key_expr),
                     limit,
                     window
@@ -1352,7 +2285,7 @@ fn render_flow_node(
             statements.lua.push(indent_line(indent, "end".to_string()));
 
             statements.scheme.push(format!(
-                "(if (vm.rate_limit_allow {} {} {}) {} {})",
+                "(if (vm.http.rate_limit.allow {} {} {}) {} {})",
                 render_expr_scheme(key_expr),
                 limit,
                 window,
@@ -1586,57 +2519,374 @@ fn flow_action_statement(
     block: &UiBlockInstance,
 ) -> Result<FlowActionStatement, (StatusCode, Json<ErrorResponse>)> {
     match block.block_id.as_str() {
+        "set_request_header" => {
+            let name = block_value(block, "name", "x-added");
+            let value = block_value(block, "value", "1");
+            Ok(FlowActionStatement {
+                rustscript: format!(
+                    "vm::http::upstream::request::set_header({}, {});",
+                    rust_string(name),
+                    render_expr_rss(value)
+                ),
+                javascript: format!(
+                    "vm.http.upstream.request.set_header({}, {});",
+                    js_string(name),
+                    render_expr_js(value)
+                ),
+                lua: format!(
+                    "vm.http.upstream.request.set_header({}, {})",
+                    lua_string(name),
+                    render_expr_lua(value)
+                ),
+                scheme: format!(
+                    "(vm.http.upstream.request.set_header {} {})",
+                    scheme_string(name),
+                    render_expr_scheme(value)
+                ),
+            })
+        }
+        "add_request_header" => {
+            let name = block_value(block, "name", "x-added");
+            let value = block_value(block, "value", "1");
+            Ok(FlowActionStatement {
+                rustscript: format!(
+                    "vm::http::upstream::request::add_header({}, {});",
+                    rust_string(name),
+                    render_expr_rss(value)
+                ),
+                javascript: format!(
+                    "vm.http.upstream.request.add_header({}, {});",
+                    js_string(name),
+                    render_expr_js(value)
+                ),
+                lua: format!(
+                    "vm.http.upstream.request.add_header({}, {})",
+                    lua_string(name),
+                    render_expr_lua(value)
+                ),
+                scheme: format!(
+                    "(vm.http.upstream.request.add_header {} {})",
+                    scheme_string(name),
+                    render_expr_scheme(value)
+                ),
+            })
+        }
+        "remove_request_header" => {
+            let name = block_value(block, "name", "x-remove");
+            Ok(FlowActionStatement {
+                rustscript: format!(
+                    "vm::http::upstream::request::remove_header({});",
+                    rust_string(name)
+                ),
+                javascript: format!(
+                    "vm.http.upstream.request.remove_header({});",
+                    js_string(name)
+                ),
+                lua: format!(
+                    "vm.http.upstream.request.remove_header({})",
+                    lua_string(name)
+                ),
+                scheme: format!(
+                    "(vm.http.upstream.request.remove_header {})",
+                    scheme_string(name)
+                ),
+            })
+        }
+        "clear_request_header" => {
+            let name = block_value(block, "name", "x-remove");
+            Ok(FlowActionStatement {
+                rustscript: format!(
+                    "vm::http::upstream::request::clear_header({});",
+                    rust_string(name)
+                ),
+                javascript: format!(
+                    "vm.http.upstream.request.clear_header({});",
+                    js_string(name)
+                ),
+                lua: format!(
+                    "vm.http.upstream.request.clear_header({})",
+                    lua_string(name)
+                ),
+                scheme: format!(
+                    "(vm.http.upstream.request.clear_header {})",
+                    scheme_string(name)
+                ),
+            })
+        }
+        "set_request_headers" => {
+            let headers = block_value(block, "headers", "$request_headers");
+            Ok(FlowActionStatement {
+                rustscript: format!(
+                    "vm::http::upstream::request::set_headers({});",
+                    render_expr_rss(headers)
+                ),
+                javascript: format!(
+                    "vm.http.upstream.request.set_headers({});",
+                    render_expr_js(headers)
+                ),
+                lua: format!(
+                    "vm.http.upstream.request.set_headers({})",
+                    render_expr_lua(headers)
+                ),
+                scheme: format!(
+                    "(vm.http.upstream.request.set_headers {})",
+                    render_expr_scheme(headers)
+                ),
+            })
+        }
+        "set_request_method" => {
+            let method = block_value(block, "method", "GET");
+            Ok(FlowActionStatement {
+                rustscript: format!(
+                    "vm::http::upstream::request::set_method({});",
+                    render_expr_rss(method)
+                ),
+                javascript: format!(
+                    "vm.http.upstream.request.set_method({});",
+                    render_expr_js(method)
+                ),
+                lua: format!(
+                    "vm.http.upstream.request.set_method({})",
+                    render_expr_lua(method)
+                ),
+                scheme: format!(
+                    "(vm.http.upstream.request.set_method {})",
+                    render_expr_scheme(method)
+                ),
+            })
+        }
+        "set_request_path" => {
+            let path = block_value(block, "path", "/");
+            Ok(FlowActionStatement {
+                rustscript: format!(
+                    "vm::http::upstream::request::set_path({});",
+                    render_expr_rss(path)
+                ),
+                javascript: format!(
+                    "vm.http.upstream.request.set_path({});",
+                    render_expr_js(path)
+                ),
+                lua: format!(
+                    "vm.http.upstream.request.set_path({})",
+                    render_expr_lua(path)
+                ),
+                scheme: format!(
+                    "(vm.http.upstream.request.set_path {})",
+                    render_expr_scheme(path)
+                ),
+            })
+        }
+        "set_request_query" => {
+            let query = block_value(block, "query", "x=1");
+            Ok(FlowActionStatement {
+                rustscript: format!(
+                    "vm::http::upstream::request::set_query({});",
+                    render_expr_rss(query)
+                ),
+                javascript: format!(
+                    "vm.http.upstream.request.set_query({});",
+                    render_expr_js(query)
+                ),
+                lua: format!(
+                    "vm.http.upstream.request.set_query({})",
+                    render_expr_lua(query)
+                ),
+                scheme: format!(
+                    "(vm.http.upstream.request.set_query {})",
+                    render_expr_scheme(query)
+                ),
+            })
+        }
+        "set_request_raw_query" => {
+            let query = block_value(block, "query", "x=1");
+            Ok(FlowActionStatement {
+                rustscript: format!(
+                    "vm::http::upstream::request::set_raw_query({});",
+                    render_expr_rss(query)
+                ),
+                javascript: format!(
+                    "vm.http.upstream.request.set_raw_query({});",
+                    render_expr_js(query)
+                ),
+                lua: format!(
+                    "vm.http.upstream.request.set_raw_query({})",
+                    render_expr_lua(query)
+                ),
+                scheme: format!(
+                    "(vm.http.upstream.request.set_raw_query {})",
+                    render_expr_scheme(query)
+                ),
+            })
+        }
+        "set_request_query_arg" => {
+            let name = block_value(block, "name", "id");
+            let value = block_value(block, "value", "1");
+            Ok(FlowActionStatement {
+                rustscript: format!(
+                    "vm::http::upstream::request::set_query_arg({}, {});",
+                    rust_string(name),
+                    render_expr_rss(value)
+                ),
+                javascript: format!(
+                    "vm.http.upstream.request.set_query_arg({}, {});",
+                    js_string(name),
+                    render_expr_js(value)
+                ),
+                lua: format!(
+                    "vm.http.upstream.request.set_query_arg({}, {})",
+                    lua_string(name),
+                    render_expr_lua(value)
+                ),
+                scheme: format!(
+                    "(vm.http.upstream.request.set_query_arg {} {})",
+                    scheme_string(name),
+                    render_expr_scheme(value)
+                ),
+            })
+        }
+        "set_request_body" => {
+            let value = block_value(block, "value", "payload");
+            Ok(FlowActionStatement {
+                rustscript: format!(
+                    "vm::http::upstream::request::set_body({});",
+                    render_expr_rss(value)
+                ),
+                javascript: format!(
+                    "vm.http.upstream.request.set_body({});",
+                    render_expr_js(value)
+                ),
+                lua: format!(
+                    "vm.http.upstream.request.set_body({})",
+                    render_expr_lua(value)
+                ),
+                scheme: format!(
+                    "(vm.http.upstream.request.set_body {})",
+                    render_expr_scheme(value)
+                ),
+            })
+        }
         "set_header" => {
             let name = block_value(block, "name", "x-vm");
             let value = block_value(block, "value", "ok");
             Ok(FlowActionStatement {
                 rustscript: format!(
-                    "vm::set_header({}, {});",
+                    "vm::http::response::set_header({}, {});",
                     rust_string(name),
                     render_expr_rss(value)
                 ),
                 javascript: format!(
-                    "vm.set_header({}, {});",
+                    "vm.http.response.set_header({}, {});",
                     js_string(name),
                     render_expr_js(value)
                 ),
                 lua: format!(
-                    "vm.set_header({}, {})",
+                    "vm.http.response.set_header({}, {})",
                     lua_string(name),
                     render_expr_lua(value)
                 ),
                 scheme: format!(
-                    "(vm.set_header {} {})",
+                    "(vm.http.response.set_header {} {})",
                     scheme_string(name),
                     render_expr_scheme(value)
+                ),
+            })
+        }
+        "add_response_header" => {
+            let name = block_value(block, "name", "set-cookie");
+            let value = block_value(block, "value", "a=1");
+            Ok(FlowActionStatement {
+                rustscript: format!(
+                    "vm::http::response::add_header({}, {});",
+                    rust_string(name),
+                    render_expr_rss(value)
+                ),
+                javascript: format!(
+                    "vm.http.response.add_header({}, {});",
+                    js_string(name),
+                    render_expr_js(value)
+                ),
+                lua: format!(
+                    "vm.http.response.add_header({}, {})",
+                    lua_string(name),
+                    render_expr_lua(value)
+                ),
+                scheme: format!(
+                    "(vm.http.response.add_header {} {})",
+                    scheme_string(name),
+                    render_expr_scheme(value)
+                ),
+            })
+        }
+        "remove_response_header" => {
+            let name = block_value(block, "name", "x-remove");
+            Ok(FlowActionStatement {
+                rustscript: format!("vm::http::response::remove_header({});", rust_string(name)),
+                javascript: format!("vm.http.response.remove_header({});", js_string(name)),
+                lua: format!("vm.http.response.remove_header({})", lua_string(name)),
+                scheme: format!("(vm.http.response.remove_header {})", scheme_string(name)),
+            })
+        }
+        "clear_response_header" => {
+            let name = block_value(block, "name", "x-remove");
+            Ok(FlowActionStatement {
+                rustscript: format!("vm::http::response::clear_header({});", rust_string(name)),
+                javascript: format!("vm.http.response.clear_header({});", js_string(name)),
+                lua: format!("vm.http.response.clear_header({})", lua_string(name)),
+                scheme: format!("(vm.http.response.clear_header {})", scheme_string(name)),
+            })
+        }
+        "set_response_headers" => {
+            let headers = block_value(block, "headers", "$response_headers");
+            Ok(FlowActionStatement {
+                rustscript: format!(
+                    "vm::http::response::set_headers({});",
+                    render_expr_rss(headers)
+                ),
+                javascript: format!("vm.http.response.set_headers({});", render_expr_js(headers)),
+                lua: format!("vm.http.response.set_headers({})", render_expr_lua(headers)),
+                scheme: format!(
+                    "(vm.http.response.set_headers {})",
+                    render_expr_scheme(headers)
                 ),
             })
         }
         "set_response_content" => {
             let value = block_value(block, "value", "request allowed");
             Ok(FlowActionStatement {
-                rustscript: format!("vm::set_response_content({});", render_expr_rss(value)),
-                javascript: format!("vm.set_response_content({});", render_expr_js(value)),
-                lua: format!("vm.set_response_content({})", render_expr_lua(value)),
-                scheme: format!("(vm.set_response_content {})", render_expr_scheme(value)),
+                rustscript: format!("vm::http::response::set_body({});", render_expr_rss(value)),
+                javascript: format!("vm.http.response.set_body({});", render_expr_js(value)),
+                lua: format!("vm.http.response.set_body({})", render_expr_lua(value)),
+                scheme: format!("(vm.http.response.set_body {})", render_expr_scheme(value)),
             })
         }
         "set_response_status" => {
             let status = sanitize_status_code(block.values.get("status"), "429");
             Ok(FlowActionStatement {
-                rustscript: format!("vm::set_response_status({status});"),
-                javascript: format!("vm.set_response_status({status});"),
-                lua: format!("vm.set_response_status({status})"),
-                scheme: format!("(vm.set_response_status {status})"),
+                rustscript: format!("vm::http::response::set_status({status});"),
+                javascript: format!("vm.http.response.set_status({status});"),
+                lua: format!("vm.http.response.set_status({status})"),
+                scheme: format!("(vm.http.response.set_status {status})"),
             })
         }
         "set_upstream" => {
             let upstream = block_value(block, "upstream", "127.0.0.1:8088");
             Ok(FlowActionStatement {
-                rustscript: format!("vm::set_upstream({});", render_expr_rss(upstream)),
-                javascript: format!("vm.set_upstream({});", render_expr_js(upstream)),
-                lua: format!("vm.set_upstream({})", render_expr_lua(upstream)),
-                scheme: format!("(vm.set_upstream {})", render_expr_scheme(upstream)),
+                rustscript: format!(
+                    "vm::http::upstream::request::set_target({});",
+                    render_expr_rss(upstream)
+                ),
+                javascript: format!(
+                    "vm.http.upstream.request.set_target({});",
+                    render_expr_js(upstream)
+                ),
+                lua: format!(
+                    "vm.http.upstream.request.set_target({})",
+                    render_expr_lua(upstream)
+                ),
+                scheme: format!(
+                    "(vm.http.upstream.request.set_target {})",
+                    render_expr_scheme(upstream)
+                ),
             })
         }
         other => Err(bad_request(&format!(
@@ -1824,21 +3074,241 @@ fn render_single_block(
             let var = sanitize_identifier(block.values.get("var"), "header");
             let header_name = block_value(block, "name", "x-client-id");
             rss.push(format!(
-                "let {var} = vm::get_header({});",
+                "let {var} = vm::http::request::get_header({});",
                 rust_string(header_name)
             ));
             js.push(format!(
-                "let {var} = vm.get_header({});",
+                "let {var} = vm.http.request.get_header({});",
                 js_string(header_name)
             ));
             lua.push(format!(
-                "local {var} = vm.get_header({})",
+                "local {var} = vm.http.request.get_header({})",
                 lua_string(header_name)
             ));
             scm.push(format!(
-                "(define {var} (vm.get_header {}))",
+                "(define {var} (vm.http.request.get_header {}))",
                 scheme_string(header_name)
             ));
+        }
+        "get_request_headers" => {
+            let var = sanitize_identifier(block.values.get("var"), "request_headers");
+            rss.push(format!("let {var} = vm::http::request::get_headers();"));
+            js.push(format!("let {var} = vm.http.request.get_headers();"));
+            lua.push(format!("local {var} = vm.http.request.get_headers()"));
+            scm.push(format!("(define {var} (vm.http.request.get_headers))"));
+        }
+        "get_request_query_arg" => {
+            let var = sanitize_identifier(block.values.get("var"), "query_value");
+            let name = block_value(block, "name", "id");
+            rss.push(format!(
+                "let {var} = vm::http::request::get_query_arg({});",
+                rust_string(name)
+            ));
+            js.push(format!(
+                "let {var} = vm.http.request.get_query_arg({});",
+                js_string(name)
+            ));
+            lua.push(format!(
+                "local {var} = vm.http.request.get_query_arg({})",
+                lua_string(name)
+            ));
+            scm.push(format!(
+                "(define {var} (vm.http.request.get_query_arg {}))",
+                scheme_string(name)
+            ));
+        }
+        "get_request_query_args" => {
+            let var = sanitize_identifier(block.values.get("var"), "query_args");
+            rss.push(format!("let {var} = vm::http::request::get_query_args();"));
+            js.push(format!("let {var} = vm.http.request.get_query_args();"));
+            lua.push(format!("local {var} = vm.http.request.get_query_args()"));
+            scm.push(format!("(define {var} (vm.http.request.get_query_args))"));
+        }
+        "get_request_id" => {
+            let var = sanitize_identifier(block.values.get("var"), "request_id");
+            rss.push(format!("let {var} = vm::http::request::get_id();"));
+            js.push(format!("let {var} = vm.http.request.get_id();"));
+            lua.push(format!("local {var} = vm.http.request.get_id()"));
+            scm.push(format!("(define {var} (vm.http.request.get_id))"));
+        }
+        "get_request_method" => {
+            let var = sanitize_identifier(block.values.get("var"), "request_method");
+            rss.push(format!("let {var} = vm::http::request::get_method();"));
+            js.push(format!("let {var} = vm.http.request.get_method();"));
+            lua.push(format!("local {var} = vm.http.request.get_method()"));
+            scm.push(format!("(define {var} (vm.http.request.get_method))"));
+        }
+        "get_request_path" => {
+            let var = sanitize_identifier(block.values.get("var"), "request_path");
+            rss.push(format!("let {var} = vm::http::request::get_path();"));
+            js.push(format!("let {var} = vm.http.request.get_path();"));
+            lua.push(format!("local {var} = vm.http.request.get_path()"));
+            scm.push(format!("(define {var} (vm.http.request.get_path))"));
+        }
+        "get_request_query" => {
+            let var = sanitize_identifier(block.values.get("var"), "request_query");
+            rss.push(format!("let {var} = vm::http::request::get_query();"));
+            js.push(format!("let {var} = vm.http.request.get_query();"));
+            lua.push(format!("local {var} = vm.http.request.get_query()"));
+            scm.push(format!("(define {var} (vm.http.request.get_query))"));
+        }
+        "get_request_raw_query" => {
+            let var = sanitize_identifier(block.values.get("var"), "request_raw_query");
+            rss.push(format!("let {var} = vm::http::request::get_raw_query();"));
+            js.push(format!("let {var} = vm.http.request.get_raw_query();"));
+            lua.push(format!("local {var} = vm.http.request.get_raw_query()"));
+            scm.push(format!("(define {var} (vm.http.request.get_raw_query))"));
+        }
+        "get_request_path_with_query" => {
+            let var = sanitize_identifier(block.values.get("var"), "request_path_with_query");
+            rss.push(format!(
+                "let {var} = vm::http::request::get_path_with_query();"
+            ));
+            js.push(format!(
+                "let {var} = vm.http.request.get_path_with_query();"
+            ));
+            lua.push(format!(
+                "local {var} = vm.http.request.get_path_with_query()"
+            ));
+            scm.push(format!(
+                "(define {var} (vm.http.request.get_path_with_query))"
+            ));
+        }
+        "get_request_scheme" => {
+            let var = sanitize_identifier(block.values.get("var"), "request_scheme");
+            rss.push(format!("let {var} = vm::http::request::get_scheme();"));
+            js.push(format!("let {var} = vm.http.request.get_scheme();"));
+            lua.push(format!("local {var} = vm.http.request.get_scheme()"));
+            scm.push(format!("(define {var} (vm.http.request.get_scheme))"));
+        }
+        "get_request_host" => {
+            let var = sanitize_identifier(block.values.get("var"), "request_host");
+            rss.push(format!("let {var} = vm::http::request::get_host();"));
+            js.push(format!("let {var} = vm.http.request.get_host();"));
+            lua.push(format!("local {var} = vm.http.request.get_host()"));
+            scm.push(format!("(define {var} (vm.http.request.get_host))"));
+        }
+        "get_request_http_version" => {
+            let var = sanitize_identifier(block.values.get("var"), "request_http_version");
+            rss.push(format!(
+                "let {var} = vm::http::request::get_http_version();"
+            ));
+            js.push(format!("let {var} = vm.http.request.get_http_version();"));
+            lua.push(format!("local {var} = vm.http.request.get_http_version()"));
+            scm.push(format!("(define {var} (vm.http.request.get_http_version))"));
+        }
+        "get_request_port" => {
+            let var = sanitize_identifier(block.values.get("var"), "request_port");
+            rss.push(format!("let {var} = vm::http::request::get_port();"));
+            js.push(format!("let {var} = vm.http.request.get_port();"));
+            lua.push(format!("local {var} = vm.http.request.get_port()"));
+            scm.push(format!("(define {var} (vm.http.request.get_port))"));
+        }
+        "get_request_client_ip" => {
+            let var = sanitize_identifier(block.values.get("var"), "client_ip");
+            rss.push(format!("let {var} = vm::http::request::get_client_ip();"));
+            js.push(format!("let {var} = vm.http.request.get_client_ip();"));
+            lua.push(format!("local {var} = vm.http.request.get_client_ip()"));
+            scm.push(format!("(define {var} (vm.http.request.get_client_ip))"));
+        }
+        "get_request_body" => {
+            let var = sanitize_identifier(block.values.get("var"), "request_body");
+            rss.push(format!("let {var} = vm::http::request::get_body();"));
+            js.push(format!("let {var} = vm.http.request.get_body();"));
+            lua.push(format!("local {var} = vm.http.request.get_body()"));
+            scm.push(format!("(define {var} (vm.http.request.get_body))"));
+        }
+        "get_response_status" => {
+            let var = sanitize_identifier(block.values.get("var"), "response_status");
+            rss.push(format!("let {var} = vm::http::response::get_status();"));
+            js.push(format!("let {var} = vm.http.response.get_status();"));
+            lua.push(format!("local {var} = vm.http.response.get_status()"));
+            scm.push(format!("(define {var} (vm.http.response.get_status))"));
+        }
+        "get_response_header" => {
+            let var = sanitize_identifier(block.values.get("var"), "response_header");
+            let header_name = block_value(block, "name", "x-vm");
+            rss.push(format!(
+                "let {var} = vm::http::response::get_header({});",
+                rust_string(header_name)
+            ));
+            js.push(format!(
+                "let {var} = vm.http.response.get_header({});",
+                js_string(header_name)
+            ));
+            lua.push(format!(
+                "local {var} = vm.http.response.get_header({})",
+                lua_string(header_name)
+            ));
+            scm.push(format!(
+                "(define {var} (vm.http.response.get_header {}))",
+                scheme_string(header_name)
+            ));
+        }
+        "get_response_headers" => {
+            let var = sanitize_identifier(block.values.get("var"), "response_headers");
+            rss.push(format!("let {var} = vm::http::response::get_headers();"));
+            js.push(format!("let {var} = vm.http.response.get_headers();"));
+            lua.push(format!("local {var} = vm.http.response.get_headers()"));
+            scm.push(format!("(define {var} (vm.http.response.get_headers))"));
+        }
+        "get_response_body" => {
+            let var = sanitize_identifier(block.values.get("var"), "response_body");
+            rss.push(format!("let {var} = vm::http::response::get_body();"));
+            js.push(format!("let {var} = vm.http.response.get_body();"));
+            lua.push(format!("local {var} = vm.http.response.get_body()"));
+            scm.push(format!("(define {var} (vm.http.response.get_body))"));
+        }
+        "get_upstream_response_status" => {
+            let var = sanitize_identifier(block.values.get("var"), "upstream_status");
+            rss.push(format!("let {var} = vm::http::upstream::response::get_status();"));
+            js.push(format!("let {var} = vm.http.upstream.response.get_status();"));
+            lua.push(format!("local {var} = vm.http.upstream.response.get_status()"));
+            scm.push(format!(
+                "(define {var} (vm.http.upstream.response.get_status))"
+            ));
+        }
+        "get_upstream_response_header" => {
+            let var = sanitize_identifier(block.values.get("var"), "upstream_header");
+            let header_name = block_value(block, "name", "x-upstream");
+            rss.push(format!(
+                "let {var} = vm::http::upstream::response::get_header({});",
+                rust_string(header_name)
+            ));
+            js.push(format!(
+                "let {var} = vm.http.upstream.response.get_header({});",
+                js_string(header_name)
+            ));
+            lua.push(format!(
+                "local {var} = vm.http.upstream.response.get_header({})",
+                lua_string(header_name)
+            ));
+            scm.push(format!(
+                "(define {var} (vm.http.upstream.response.get_header {}))",
+                scheme_string(header_name)
+            ));
+        }
+        "get_upstream_response_headers" => {
+            let var = sanitize_identifier(block.values.get("var"), "upstream_headers");
+            rss.push(format!(
+                "let {var} = vm::http::upstream::response::get_headers();"
+            ));
+            js.push(format!(
+                "let {var} = vm.http.upstream.response.get_headers();"
+            ));
+            lua.push(format!(
+                "local {var} = vm.http.upstream.response.get_headers()"
+            ));
+            scm.push(format!(
+                "(define {var} (vm.http.upstream.response.get_headers))"
+            ));
+        }
+        "get_upstream_response_body" => {
+            let var = sanitize_identifier(block.values.get("var"), "upstream_body");
+            rss.push(format!("let {var} = vm::http::upstream::response::get_body();"));
+            js.push(format!("let {var} = vm.http.upstream.response.get_body();"));
+            lua.push(format!("local {var} = vm.http.upstream.response.get_body()"));
+            scm.push(format!("(define {var} (vm.http.upstream.response.get_body))"));
         }
         "string_concat" => {
             let var = sanitize_identifier(block.values.get("var"), "joined_text");
@@ -2085,64 +3555,60 @@ fn render_single_block(
                 render_expr_scheme(value)
             ));
         }
-        "set_header" => {
-            let name = block_value(block, "name", "x-vm");
-            let value = block_value(block, "value", "ok");
+        "set_request_header"
+        | "add_request_header"
+        | "remove_request_header"
+        | "clear_request_header"
+        | "set_request_headers"
+        | "set_request_method"
+        | "set_request_path"
+        | "set_request_query"
+        | "set_request_raw_query"
+        | "set_request_query_arg"
+        | "set_request_body"
+        | "set_header"
+        | "add_response_header"
+        | "remove_response_header"
+        | "clear_response_header"
+        | "set_response_headers"
+        | "set_response_content"
+        | "set_response_status"
+        | "set_upstream" => {
+            let action = flow_action_statement(block)?;
+            rss.push(action.rustscript);
+            js.push(action.javascript);
+            lua.push(action.lua);
+            scm.push(action.scheme);
+        }
+        "rate_limit_allow" => {
+            let var = sanitize_identifier(block.values.get("var"), "rate_allowed");
+            let key_expr = block_value(block, "key_expr", "$header");
+            let limit = render_number_expr(block_value(block, "limit", "3"), "3");
+            let window = render_number_expr(block_value(block, "window_seconds", "60"), "60");
+
             rss.push(format!(
-                "vm::set_header({}, {});",
-                rust_string(name),
-                render_expr_rss(value)
+                "let {var} = vm::http::rate_limit::allow({}, {}, {});",
+                render_expr_rss(key_expr),
+                limit,
+                window
             ));
             js.push(format!(
-                "vm.set_header({}, {});",
-                js_string(name),
-                render_expr_js(value)
+                "let {var} = vm.http.rate_limit.allow({}, {}, {});",
+                render_expr_js(key_expr),
+                limit,
+                window
             ));
             lua.push(format!(
-                "vm.set_header({}, {})",
-                lua_string(name),
-                render_expr_lua(value)
+                "local {var} = vm.http.rate_limit.allow({}, {}, {})",
+                render_expr_lua(key_expr),
+                limit,
+                window
             ));
             scm.push(format!(
-                "(vm.set_header {} {})",
-                scheme_string(name),
-                render_expr_scheme(value)
-            ));
-        }
-        "set_response_content" => {
-            let value = block_value(block, "value", "request allowed");
-            rss.push(format!(
-                "vm::set_response_content({});",
-                render_expr_rss(value)
-            ));
-            js.push(format!(
-                "vm.set_response_content({});",
-                render_expr_js(value)
-            ));
-            lua.push(format!(
-                "vm.set_response_content({})",
-                render_expr_lua(value)
-            ));
-            scm.push(format!(
-                "(vm.set_response_content {})",
-                render_expr_scheme(value)
-            ));
-        }
-        "set_response_status" => {
-            let status = sanitize_status_code(block.values.get("status"), "429");
-            rss.push(format!("vm::set_response_status({status});"));
-            js.push(format!("vm.set_response_status({status});"));
-            lua.push(format!("vm.set_response_status({status})"));
-            scm.push(format!("(vm.set_response_status {status})"));
-        }
-        "set_upstream" => {
-            let upstream = block_value(block, "upstream", "127.0.0.1:8088");
-            rss.push(format!("vm::set_upstream({});", render_expr_rss(upstream)));
-            js.push(format!("vm.set_upstream({});", render_expr_js(upstream)));
-            lua.push(format!("vm.set_upstream({})", render_expr_lua(upstream)));
-            scm.push(format!(
-                "(vm.set_upstream {})",
-                render_expr_scheme(upstream)
+                "(define {var} (vm.http.rate_limit.allow {} {} {}))",
+                render_expr_scheme(key_expr),
+                limit,
+                window
             ));
         }
         "rate_limit_if_else" => {
@@ -2151,68 +3617,68 @@ fn render_single_block(
             let window = sanitize_number(block.values.get("window_seconds"), "60");
 
             rss.push(format!(
-                "if vm::rate_limit_allow({}, {}, {}) {{",
+                "if vm::http::rate_limit::allow({}, {}, {}) {{",
                 render_expr_rss(key_expr),
                 limit,
                 window
             ));
             rss.push(format!(
-                "    vm::set_response_content({});",
+                "    vm::http::response::set_body({});",
                 rust_string("request allowed")
             ));
             rss.push("} else {".to_string());
             rss.push(format!(
-                "    vm::set_response_content({});",
+                "    vm::http::response::set_body({});",
                 rust_string("rate limit exceeded")
             ));
             rss.push("}".to_string());
 
             js.push(format!(
-                "if (vm.rate_limit_allow({}, {}, {})) {{",
+                "if (vm.http.rate_limit.allow({}, {}, {})) {{",
                 render_expr_js(key_expr),
                 limit,
                 window
             ));
             js.push(format!(
-                "    vm.set_response_content({});",
+                "    vm.http.response.set_body({});",
                 js_string("request allowed")
             ));
             js.push("} else {".to_string());
             js.push(format!(
-                "    vm.set_response_content({});",
+                "    vm.http.response.set_body({});",
                 js_string("rate limit exceeded")
             ));
             js.push("}".to_string());
 
             lua.push(format!(
-                "if vm.rate_limit_allow({}, {}, {}) then",
+                "if vm.http.rate_limit.allow({}, {}, {}) then",
                 render_expr_lua(key_expr),
                 limit,
                 window
             ));
             lua.push(format!(
-                "    vm.set_response_content({})",
+                "    vm.http.response.set_body({})",
                 lua_string("request allowed")
             ));
             lua.push("else".to_string());
             lua.push(format!(
-                "    vm.set_response_content({})",
+                "    vm.http.response.set_body({})",
                 lua_string("rate limit exceeded")
             ));
             lua.push("end".to_string());
 
             scm.push(format!(
-                "(if (vm.rate_limit_allow {} {} {})",
+                "(if (vm.http.rate_limit.allow {} {} {})",
                 render_expr_scheme(key_expr),
                 limit,
                 window
             ));
             scm.push(format!(
-                "    (vm.set_response_content {})",
+                "    (vm.http.response.set_body {})",
                 scheme_string("request allowed")
             ));
             scm.push(format!(
-                "    (vm.set_response_content {}))",
+                "    (vm.http.response.set_body {}))",
                 scheme_string("rate limit exceeded")
             ));
         }
@@ -2273,7 +3739,7 @@ fn render_single_block(
             let else_body = block_value(block, "else_body", "normal mode");
 
             rss.push(format!(
-                "let __header_check = vm::get_header({});",
+                "let __header_check = vm::http::request::get_header({});",
                 rust_string(header_name)
             ));
             rss.push(format!(
@@ -2281,18 +3747,18 @@ fn render_single_block(
                 rust_string(equals_value)
             ));
             rss.push(format!(
-                "    vm::set_response_content({});",
+                "    vm::http::response::set_body({});",
                 rust_string(then_body)
             ));
             rss.push("} else {".to_string());
             rss.push(format!(
-                "    vm::set_response_content({});",
+                "    vm::http::response::set_body({});",
                 rust_string(else_body)
             ));
             rss.push("}".to_string());
 
             js.push(format!(
-                "let __header_check = vm.get_header({});",
+                "let __header_check = vm.http.request.get_header({});",
                 js_string(header_name)
             ));
             js.push(format!(
@@ -2300,18 +3766,18 @@ fn render_single_block(
                 js_string(equals_value)
             ));
             js.push(format!(
-                "    vm.set_response_content({});",
+                "    vm.http.response.set_body({});",
                 js_string(then_body)
             ));
             js.push("} else {".to_string());
             js.push(format!(
-                "    vm.set_response_content({});",
+                "    vm.http.response.set_body({});",
                 js_string(else_body)
             ));
             js.push("}".to_string());
 
             lua.push(format!(
-                "local __header_check = vm.get_header({})",
+                "local __header_check = vm.http.request.get_header({})",
                 lua_string(header_name)
             ));
             lua.push(format!(
@@ -2319,18 +3785,18 @@ fn render_single_block(
                 lua_string(equals_value)
             ));
             lua.push(format!(
-                "    vm.set_response_content({})",
+                "    vm.http.response.set_body({})",
                 lua_string(then_body)
             ));
             lua.push("else".to_string());
             lua.push(format!(
-                "    vm.set_response_content({})",
+                "    vm.http.response.set_body({})",
                 lua_string(else_body)
             ));
             lua.push("end".to_string());
 
             scm.push(format!(
-                "(let ((__header_check (vm.get_header {})))",
+                "(let ((__header_check (vm.http.request.get_header {})))",
                 scheme_string(header_name)
             ));
             scm.push(format!(
@@ -2338,11 +3804,11 @@ fn render_single_block(
                 scheme_string(equals_value)
             ));
             scm.push(format!(
-                "      (vm.set_response_content {})",
+                "      (vm.http.response.set_body {})",
                 scheme_string(then_body)
             ));
             scm.push(format!(
-                "      (vm.set_response_content {})))",
+                "      (vm.http.response.set_body {})))",
                 scheme_string(else_body)
             ));
         }
@@ -2353,7 +3819,7 @@ fn render_single_block(
 
             rss.push(format!("for (let i = 0; i < {count}; i = i + 1) {{"));
             rss.push(format!(
-                "    vm::set_header({}, {});",
+                "    vm::http::response::set_header({}, {});",
                 rust_string(header_name),
                 rust_string(header_value)
             ));
@@ -2361,7 +3827,7 @@ fn render_single_block(
 
             js.push(format!("for (let i = 0; i < {count}; i = i + 1) {{"));
             js.push(format!(
-                "    vm.set_header({}, {});",
+                "    vm.http.response.set_header({}, {});",
                 js_string(header_name),
                 js_string(header_value)
             ));
@@ -2369,7 +3835,7 @@ fn render_single_block(
 
             lua.push(format!("for i = 1, {count} do"));
             lua.push(format!(
-                "    vm.set_header({}, {})",
+                "    vm.http.response.set_header({}, {})",
                 lua_string(header_name),
                 lua_string(header_value)
             ));
@@ -2378,7 +3844,7 @@ fn render_single_block(
             scm.push("(let loop ((i 0))".to_string());
             scm.push(format!("  (if (< i {count})"));
             scm.push(format!(
-                "      (begin (vm.set_header {} {}) (loop (+ i 1)))",
+                "      (begin (vm.http.response.set_header {} {}) (loop (+ i 1)))",
                 scheme_string(header_name),
                 scheme_string(header_value)
             ));

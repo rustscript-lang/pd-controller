@@ -1561,7 +1561,6 @@ async fn process_debug_session_result(
                 session.request_id = Some(id);
             }
 
-
             let summary = DebugRecordingSummary {
                 recording_id: recording_id.clone(),
                 sequence: *sequence,

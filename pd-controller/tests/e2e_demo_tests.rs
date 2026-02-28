@@ -1,7 +1,7 @@
 use std::{net::SocketAddr, time::Duration};
 
 use edge::{
-    ActiveControlPlaneConfig, CommandResultPayload, EdgeCommandResult, FN_SET_RESPONSE_CONTENT,
+    ActiveControlPlaneConfig, CommandResultPayload, EdgeCommandResult, FN_HTTP_RESPONSE_SET_BODY,
     SharedState, build_data_app, spawn_active_control_plane_client,
 };
 use pd_controller::{
@@ -32,7 +32,7 @@ fn build_short_circuit_program(body: &str) -> Program {
     let body_idx = constants.len() as u32;
     constants.push(Value::String(body.to_string()));
     bc.ldc(body_idx);
-    bc.call(FN_SET_RESPONSE_CONTENT, 1);
+    bc.call(FN_HTTP_RESPONSE_SET_BODY, 1);
     bc.ret();
     Program::new(constants, bc.finish())
 }
