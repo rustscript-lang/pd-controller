@@ -1,11 +1,20 @@
 import type { SourceFlavor } from "@/app/types";
 
-type LintDiagnostic = {
-  line: number;
-  message: string;
+export type LintSpan = {
+  startLine: number;
+  startColumn: number;
+  endLine: number;
+  endColumn: number;
 };
 
-type LintReport = {
+export type LintDiagnostic = {
+  line: number;
+  message: string;
+  span: LintSpan | null;
+  rendered: string;
+};
+
+export type LintReport = {
   diagnostics: LintDiagnostic[];
 };
 
@@ -55,14 +64,41 @@ function normalizeReport(parsed: unknown): LintReport {
     if (!item || typeof item !== "object") {
       continue;
     }
-    const line = Number((item as { line?: unknown }).line);
-    const message = (item as { message?: unknown }).message;
-    if (!Number.isFinite(line) || typeof message !== "string") {
+    const lineRaw = Number((item as { line?: unknown }).line);
+    const messageRaw = (item as { message?: unknown }).message;
+    const renderedRaw = (item as { rendered?: unknown }).rendered;
+    let span: LintSpan | null = null;
+    const spanRaw = (item as { span?: unknown }).span;
+    if (spanRaw && typeof spanRaw === "object") {
+      const startLine = Number((spanRaw as { start_line?: unknown }).start_line);
+      const startCol = Number((spanRaw as { start_col?: unknown }).start_col);
+      const endLine = Number((spanRaw as { end_line?: unknown }).end_line);
+      const endCol = Number((spanRaw as { end_col?: unknown }).end_col);
+      if (
+        Number.isFinite(startLine) &&
+        Number.isFinite(startCol) &&
+        Number.isFinite(endLine) &&
+        Number.isFinite(endCol)
+      ) {
+        span = {
+          startLine: Math.max(1, Math.trunc(startLine)),
+          startColumn: Math.max(1, Math.trunc(startCol)),
+          endLine: Math.max(1, Math.trunc(endLine)),
+          endColumn: Math.max(1, Math.trunc(endCol))
+        };
+      }
+    }
+    const line = Number.isFinite(lineRaw) ? Math.max(0, Math.trunc(lineRaw)) : 0;
+    const message = typeof messageRaw === "string" ? messageRaw : "";
+    const rendered = typeof renderedRaw === "string" ? renderedRaw : message;
+    if (!message) {
       continue;
     }
     diagnostics.push({
-      line: Math.max(0, Math.trunc(line)),
-      message
+      line,
+      message,
+      span,
+      rendered
     });
   }
   return { diagnostics };

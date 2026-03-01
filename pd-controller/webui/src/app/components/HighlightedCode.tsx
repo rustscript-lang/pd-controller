@@ -96,14 +96,28 @@ export function HighlightedCode({
         }
         const markers: Monaco.editor.IMarkerData[] = report.diagnostics.map((item) => {
           const maxLine = Math.max(1, currentModel.getLineCount());
-          const line = Math.min(Math.max(item.line || 1, 1), maxLine);
+          const fallbackLine = Math.min(Math.max(item.line || 1, 1), maxLine);
+          const rawRange = item.span
+            ? {
+                startLineNumber: item.span.startLine,
+                startColumn: item.span.startColumn,
+                endLineNumber: item.span.endLine,
+                endColumn: item.span.endColumn
+              }
+            : {
+                startLineNumber: fallbackLine,
+                startColumn: 1,
+                endLineNumber: fallbackLine,
+                endColumn: Math.max(2, currentModel.getLineMaxColumn(fallbackLine))
+              };
+          const range = currentModel.validateRange(rawRange);
           return {
             severity: monacoRef.current!.MarkerSeverity.Error,
             message: item.message,
-            startLineNumber: line,
-            startColumn: 1,
-            endLineNumber: line,
-            endColumn: Math.max(2, currentModel.getLineMaxColumn(line))
+            startLineNumber: range.startLineNumber,
+            startColumn: range.startColumn,
+            endLineNumber: range.endLineNumber,
+            endColumn: range.endColumn
           };
         });
         monacoRef.current.editor.setModelMarkers(currentModel, LINT_OWNER, markers);
