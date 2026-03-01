@@ -41,6 +41,7 @@ pub(super) fn execute_builtin_call(
         BuiltinFunction::MapNew => Ok(vec![Value::Map(Vec::new())]),
         BuiltinFunction::Get => builtin_get(args),
         BuiltinFunction::Set => builtin_set(args),
+        BuiltinFunction::Keys => builtin_keys(args),
         BuiltinFunction::IoOpen => builtin_io_open(vm, args),
         BuiltinFunction::IoPopen => builtin_io_popen(vm, args),
         BuiltinFunction::IoReadAll => builtin_io_read_all(vm, args),
@@ -49,6 +50,7 @@ pub(super) fn execute_builtin_call(
         BuiltinFunction::IoFlush => builtin_io_flush(vm, args),
         BuiltinFunction::IoClose => builtin_io_close(vm, args),
         BuiltinFunction::IoExists => builtin_io_exists(args),
+        BuiltinFunction::Count => builtin_count(args),
         BuiltinFunction::ToString => builtin_to_string(args),
         BuiltinFunction::TypeOf => builtin_type_of(args),
         BuiltinFunction::Assert => builtin_assert(args),
@@ -268,9 +270,13 @@ fn builtin_set(args: &[Value]) -> VmResult<Vec<Value>> {
             } else if index == out.len() {
                 out.push(value);
             } else {
-                return Err(VmError::HostError(format!(
-                    "array set index {index} out of bounds"
-                )));
+                let mut entries = out
+                    .into_iter()
+                    .enumerate()
+                    .map(|(idx, existing)| (Value::Int(idx as i64), existing))
+                    .collect::<Vec<_>>();
+                entries.push((Value::Int(index as i64), value));
+                return Ok(vec![Value::Map(entries)]);
             }
             Ok(vec![Value::Array(out)])
         }
@@ -287,6 +293,36 @@ fn builtin_set(args: &[Value]) -> VmResult<Vec<Value>> {
         }
         _ => Err(VmError::TypeMismatch("array/map")),
     }
+}
+
+fn builtin_keys(args: &[Value]) -> VmResult<Vec<Value>> {
+    let container = args
+        .first()
+        .ok_or_else(|| VmError::HostError("missing container argument".to_string()))?;
+
+    let keys = match container {
+        Value::Array(values) => (0..values.len())
+            .map(|index| Value::Int(index as i64))
+            .collect::<Vec<_>>(),
+        Value::Map(entries) => entries
+            .iter()
+            .map(|(key, _)| key.clone())
+            .collect::<Vec<_>>(),
+        _ => return Err(VmError::TypeMismatch("array/map")),
+    };
+    Ok(vec![Value::Array(keys)])
+}
+
+fn builtin_count(args: &[Value]) -> VmResult<Vec<Value>> {
+    let container = args
+        .first()
+        .ok_or_else(|| VmError::HostError("missing container argument".to_string()))?;
+    let count = match container {
+        Value::Array(values) => values.len() as i64,
+        Value::Map(entries) => entries.len() as i64,
+        _ => return Err(VmError::TypeMismatch("array/map")),
+    };
+    Ok(vec![Value::Int(count)])
 }
 
 fn builtin_io_open(vm: &mut Vm, args: &[Value]) -> VmResult<Vec<Value>> {

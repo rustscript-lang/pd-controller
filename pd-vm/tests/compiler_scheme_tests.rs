@@ -306,3 +306,38 @@ fn scheme_null_and_nil_lower_to_null_literal() {
     assert_eq!(status, VmStatus::Halted);
     assert_eq!(vm.stack(), &[Value::Int(42)]);
 }
+
+#[test]
+fn scheme_type_aliases_are_supported() {
+    let source = r#"
+        (if (and (equal? (type nil) "null") (equal? (type-of "x") "string"))
+            42
+            0)
+    "#;
+
+    let compiled =
+        compile_source_with_flavor(source, SourceFlavor::Scheme).expect("compile should succeed");
+    let mut vm = Vm::with_locals(compiled.program, compiled.locals);
+    let status = vm.run().expect("vm should run");
+    assert_eq!(status, VmStatus::Halted);
+    assert_eq!(vm.stack(), &[Value::Int(42)]);
+}
+
+#[test]
+fn scheme_direct_builtin_len_call_is_rejected() {
+    let source = r#"
+        (define value "hello")
+        (len value)
+    "#;
+
+    let err = match compile_source_with_flavor(source, SourceFlavor::Scheme) {
+        Ok(_) => panic!("direct builtin len call should be rejected in Scheme frontend"),
+        Err(err) => err,
+    };
+    match err {
+        vm::SourceError::Parse(parse) => {
+            assert!(parse.message.contains("not exposed in Scheme frontend"));
+        }
+        other => panic!("unexpected error: {other}"),
+    }
+}

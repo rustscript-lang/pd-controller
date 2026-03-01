@@ -309,26 +309,113 @@ fn collections_are_created_and_accessed_in_all_frontends() {
 }
 
 #[test]
+fn collection_cardinality_uses_language_syntax_in_all_frontends() {
+    let rustscript = r#"
+        let arr = [1, 2, 3];
+        let m = {"x": 1, "y": 2};
+        arr.length + m.length;
+    "#;
+    let javascript = r#"
+        let arr = [1, 2, 3];
+        let m = { x: 1, y: 2 };
+        arr.length + m.length;
+    "#;
+    let lua = r#"
+        local arr = {1, 2, 3}
+        local m = { x = 1, y = 2 }
+        local map_count = 0
+        for _k in pairs(m) do
+            map_count = map_count + 1
+        end
+        #arr + map_count
+    "#;
+    let scheme = r#"
+        (define arr (vector 1 2 3))
+        (define m (hash (x 1) (y 2)))
+        (+ (length arr) (length (keys m)))
+    "#;
+
+    let cases = [
+        (SourceFlavor::RustScript, rustscript),
+        (SourceFlavor::JavaScript, javascript),
+        (SourceFlavor::Lua, lua),
+        (SourceFlavor::Scheme, scheme),
+    ];
+
+    for (flavor, source) in cases {
+        let compiled = compile_source_with_flavor(source, flavor).expect("compile should succeed");
+        let mut vm = Vm::with_locals(compiled.program, compiled.locals);
+        let status = vm.run().expect("vm should run");
+        assert_eq!(status, VmStatus::Halted);
+        assert_eq!(vm.stack(), &[Value::Int(5)]);
+    }
+}
+
+#[test]
+fn count_builtin_is_not_exposed_to_frontends() {
+    let rustscript = r#"
+        let arr = [1, 2, 3];
+        count(arr);
+    "#;
+    let javascript = r#"
+        let arr = [1, 2, 3];
+        count(arr);
+    "#;
+    let lua = r#"
+        local arr = {1, 2, 3}
+        count(arr)
+    "#;
+    let scheme = r#"
+        (define arr (vector 1 2 3))
+        (count arr)
+    "#;
+
+    let cases = [
+        (SourceFlavor::RustScript, rustscript),
+        (SourceFlavor::JavaScript, javascript),
+        (SourceFlavor::Lua, lua),
+        (SourceFlavor::Scheme, scheme),
+    ];
+
+    for (flavor, source) in cases {
+        let err = match compile_source_with_flavor(source, flavor) {
+            Ok(_) => panic!("count should not be frontend-visible for {flavor:?}"),
+            Err(err) => err,
+        };
+        match err {
+            vm::SourceError::Parse(parse) => {
+                assert!(
+                    parse.message.contains("unknown function 'count'")
+                        || parse.message.contains("not exposed in"),
+                    "unexpected parse error for {flavor:?}: {parse:?}"
+                );
+            }
+            other => panic!("expected parse error for {flavor:?}, got {other:?}"),
+        }
+    }
+}
+
+#[test]
 fn string_and_array_concat_work_via_plus_in_all_frontends() {
     let rustscript = r#"
         let joined = "he" + "llo";
         let arr = [1] + [2];
-        len(joined) + arr[0] + arr[1];
+        joined.length + arr[0] + arr[1];
     "#;
     let javascript = r#"
         let joined = "he" + "llo";
         let arr = [1] + [2];
-        len(joined) + arr[0] + arr[1];
+        joined.length + arr[0] + arr[1];
     "#;
     let lua = r#"
         local joined = "he" + "llo"
         local arr = [1] + [2]
-        len(joined) + arr[0] + arr[1]
+        #joined + arr[0] + arr[1]
     "#;
     let scheme = r#"
         (define joined (+ "he" "llo"))
         (define arr (+ (vector 1) (vector 2)))
-        (+ (len joined) (vector-ref arr 0) (vector-ref arr 1))
+        (+ (length joined) (vector-ref arr 0) (vector-ref arr 1))
     "#;
 
     let cases = [
@@ -354,28 +441,28 @@ fn string_and_int_concat_work_via_plus_in_all_frontends() {
         let b = 2 + "y";
         let c = "x" + 1 + 2;
         let d = 3 + "y" + 4;
-        len(a) + len(b) + len(c) + len(d);
+        a.length + b.length + c.length + d.length;
     "#;
     let javascript = r#"
         let a = "x" + 1;
         let b = 2 + "y";
         let c = "x" + 1 + 2;
         let d = 3 + "y" + 4;
-        len(a) + len(b) + len(c) + len(d);
+        a.length + b.length + c.length + d.length;
     "#;
     let lua = r#"
         local a = "x" + 1
         local b = 2 + "y"
         local c = "x" + 1 + 2
         local d = 3 + "y" + 4
-        len(a) + len(b) + len(c) + len(d)
+        #a + #b + #c + #d
     "#;
     let scheme = r#"
         (define a (+ "x" 1))
         (define b (+ 2 "y"))
         (define c (+ "x" 1 2))
         (define d (+ 3 "y" 4))
-        (+ (len a) (len b) (len c) (len d))
+        (+ (length a) (length b) (length c) (length d))
     "#;
 
     let cases = [
@@ -400,25 +487,25 @@ fn string_and_nonconstant_int_concat_autoconverts_in_all_frontends() {
         let n = 41;
         let a = "v=" + n;
         let b = n + "!";
-        len(a) + len(b);
+        a.length + b.length;
     "#;
     let javascript = r#"
         let n = 41;
         let a = "v=" + n;
         let b = n + "!";
-        len(a) + len(b);
+        a.length + b.length;
     "#;
     let lua = r#"
         local n = 41
         local a = "v=" + n
         local b = n + "!"
-        len(a) + len(b)
+        #a + #b
     "#;
     let scheme = r#"
         (define n 41)
         (define a (+ "v=" n))
         (define b (+ n "!"))
-        (+ (len a) (len b))
+        (+ (length a) (length b))
     "#;
 
     let cases = [
@@ -452,7 +539,7 @@ fn slice_ranges_work_in_all_frontends() {
         let g = arr[:2];
         let h = arr[3:];
         let i = arr[:-2];
-        len(a) + len(b) + len(c) + len(d) + len(e) + len(f) + len(g) + len(h) + len(i);
+        a.length + b.length + c.length + d.length + e.length + f.length + g.length + h.length + i.length;
     "#;
     let javascript = r#"
         let text = "abcdef";
@@ -467,7 +554,7 @@ fn slice_ranges_work_in_all_frontends() {
         let g = arr[:2];
         let h = arr[3:];
         let i = arr[:-2];
-        len(a) + len(b) + len(c) + len(d) + len(e) + len(f) + len(g) + len(h) + len(i);
+        a.length + b.length + c.length + d.length + e.length + f.length + g.length + h.length + i.length;
     "#;
     let lua = r#"
         local text = "abcdef"
@@ -482,7 +569,7 @@ fn slice_ranges_work_in_all_frontends() {
         local g = arr[:2]
         local h = arr[3:]
         local i = arr[:-2]
-        len(a) + len(b) + len(c) + len(d) + len(e) + len(f) + len(g) + len(h) + len(i)
+        #a + #b + #c + #d + #e + #f + #g + #h + #i
     "#;
     let scheme = r#"
         (define text "abcdef")
@@ -497,7 +584,7 @@ fn slice_ranges_work_in_all_frontends() {
         (define g (slice-to arr 2))
         (define h (slice-from arr 3))
         (define i (slice-to arr -2))
-        (+ (len a) (len b) (len c) (len d) (len e) (len f) (len g) (len h) (len i))
+        (+ (length a) (length b) (length c) (length d) (length e) (length f) (length g) (length h) (length i))
     "#;
 
     let cases = [

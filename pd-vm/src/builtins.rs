@@ -9,23 +9,25 @@ pub(crate) enum BuiltinFunction {
     MapNew = 5,
     Get = 6,
     Set = 7,
-    IoOpen = 8,
-    IoPopen = 9,
-    IoReadAll = 10,
-    IoReadLine = 11,
-    IoWrite = 12,
-    IoFlush = 13,
-    IoClose = 14,
-    IoExists = 15,
-    ToString = 16,
-    TypeOf = 17,
-    Assert = 18,
+    Keys = 8,
+    IoOpen = 9,
+    IoPopen = 10,
+    IoReadAll = 11,
+    IoReadLine = 12,
+    IoWrite = 13,
+    IoFlush = 14,
+    IoClose = 15,
+    IoExists = 16,
+    Count = 17,
+    ToString = 18,
+    TypeOf = 19,
+    Assert = 20,
 }
 
-pub(crate) const BUILTIN_CALL_BASE: u16 = 0xFFF0;
-/// Number of builtins in the main range (indices 0..15 above BUILTIN_CALL_BASE).
+pub(crate) const BUILTIN_CALL_BASE: u16 = 0xFFE0;
+/// Number of builtins in the main range (indices 0..17 above BUILTIN_CALL_BASE).
 /// ToString, TypeOf, and Assert live at special indices below BUILTIN_CALL_BASE.
-pub(crate) const BUILTIN_CALL_COUNT: u16 = 16;
+pub(crate) const BUILTIN_CALL_COUNT: u16 = 18;
 
 impl BuiltinFunction {
     pub(crate) fn name(self) -> &'static str {
@@ -38,6 +40,7 @@ impl BuiltinFunction {
             BuiltinFunction::MapNew => "map_new",
             BuiltinFunction::Get => "get",
             BuiltinFunction::Set => "set",
+            BuiltinFunction::Keys => "keys",
             BuiltinFunction::IoOpen => "io_open",
             BuiltinFunction::IoPopen => "io_popen",
             BuiltinFunction::IoReadAll => "io_read_all",
@@ -46,6 +49,7 @@ impl BuiltinFunction {
             BuiltinFunction::IoFlush => "io_flush",
             BuiltinFunction::IoClose => "io_close",
             BuiltinFunction::IoExists => "io_exists",
+            BuiltinFunction::Count => "count",
             BuiltinFunction::ToString => "__to_string",
             BuiltinFunction::TypeOf => "type_of",
             BuiltinFunction::Assert => "assert",
@@ -62,6 +66,7 @@ impl BuiltinFunction {
             BuiltinFunction::MapNew => 0,
             BuiltinFunction::Get => 2,
             BuiltinFunction::Set => 3,
+            BuiltinFunction::Keys => 1,
             BuiltinFunction::IoOpen => 2,
             BuiltinFunction::IoPopen => 2,
             BuiltinFunction::IoReadAll => 1,
@@ -70,6 +75,7 @@ impl BuiltinFunction {
             BuiltinFunction::IoFlush => 1,
             BuiltinFunction::IoClose => 1,
             BuiltinFunction::IoExists => 1,
+            BuiltinFunction::Count => 1,
             BuiltinFunction::ToString => 1,
             BuiltinFunction::TypeOf => 1,
             BuiltinFunction::Assert => 1,
@@ -108,39 +114,16 @@ impl BuiltinFunction {
             5 => Some(BuiltinFunction::MapNew),
             6 => Some(BuiltinFunction::Get),
             7 => Some(BuiltinFunction::Set),
-            8 => Some(BuiltinFunction::IoOpen),
-            9 => Some(BuiltinFunction::IoPopen),
-            10 => Some(BuiltinFunction::IoReadAll),
-            11 => Some(BuiltinFunction::IoReadLine),
-            12 => Some(BuiltinFunction::IoWrite),
-            13 => Some(BuiltinFunction::IoFlush),
-            14 => Some(BuiltinFunction::IoClose),
-            15 => Some(BuiltinFunction::IoExists),
-            _ => None,
-        }
-    }
-
-    pub(crate) fn from_name(name: &str) -> Option<Self> {
-        match name {
-            "len" => Some(BuiltinFunction::Len),
-            "slice" => Some(BuiltinFunction::Slice),
-            "concat" => Some(BuiltinFunction::Concat),
-            "array_new" => Some(BuiltinFunction::ArrayNew),
-            "array_push" => Some(BuiltinFunction::ArrayPush),
-            "map_new" => Some(BuiltinFunction::MapNew),
-            "get" => Some(BuiltinFunction::Get),
-            "set" => Some(BuiltinFunction::Set),
-            "io_open" => Some(BuiltinFunction::IoOpen),
-            "io_popen" => Some(BuiltinFunction::IoPopen),
-            "io_read_all" => Some(BuiltinFunction::IoReadAll),
-            "io_read_line" => Some(BuiltinFunction::IoReadLine),
-            "io_write" => Some(BuiltinFunction::IoWrite),
-            "io_flush" => Some(BuiltinFunction::IoFlush),
-            "io_close" => Some(BuiltinFunction::IoClose),
-            "io_exists" => Some(BuiltinFunction::IoExists),
-            "__to_string" => Some(BuiltinFunction::ToString),
-            "type_of" => Some(BuiltinFunction::TypeOf),
-            "assert" => Some(BuiltinFunction::Assert),
+            8 => Some(BuiltinFunction::Keys),
+            9 => Some(BuiltinFunction::IoOpen),
+            10 => Some(BuiltinFunction::IoPopen),
+            11 => Some(BuiltinFunction::IoReadAll),
+            12 => Some(BuiltinFunction::IoReadLine),
+            13 => Some(BuiltinFunction::IoWrite),
+            14 => Some(BuiltinFunction::IoFlush),
+            15 => Some(BuiltinFunction::IoClose),
+            16 => Some(BuiltinFunction::IoExists),
+            17 => Some(BuiltinFunction::Count),
             _ => None,
         }
     }

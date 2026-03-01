@@ -290,10 +290,10 @@ fn javascript_modulo_and_logical_operators_work() {
 }
 
 #[test]
-fn javascript_null_literal_is_supported() {
+fn javascript_typeof_operator_is_supported() {
     let source = r#"
         const value = null;
-        type_of(value) == "null";
+        typeof value == "null";
     "#;
 
     let compiled = compile_source_with_flavor(source, SourceFlavor::JavaScript)
@@ -302,4 +302,38 @@ fn javascript_null_literal_is_supported() {
     let status = vm.run().expect("vm should run");
     assert_eq!(status, VmStatus::Halted);
     assert_eq!(vm.stack(), &[Value::Bool(true)]);
+}
+
+#[test]
+fn javascript_typeof_property_name_is_not_rewritten_as_operator() {
+    let source = r#"
+        const obj = { typeof: 42 };
+        obj.typeof;
+    "#;
+
+    let compiled = compile_source_with_flavor(source, SourceFlavor::JavaScript)
+        .expect("compile should succeed");
+    let mut vm = Vm::with_locals(compiled.program, compiled.locals);
+    let status = vm.run().expect("vm should run");
+    assert_eq!(status, VmStatus::Halted);
+    assert_eq!(vm.stack(), &[Value::Int(42)]);
+}
+
+#[test]
+fn javascript_direct_builtin_len_call_is_rejected() {
+    let source = r#"
+        let value = "hello";
+        len(value);
+    "#;
+
+    let err = match compile_source_with_flavor(source, SourceFlavor::JavaScript) {
+        Ok(_) => panic!("direct builtin len call should be rejected in JavaScript frontend"),
+        Err(err) => err,
+    };
+    match err {
+        vm::SourceError::Parse(parse) => {
+            assert!(parse.message.contains("not exposed in JavaScript frontend"));
+        }
+        other => panic!("unexpected error: {other}"),
+    }
 }

@@ -87,12 +87,12 @@ fn hex_digit_to_int_table() {
 fn hex_to_bytes(text) {
     let out = [];
     let i = 0;
-    let n = len(text);
+    let n = (text).length;
     let hex_lookup = hex_digit_to_int_table();
     while i + 1 < n {
-        let hi = hex_lookup[slice(text, i, 1)];
-        let lo = hex_lookup[slice(text, i + 1, 1)];
-        out[len(out)] = hi * 16 + lo;
+        let hi = hex_lookup[(text)[i:(i + 1)]];
+        let lo = hex_lookup[(text)[(i + 1):(i + 2)]];
+        out[(out).length] = hi * 16 + lo;
         i = i + 2;
     }
     out;
@@ -102,7 +102,7 @@ fn bytes_to_hex(values) {
     let out = "";
     let hex_digits = hex_digit_text_table();
     let i = 0;
-    let n = len(values);
+    let n = (values).length;
     while i < n {
         let byte = normalize_byte(values[i]);
         out = out + hex_digits[byte / 16];
@@ -115,9 +115,9 @@ fn bytes_to_hex(values) {
 fn append_array(dst, src) {
     let out = dst;
     let i = 0;
-    let n = len(src);
+    let n = (src).length;
     while i < n {
-        out[len(out)] = src[i];
+        out[(out).length] = src[i];
         i = i + 1;
     }
     out;
@@ -279,11 +279,11 @@ fn inv_mix_columns(state, mul9, mul11, mul13, mul14) {
 }
 
 fn expand_key_128(key_bytes, sbox) {
-    assert(len(key_bytes) == 16);
+    assert((key_bytes).length == 16);
     let expanded = [];
     let i = 0;
     while i < 16 {
-        expanded[len(expanded)] = normalize_byte(key_bytes[i]);
+        expanded[(expanded).length] = normalize_byte(key_bytes[i]);
         i = i + 1;
     }
 
@@ -315,7 +315,7 @@ fn expand_key_128(key_bytes, sbox) {
         let k = 0;
         while k < 4 {
             let value = safe_xor(expanded[bytes_generated - 16], temp[k]);
-            expanded[len(expanded)] = value;
+            expanded[(expanded).length] = value;
             bytes_generated = bytes_generated + 1;
             k = k + 1;
         }
@@ -364,10 +364,10 @@ fn decrypt_block(block, expanded_key, inv_sbox, mul9, mul11, mul13, mul14) {
 
 fn pkcs7_pad(values) {
     let out = copy_array(values);
-    let pad_len = 16 - modn(len(out), 16);
+    let pad_len = 16 - modn((out).length, 16);
     let i = 0;
     while i < pad_len {
-        out[len(out)] = pad_len;
+        out[(out).length] = pad_len;
         i = i + 1;
     }
     out;
@@ -397,20 +397,20 @@ fn clamp_pkcs7_pad_len(pad_len) {
 
 fn pkcs7_unpad(values) {
     let out = copy_array(values);
-    let total = len(out);
+    let total = (out).length;
     if total > 0 {
         let raw_pad_len = out[total - 1];
         let pad_len = clamp_pkcs7_pad_len(raw_pad_len);
         if pad_len > 0 {
-            out = slice(out, 0, total - pad_len);
+            out = (out)[0:(total - pad_len)];
         }
     }
     out;
 }
 
 fn aes_128_cbc_encrypt_bytes(plaintext, key_bytes, iv_bytes) {
-    assert(len(key_bytes) == 16);
-    assert(len(iv_bytes) == 16);
+    assert((key_bytes).length == 16);
+    assert((iv_bytes).length == 16);
 
     let sbox = sbox_table();
     let mul2 = mul2_table();
@@ -421,9 +421,9 @@ fn aes_128_cbc_encrypt_bytes(plaintext, key_bytes, iv_bytes) {
     let out = [];
     let previous = copy_array(iv_bytes);
     let offset = 0;
-    let total = len(padded);
+    let total = (padded).length;
     while offset < total {
-        let block = slice(padded, offset, 16);
+        let block = (padded)[offset:(offset + 16)];
         let i = 0;
         while i < 16 {
             block[i] = safe_xor(block[i], previous[i]);
@@ -438,9 +438,9 @@ fn aes_128_cbc_encrypt_bytes(plaintext, key_bytes, iv_bytes) {
 }
 
 fn aes_128_cbc_decrypt_bytes(ciphertext, key_bytes, iv_bytes) {
-    assert(len(key_bytes) == 16);
-    assert(len(iv_bytes) == 16);
-    assert(modn(len(ciphertext), 16) == 0);
+    assert((key_bytes).length == 16);
+    assert((iv_bytes).length == 16);
+    assert(modn((ciphertext).length, 16) == 0);
 
     let sbox = sbox_table();
     let inv_sbox = inv_sbox_table();
@@ -453,9 +453,9 @@ fn aes_128_cbc_decrypt_bytes(ciphertext, key_bytes, iv_bytes) {
     let out = [];
     let previous = copy_array(iv_bytes);
     let offset = 0;
-    let total = len(ciphertext);
+    let total = (ciphertext).length;
     while offset < total {
-        let block = slice(ciphertext, offset, 16);
+        let block = (ciphertext)[offset:(offset + 16)];
         let decrypted = decrypt_block(block, expanded_key, inv_sbox, mul9, mul11, mul13, mul14);
         let i = 0;
         while i < 16 {

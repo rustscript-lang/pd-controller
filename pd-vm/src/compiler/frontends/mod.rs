@@ -34,7 +34,7 @@ pub(super) fn is_ident_continue(ch: char) -> bool {
 
 impl FrontendCompiler for RustScriptCompiler {
     fn lower_to_ir(&self, source: &str) -> Result<FrontendIr, ParseError> {
-        let lowered = rustscript::lower(source);
+        let lowered = rustscript::lower(source)?;
         parse_with_parser(&lowered, false, false)
     }
 }

@@ -135,6 +135,8 @@ Host calls must be explicitly imported:
 - Lua: `require("vm")`
 - Scheme: `(import ...)` / `(require ...)` forms for `"vm"`
 
+Compiler subset limitations and TODOs are tracked in `compiler/README.md`.
+
 ## Wasm parser/compiler mode
 
 For browser/editor linting scenarios, `pd-vm` now supports a compiler-only build that excludes VM runtime/JIT/debugger/CLI.

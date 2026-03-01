@@ -1313,7 +1313,7 @@ fn lower_for_each_stmt(
     push_line(
         out,
         indent,
-        &format!("for (let {idx} = 0; {idx} < len({vec}); {idx} = {idx} + 1) {{"),
+        &format!("for (let {idx} = 0; {idx} < ({vec}).length; {idx} = {idx} + 1) {{"),
     );
     push_line(out, indent + 1, &format!("{callable}(({vec})[{idx}]);"));
     push_line(out, indent, "}");
@@ -1864,6 +1864,16 @@ fn lower_list_expr(items: &[SchemeForm], line: usize) -> Result<String, ParseErr
     })?;
     let args = &items[1..];
 
+    if is_forbidden_scheme_builtin_name(head) {
+        return Err(ParseError {
+            line,
+            message: format!(
+                "direct builtin call '{head}' is not exposed in Scheme frontend; {}",
+                scheme_builtin_syntax_hint(head)
+            ),
+        });
+    }
+
     match head {
         // Arithmetic
         "+" => {
@@ -2001,6 +2011,16 @@ fn lower_list_expr(items: &[SchemeForm], line: usize) -> Result<String, ParseErr
         "or" => lower_or_expr(args),
 
         // Type predicates
+        "type" | "type-of" => {
+            if args.len() != 1 {
+                return Err(ParseError {
+                    line,
+                    message: format!("{head} expects exactly one argument"),
+                });
+            }
+            let value = lower_expr(&args[0])?;
+            Ok(format!("type({value})"))
+        }
         "null?" => lower_type_check(args, line, "null"),
         "number?" | "integer?" => lower_type_check(args, line, "int"),
         "string?" => lower_type_check(args, line, "string"),
@@ -2066,7 +2086,7 @@ fn lower_list_expr(items: &[SchemeForm], line: usize) -> Result<String, ParseErr
                 &t,
                 &cdr,
                 &format!(
-                    "if type_of({t}) == \"array\" => {{ concat([{car}], {t}) }} else => {{ [{car}, {t}] }}"
+                    "if type({t}) == \"array\" => {{ ([{car}] + ({t})) }} else => {{ [{car}, {t}] }}"
                 ),
             ))
         }
@@ -2118,7 +2138,7 @@ fn lower_list_expr(items: &[SchemeForm], line: usize) -> Result<String, ParseErr
                 });
             }
             let list = lower_expr(&args[0])?;
-            Ok(format!("len({list})"))
+            Ok(format!("({list}).length"))
         }
         "append" => {
             if args.is_empty() {
@@ -2130,7 +2150,7 @@ fn lower_list_expr(items: &[SchemeForm], line: usize) -> Result<String, ParseErr
             let mut expr = lower_expr(&args[0])?;
             for arg in &args[1..] {
                 let rhs = lower_expr(arg)?;
-                expr = format!("concat({expr}, {rhs})");
+                expr = format!("(({expr}) + ({rhs}))");
             }
             Ok(expr)
         }
@@ -2149,7 +2169,7 @@ fn lower_list_expr(items: &[SchemeForm], line: usize) -> Result<String, ParseErr
                 &r,
                 "[]",
                 &format!(
-                    "for (let {i} = len({v}) - 1; !({i} < 0); {i} = {i} - 1) {{ {r} = array_push({r}, ({v})[{i}]); }} {r}"
+                    "for (let {i} = ({v}).length - 1; !({i} < 0); {i} = {i} - 1) {{ {r} = ({r}) + [(({v})[{i}])]; }} {r}"
                 ),
             );
             Ok(wrap_let_expr(&v, &list, &body))
@@ -2183,7 +2203,7 @@ fn lower_list_expr(items: &[SchemeForm], line: usize) -> Result<String, ParseErr
                 });
             }
             let s = lower_expr(&args[0])?;
-            Ok(format!("len({s})"))
+            Ok(format!("({s}).length"))
         }
         "string-ref" => {
             if args.len() != 2 {
@@ -2221,7 +2241,7 @@ fn lower_list_expr(items: &[SchemeForm], line: usize) -> Result<String, ParseErr
                 });
             }
             let n = lower_expr(&args[0])?;
-            Ok(format!("__to_string({n})"))
+            Ok(format!("(\"\" + ({n}))"))
         }
         "string->number" => {
             if args.len() != 1 {
@@ -2260,6 +2280,16 @@ fn lower_list_expr(items: &[SchemeForm], line: usize) -> Result<String, ParseErr
                 rendered.push(format!("{key}: {value}"));
             }
             Ok(format!("{{{}}}", rendered.join(", ")))
+        }
+        "keys" => {
+            if args.len() != 1 {
+                return Err(ParseError {
+                    line,
+                    message: "keys expects exactly one argument".to_string(),
+                });
+            }
+            let container = lower_expr(&args[0])?;
+            Ok(format!("({container}).keys"))
         }
         "vector-ref" => {
             if args.len() != 2 {
@@ -2378,6 +2408,45 @@ fn lower_list_expr(items: &[SchemeForm], line: usize) -> Result<String, ParseErr
             }
             Ok(format!("{callee}({})", rendered.join(", ")))
         }
+    }
+}
+
+fn is_forbidden_scheme_builtin_name(name: &str) -> bool {
+    matches!(
+        name,
+        "len"
+            | "slice"
+            | "concat"
+            | "array_new"
+            | "array_push"
+            | "map_new"
+            | "get"
+            | "set"
+            | "count"
+            | "__to_string"
+            | "type_of"
+            | "io_open"
+            | "io_popen"
+            | "io_read_all"
+            | "io_read_line"
+            | "io_write"
+            | "io_flush"
+            | "io_close"
+            | "io_exists"
+    )
+}
+
+fn scheme_builtin_syntax_hint(name: &str) -> &'static str {
+    match name {
+        "len" | "count" => "use (length value)",
+        "type_of" => "use (type value) or (type-of value)",
+        "get" => "use (vector-ref v i) or (hash-ref m k)",
+        "set" => "use (vector-set! v i x) or (hash-set! m k x)",
+        "concat" => "use (+ a b) for strings or (append xs ys) for lists",
+        "slice" => "use (slice-range ...), (slice-to ...), or (slice-from ...)",
+        "io_open" | "io_popen" | "io_read_all" | "io_read_line" | "io_write" | "io_flush"
+        | "io_close" | "io_exists" => "use io namespace syntax (for example io::open)",
+        _ => "use Scheme frontend forms instead of VM builtin helpers",
     }
 }
 
@@ -2807,7 +2876,7 @@ fn lower_type_check(
         });
     }
     let val = lower_expr(&args[0])?;
-    Ok(format!("type_of({val}) == \"{}\"", expected_type))
+    Ok(format!("type({val}) == \"{}\"", expected_type))
 }
 
 fn lower_predicate_expr<F>(
@@ -2850,7 +2919,7 @@ fn lower_map_expr(args: &[SchemeForm], line: usize) -> Result<String, ParseError
         &r,
         "[]",
         &format!(
-            "for (let {i} = 0; {i} < len({v}); {i} = {i} + 1) {{ {r} = array_push({r}, {callable}(({v})[{i}])); }} {r}"
+            "for (let {i} = 0; {i} < ({v}).length; {i} = {i} + 1) {{ {r} = ({r}) + [({callable}(({v})[{i}]))]; }} {r}"
         ),
     );
     let list_body = wrap_let_expr(&v, &list, &map_body);
@@ -2884,7 +2953,7 @@ fn lower_filter_expr(args: &[SchemeForm], line: usize) -> Result<String, ParseEr
         &r,
         "[]",
         &format!(
-            "for (let {i} = 0; {i} < len({v}); {i} = {i} + 1) {{ let {x} = ({v})[{i}]; if {callable}({x}) {{ {r} = array_push({r}, {x}); }} }} {r}"
+            "for (let {i} = 0; {i} < ({v}).length; {i} = {i} + 1) {{ let {x} = ({v})[{i}]; if {callable}({x}) {{ {r} = ({r}) + [({x})]; }} }} {r}"
         ),
     );
     let list_body = wrap_let_expr(&v, &list, &filter_body);

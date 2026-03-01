@@ -339,7 +339,7 @@ fn lua_do_end_block_is_supported() {
 fn lua_nil_and_concat_and_single_quoted_strings_are_supported() {
     let source = r#"
         local s = 'a' .. 'b'
-        if type_of(nil) == "null" and s == "ab" then
+        if type(nil) == "null" and s == "ab" then
             42
         else
             0
@@ -352,6 +352,25 @@ fn lua_nil_and_concat_and_single_quoted_strings_are_supported() {
     let status = vm.run().expect("vm should run");
     assert_eq!(status, VmStatus::Halted);
     assert_eq!(vm.stack(), &[Value::Int(42)]);
+}
+
+#[test]
+fn lua_direct_builtin_len_call_is_rejected() {
+    let source = r#"
+        local value = "hello"
+        len(value)
+    "#;
+
+    let err = match compile_source_with_flavor(source, SourceFlavor::Lua) {
+        Ok(_) => panic!("direct builtin len call should be rejected in Lua frontend"),
+        Err(err) => err,
+    };
+    match err {
+        vm::SourceError::Parse(parse) => {
+            assert!(parse.message.contains("unknown function 'len'"));
+        }
+        other => panic!("unexpected error: {other}"),
+    }
 }
 
 #[test]
@@ -395,4 +414,112 @@ fn lua_string_pattern_methods_are_rejected() {
         }
         other => panic!("unexpected error: {other}"),
     }
+}
+
+#[test]
+fn lua_mixed_table_literal_supports_array_and_map_parts() {
+    let source = r#"
+        local t = {1, 2, x = 7, 3, y = 9}
+        local a = t[0] + t[1] + t[2]
+        local b = t.x + t["y"]
+        a + b
+    "#;
+
+    let compiled =
+        compile_source_with_flavor(source, SourceFlavor::Lua).expect("compile should succeed");
+    let mut vm = Vm::with_locals(compiled.program, compiled.locals);
+    let status = vm.run().expect("vm should run");
+    assert_eq!(status, VmStatus::Halted);
+    assert_eq!(vm.stack(), &[Value::Int(22)]);
+}
+
+#[test]
+fn lua_sparse_table_write_degrades_array_to_map_and_keeps_lua_length() {
+    let source = r#"
+        local t = {1, 2}
+        t[100] = 7
+        local dense = t[0] + t[1]
+        local sparse = t[100]
+        local count = #t
+        if dense == 3 and sparse == 7 and count == 2 then
+            42
+        else
+            0
+        end
+    "#;
+
+    let compiled =
+        compile_source_with_flavor(source, SourceFlavor::Lua).expect("compile should succeed");
+    let mut vm = Vm::with_locals(compiled.program, compiled.locals);
+    let status = vm.run().expect("vm should run");
+    assert_eq!(status, VmStatus::Halted);
+    assert_eq!(vm.stack(), &[Value::Int(42)]);
+}
+
+#[test]
+fn lua_pairs_and_ipairs_are_supported_for_sparse_tables() {
+    let source = r#"
+        local t = {1, 2}
+        t[100] = 7
+
+        local ipairs_count = 0
+        local ipairs_sum_k = 0
+        local ipairs_sum_v = 0
+        for k, v in ipairs(t) do
+            ipairs_count = ipairs_count + 1
+            ipairs_sum_k = ipairs_sum_k + k
+            ipairs_sum_v = ipairs_sum_v + v
+        end
+
+        local pairs_count = 0
+        local pairs_sum_k = 0
+        local pairs_sum_v = 0
+        for k, v in pairs(t) do
+            pairs_count = pairs_count + 1
+            pairs_sum_k = pairs_sum_k + k
+            pairs_sum_v = pairs_sum_v + v
+        end
+
+        if ipairs_count == 2 and ipairs_sum_k == 1 and ipairs_sum_v == 3 and pairs_count == 3 and pairs_sum_k == 101 and pairs_sum_v == 10 then
+            42
+        else
+            0
+        end
+    "#;
+
+    let compiled =
+        compile_source_with_flavor(source, SourceFlavor::Lua).expect("compile should succeed");
+    let mut vm = Vm::with_locals(compiled.program, compiled.locals);
+    let status = vm.run().expect("vm should run");
+    assert_eq!(status, VmStatus::Halted);
+    assert_eq!(vm.stack(), &[Value::Int(42)]);
+}
+
+#[test]
+fn lua_pairs_and_ipairs_support_single_loop_variable() {
+    let source = r#"
+        local t = {3, 4}
+        local ipairs_sum = 0
+        for i in ipairs(t) do
+            ipairs_sum = ipairs_sum + i
+        end
+
+        local pairs_sum = 0
+        for k in pairs(t) do
+            pairs_sum = pairs_sum + k
+        end
+
+        if ipairs_sum == 1 and pairs_sum == 1 then
+            42
+        else
+            0
+        end
+    "#;
+
+    let compiled =
+        compile_source_with_flavor(source, SourceFlavor::Lua).expect("compile should succeed");
+    let mut vm = Vm::with_locals(compiled.program, compiled.locals);
+    let status = vm.run().expect("vm should run");
+    assert_eq!(status, VmStatus::Halted);
+    assert_eq!(vm.stack(), &[Value::Int(42)]);
 }

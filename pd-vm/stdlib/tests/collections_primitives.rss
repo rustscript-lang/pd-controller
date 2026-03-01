@@ -1,12 +1,12 @@
 let array_from_braces = {1, 2, 3};
-assert(len(array_from_braces) == 3);
+assert(array_from_braces.length == 3);
 assert(array_from_braces[0] == 1);
 assert(array_from_braces[2] == 3);
 
 let values = [];
-values[len(values)] = 10;
-values[len(values)] = 20;
-assert(len(values) == 2);
+values[values.length] = 10;
+values[values.length] = 20;
+assert(values.length == 2);
 assert(values[0] == 10);
 values[1] = values[1] + 5;
 assert(values[1] == 25);

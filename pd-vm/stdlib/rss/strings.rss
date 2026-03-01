@@ -1,4 +1,4 @@
-// String helpers implemented in pure RustScript over builtin syntax.
+// String helpers implemented in pure RustScript using language syntax.
 
 fn is_whitespace(ch) {
     let is_whitespace_value = false;
@@ -26,7 +26,7 @@ pub fn equals(lhs, rhs) {
 }
 
 pub fn is_empty(value) {
-    len(value) == 0;
+    (value).length == 0;
 }
 
 pub fn non_empty(value) {
@@ -34,8 +34,8 @@ pub fn non_empty(value) {
 }
 
 pub fn contains(haystack, needle) {
-    let contains_haystack_len = len(haystack);
-    let contains_needle_len = len(needle);
+    let contains_haystack_len = (haystack).length;
+    let contains_needle_len = (needle).length;
     let contains_found = false;
     if contains_needle_len == 0 {
         contains_found = true;
@@ -45,7 +45,7 @@ pub fn contains(haystack, needle) {
             let contains_limit = contains_haystack_len - contains_needle_len + 1;
             let contains_index = 0;
             while contains_index < contains_limit {
-                if equals(slice(haystack, contains_index, contains_needle_len), needle) {
+                if equals((haystack)[contains_index:(contains_index + contains_needle_len)], needle) {
                     contains_found = true;
                     break;
                 } else {
@@ -59,12 +59,12 @@ pub fn contains(haystack, needle) {
 
 pub fn split(value, separator) {
     let split_output = [];
-    let split_value_len = len(value);
-    let split_separator_len = len(separator);
+    let split_value_len = (value).length;
+    let split_separator_len = (separator).length;
     if split_separator_len == 0 {
         let split_char_index = 0;
         while split_char_index < split_value_len {
-            split_output[len(split_output)] = slice(value, split_char_index, 1);
+            split_output[(split_output).length] = (value)[split_char_index:(split_char_index + 1)];
             split_char_index = split_char_index + 1;
         }
     } else {
@@ -72,26 +72,26 @@ pub fn split(value, separator) {
         let split_part_start = 0;
         let split_limit = split_value_len - split_separator_len + 1;
         while split_cursor < split_limit {
-            if equals(slice(value, split_cursor, split_separator_len), separator) {
-                split_output[len(split_output)] =
-                    slice(value, split_part_start, split_cursor - split_part_start);
+            if equals((value)[split_cursor:(split_cursor + split_separator_len)], separator) {
+                split_output[(split_output).length] =
+                    (value)[split_part_start:split_cursor];
                 split_part_start = split_cursor + split_separator_len;
                 split_cursor = split_part_start;
             } else {
                 split_cursor = split_cursor + 1;
             }
         }
-        split_output[len(split_output)] =
-            slice(value, split_part_start, split_value_len - split_part_start);
+        split_output[(split_output).length] =
+            (value)[split_part_start:split_value_len];
     }
     split_output;
 }
 
 pub fn trim(value) {
-    let trim_len = len(value);
+    let trim_len = (value).length;
     let trim_start = 0;
     while trim_start < trim_len {
-        if is_whitespace(slice(value, trim_start, 1)) {
+        if is_whitespace((value)[trim_start:(trim_start + 1)]) {
             trim_start = trim_start + 1;
         } else {
             break;
@@ -100,18 +100,18 @@ pub fn trim(value) {
 
     let trim_end = trim_len;
     while trim_end > trim_start {
-        if is_whitespace(slice(value, trim_end - 1, 1)) {
+        if is_whitespace((value)[(trim_end - 1):trim_end]) {
             trim_end = trim_end - 1;
         } else {
             break;
         }
     }
-    slice(value, trim_start, trim_end - trim_start);
+    (value)[trim_start:trim_end];
 }
 
 pub fn replace(value, needle, replacement) {
-    let replace_value_len = len(value);
-    let replace_needle_len = len(needle);
+    let replace_value_len = (value).length;
+    let replace_needle_len = (needle).length;
     let replace_result = value;
     if replace_needle_len == 0 {
     } else {
@@ -119,15 +119,15 @@ pub fn replace(value, needle, replacement) {
         let replace_output = "";
         while replace_index < replace_value_len {
             if replace_index + replace_needle_len > replace_value_len {
-                replace_output = replace_output + slice(value, replace_index, 1);
+                replace_output = replace_output + (value)[replace_index:(replace_index + 1)];
                 replace_index = replace_index + 1;
             } else {
-                if equals(slice(value, replace_index, replace_needle_len), needle) {
+                if equals((value)[replace_index:(replace_index + replace_needle_len)], needle) {
                     replace_output = replace_output + replacement;
                     replace_index = replace_index + replace_needle_len;
                 } else {
                     replace_output =
-                        replace_output + slice(value, replace_index, 1);
+                        replace_output + (value)[replace_index:(replace_index + 1)];
                     replace_index = replace_index + 1;
                 }
             }

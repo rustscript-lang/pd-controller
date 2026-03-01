@@ -3,8 +3,10 @@ use super::{is_ident_continue, is_ident_start};
 use std::collections::HashSet;
 
 pub(super) fn lower(source: &str) -> Result<String, ParseError> {
+    reject_js_direct_builtin_calls(source)?;
     let console_rewritten = rewrite_console_log_calls(source);
-    let keyword_rewritten = rewrite_keywords(&console_rewritten, |ident| match ident {
+    let typeof_rewritten = rewrite_js_typeof_operator(&console_rewritten);
+    let keyword_rewritten = rewrite_keywords(&typeof_rewritten, |ident| match ident {
         "function" => Some("fn"),
         "const" => Some("let"),
         _ => None,
@@ -75,6 +77,409 @@ pub(super) fn lower(source: &str) -> Result<String, ParseError> {
         lines.push(rewrite_js_arrow_line(&namespace_rewritten, line_no)?);
     }
     Ok(lines.join("\n"))
+}
+
+fn reject_js_direct_builtin_calls(source: &str) -> Result<(), ParseError> {
+    let bytes = source.as_bytes();
+    let mut i = 0usize;
+    let mut line = 1usize;
+    let mut in_string: Option<u8> = None;
+    let mut escaped = false;
+    let mut in_line_comment = false;
+    let mut in_block_comment = false;
+
+    while i < bytes.len() {
+        let b = bytes[i];
+
+        if in_line_comment {
+            if b == b'\n' {
+                in_line_comment = false;
+                line += 1;
+            }
+            i += 1;
+            continue;
+        }
+
+        if in_block_comment {
+            if b == b'\n' {
+                line += 1;
+                i += 1;
+                continue;
+            }
+            if b == b'*' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
+                in_block_comment = false;
+                i += 2;
+                continue;
+            }
+            i += 1;
+            continue;
+        }
+
+        if let Some(delim) = in_string {
+            if escaped {
+                escaped = false;
+            } else if b == b'\\' {
+                escaped = true;
+            } else if b == delim {
+                in_string = None;
+            } else if b == b'\n' {
+                line += 1;
+            }
+            i += 1;
+            continue;
+        }
+
+        if b == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
+            in_line_comment = true;
+            i += 2;
+            continue;
+        }
+
+        if b == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
+            in_block_comment = true;
+            i += 2;
+            continue;
+        }
+
+        if b == b'"' || b == b'\'' || b == b'`' {
+            in_string = Some(b);
+            escaped = false;
+            i += 1;
+            continue;
+        }
+
+        if b == b'\n' {
+            line += 1;
+            i += 1;
+            continue;
+        }
+
+        if !is_ident_start(b as char) {
+            i += 1;
+            continue;
+        }
+
+        let start = i;
+        i += 1;
+        while i < bytes.len() && is_ident_continue(bytes[i] as char) {
+            i += 1;
+        }
+        let ident = &source[start..i];
+        if !is_forbidden_js_builtin_name(ident) {
+            continue;
+        }
+
+        let prev_non_ws = previous_non_whitespace(bytes, start);
+        if prev_non_ws.is_some_and(|idx| bytes[idx] == b'.') {
+            continue;
+        }
+
+        let next = skip_js_whitespace(bytes, i);
+        if next < bytes.len() && bytes[next] == b'(' {
+            let hint = js_builtin_syntax_hint(ident);
+            return Err(ParseError {
+                line,
+                message: format!(
+                    "direct builtin call '{ident}(...)' is not exposed in JavaScript frontend; {hint}"
+                ),
+            });
+        }
+    }
+
+    Ok(())
+}
+
+fn is_forbidden_js_builtin_name(name: &str) -> bool {
+    matches!(
+        name,
+        "len"
+            | "slice"
+            | "concat"
+            | "array_new"
+            | "array_push"
+            | "map_new"
+            | "get"
+            | "set"
+            | "count"
+            | "__to_string"
+            | "type_of"
+            | "io_open"
+            | "io_popen"
+            | "io_read_all"
+            | "io_read_line"
+            | "io_write"
+            | "io_flush"
+            | "io_close"
+            | "io_exists"
+    )
+}
+
+fn js_builtin_syntax_hint(name: &str) -> &'static str {
+    match name {
+        "len" | "count" => "use '.length' syntax",
+        "type_of" => "use 'typeof value'",
+        "get" => "use index/member access syntax ('obj[key]' or 'obj.member')",
+        "set" => "use assignment syntax ('obj[key] = value')",
+        "concat" => "use '+' for string/array concatenation",
+        "slice" => "use slice index syntax ('value[start:end]')",
+        "io_open" | "io_popen" | "io_read_all" | "io_read_line" | "io_write" | "io_flush"
+        | "io_close" | "io_exists" => "use io namespace syntax (for example 'io::open(...)')",
+        _ => "use frontend language syntax instead of VM builtin helpers",
+    }
+}
+
+fn rewrite_js_typeof_operator(source: &str) -> String {
+    const TYPEOF: &[u8] = b"typeof";
+
+    let bytes = source.as_bytes();
+    let mut out = String::with_capacity(source.len());
+    let mut i = 0usize;
+    let mut in_string: Option<u8> = None;
+    let mut escaped = false;
+    let mut in_line_comment = false;
+    let mut in_block_comment = false;
+
+    while i < bytes.len() {
+        let b = bytes[i];
+
+        if in_block_comment {
+            out.push(b as char);
+            if b == b'*' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
+                out.push('/');
+                i += 2;
+                in_block_comment = false;
+                continue;
+            }
+            i += 1;
+            continue;
+        }
+
+        if in_line_comment {
+            out.push(b as char);
+            if b == b'\n' {
+                in_line_comment = false;
+            }
+            i += 1;
+            continue;
+        }
+
+        if let Some(delim) = in_string {
+            out.push(b as char);
+            if escaped {
+                escaped = false;
+            } else if b == b'\\' {
+                escaped = true;
+            } else if b == delim {
+                in_string = None;
+            }
+            i += 1;
+            continue;
+        }
+
+        if b == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
+            out.push('/');
+            out.push('/');
+            i += 2;
+            in_line_comment = true;
+            continue;
+        }
+
+        if b == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
+            out.push('/');
+            out.push('*');
+            i += 2;
+            in_block_comment = true;
+            continue;
+        }
+
+        if b == b'"' || b == b'\'' || b == b'`' {
+            out.push(b as char);
+            in_string = Some(b);
+            escaped = false;
+            i += 1;
+            continue;
+        }
+
+        let is_ident_boundary = i == 0 || !is_ident_continue(bytes[i - 1] as char);
+        let prev_non_ws = previous_non_whitespace(bytes, i);
+        let is_member_name = prev_non_ws.is_some_and(|idx| bytes[idx] == b'.');
+        if is_ident_boundary
+            && !is_member_name
+            && i + TYPEOF.len() <= bytes.len()
+            && &bytes[i..i + TYPEOF.len()] == TYPEOF
+            && (i + TYPEOF.len() == bytes.len()
+                || !is_ident_continue(bytes[i + TYPEOF.len()] as char))
+        {
+            let operand_start = skip_js_whitespace(bytes, i + TYPEOF.len());
+            if let Some(operand_end) = parse_js_typeof_operand_end(source, operand_start) {
+                let operand = source[operand_start..operand_end].trim();
+                out.push_str("type(");
+                out.push_str(operand);
+                out.push(')');
+                i = operand_end;
+                continue;
+            }
+        }
+
+        out.push(b as char);
+        i += 1;
+    }
+
+    out
+}
+
+fn parse_js_typeof_operand_end(source: &str, start: usize) -> Option<usize> {
+    let bytes = source.as_bytes();
+    if start >= bytes.len() {
+        return None;
+    }
+
+    let mut cursor = match bytes[start] {
+        b'(' => parse_js_balanced_segment_end(source, start, b'(', b')')?,
+        b'"' | b'\'' | b'`' => parse_js_string_end(source, start)?,
+        b if is_ident_start(b as char) => {
+            let mut end = start + 1;
+            while end < bytes.len() && is_ident_continue(bytes[end] as char) {
+                end += 1;
+            }
+            end
+        }
+        b if b.is_ascii_digit() => {
+            let mut end = start + 1;
+            while end < bytes.len() && (bytes[end].is_ascii_digit() || bytes[end] == b'.') {
+                end += 1;
+            }
+            end
+        }
+        _ => return None,
+    };
+
+    loop {
+        let ws = skip_js_whitespace(bytes, cursor);
+        if ws >= bytes.len() {
+            return Some(ws);
+        }
+
+        if bytes[ws] == b'.' {
+            let member_start = skip_js_whitespace(bytes, ws + 1);
+            if member_start < bytes.len() && is_ident_start(bytes[member_start] as char) {
+                let mut member_end = member_start + 1;
+                while member_end < bytes.len() && is_ident_continue(bytes[member_end] as char) {
+                    member_end += 1;
+                }
+                cursor = member_end;
+                continue;
+            }
+            return Some(ws);
+        }
+
+        if bytes[ws] == b'[' {
+            cursor = parse_js_balanced_segment_end(source, ws, b'[', b']')?;
+            continue;
+        }
+
+        if bytes[ws] == b'(' {
+            cursor = parse_js_balanced_segment_end(source, ws, b'(', b')')?;
+            continue;
+        }
+
+        return Some(ws);
+    }
+}
+
+fn parse_js_balanced_segment_end(source: &str, start: usize, open: u8, close: u8) -> Option<usize> {
+    let bytes = source.as_bytes();
+    if start >= bytes.len() || bytes[start] != open {
+        return None;
+    }
+
+    let mut i = start;
+    let mut depth = 0usize;
+    let mut in_string: Option<u8> = None;
+    let mut escaped = false;
+
+    while i < bytes.len() {
+        let b = bytes[i];
+        if let Some(delim) = in_string {
+            if escaped {
+                escaped = false;
+            } else if b == b'\\' {
+                escaped = true;
+            } else if b == delim {
+                in_string = None;
+            }
+            i += 1;
+            continue;
+        }
+
+        if b == b'"' || b == b'\'' || b == b'`' {
+            in_string = Some(b);
+            escaped = false;
+            i += 1;
+            continue;
+        }
+
+        if b == open {
+            depth += 1;
+            i += 1;
+            continue;
+        }
+
+        if b == close {
+            depth = depth.saturating_sub(1);
+            i += 1;
+            if depth == 0 {
+                return Some(i);
+            }
+            continue;
+        }
+
+        i += 1;
+    }
+
+    None
+}
+
+fn parse_js_string_end(source: &str, start: usize) -> Option<usize> {
+    let bytes = source.as_bytes();
+    if start >= bytes.len() {
+        return None;
+    }
+    let quote = bytes[start];
+    if quote != b'"' && quote != b'\'' && quote != b'`' {
+        return None;
+    }
+    let mut i = start + 1;
+    let mut escaped = false;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if escaped {
+            escaped = false;
+        } else if b == b'\\' {
+            escaped = true;
+        } else if b == quote {
+            return Some(i + 1);
+        }
+        i += 1;
+    }
+    None
+}
+
+fn skip_js_whitespace(bytes: &[u8], mut index: usize) -> usize {
+    while index < bytes.len() && bytes[index].is_ascii_whitespace() {
+        index += 1;
+    }
+    index
+}
+
+fn previous_non_whitespace(bytes: &[u8], mut index: usize) -> Option<usize> {
+    while index > 0 {
+        index -= 1;
+        if !bytes[index].is_ascii_whitespace() {
+            return Some(index);
+        }
+    }
+    None
 }
 
 fn is_js_external_decl_line(line: &str) -> bool {

@@ -13,6 +13,19 @@ pub struct ClosureExpr {
 pub enum MatchPattern {
     Int(i64),
     String(String),
+    Null,
+    Type(MatchTypePattern),
+}
+
+#[derive(Clone, Debug)]
+pub enum MatchTypePattern {
+    Int,
+    Float,
+    Number,
+    Bool,
+    String,
+    Array,
+    Map,
 }
 
 #[derive(Clone, Debug)]

@@ -9,4 +9,4 @@ let decrypted = aes::decrypt_cbc_hex(ciphertext, key, iv);
 
 assert(decrypted == plaintext);
 
-slice(ciphertext, 0, 32);
+ciphertext[0:32];

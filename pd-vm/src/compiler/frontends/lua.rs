@@ -16,6 +16,16 @@ enum LuaBlock {
 #[derive(Default)]
 struct LuaLoweringContext {
     needs_string_sub_helpers: bool,
+    needs_table_len_helper: bool,
+    next_temp_id: u32,
+}
+
+impl LuaLoweringContext {
+    fn fresh_temp(&mut self, prefix: &str) -> String {
+        let id = self.next_temp_id;
+        self.next_temp_id = self.next_temp_id.saturating_add(1);
+        format!("__lua_{prefix}_{id}")
+    }
 }
 
 pub(super) fn lower_to_ir(source: &str) -> Result<FrontendIr, ParseError> {
@@ -854,6 +864,73 @@ pub(super) fn lower(source: &str) -> Result<String, ParseError> {
         if let Some(rest) = trimmed.strip_prefix("for ")
             && let Some(header) = rest.strip_suffix(" do")
         {
+            if let Some(generic) = parse_lua_generic_for_header(header) {
+                match generic.kind {
+                    LuaIteratorKind::Ipairs => {
+                        let iterable = rewrite_lua_expr(
+                            generic.iterable.trim(),
+                            &vm_namespace_aliases,
+                            &mut lowering_context,
+                            line_no,
+                        )?;
+                        lowering_context.needs_table_len_helper = true;
+                        let table_temp = lowering_context.fresh_temp("ipairs_table");
+                        out.push(format!("let {table_temp} = {iterable};"));
+                        if let Some(value_name) = generic.value_name {
+                            out.push(format!(
+                                "for (let {} = 0; {} < __lua_len({table_temp}); {} = {} + 1) {{",
+                                generic.key_name,
+                                generic.key_name,
+                                generic.key_name,
+                                generic.key_name
+                            ));
+                            out.push(format!(
+                                "let {value_name} = ({table_temp})[{}];",
+                                generic.key_name
+                            ));
+                        } else {
+                            out.push(format!(
+                                "for (let {} = 0; {} < __lua_len({table_temp}); {} = {} + 1) {{",
+                                generic.key_name,
+                                generic.key_name,
+                                generic.key_name,
+                                generic.key_name
+                            ));
+                        }
+                        blocks.push(LuaBlock::For);
+                        continue;
+                    }
+                    LuaIteratorKind::Pairs => {
+                        let iterable = rewrite_lua_expr(
+                            generic.iterable.trim(),
+                            &vm_namespace_aliases,
+                            &mut lowering_context,
+                            line_no,
+                        )?;
+                        let table_temp = lowering_context.fresh_temp("pairs_table");
+                        let keys_temp = lowering_context.fresh_temp("pairs_keys");
+                        let iter_temp = lowering_context.fresh_temp("pairs_i");
+                        out.push(format!("let {table_temp} = {iterable};"));
+                        out.push(format!("let {keys_temp} = ({table_temp}).keys;"));
+                        out.push(format!(
+                            "for (let {iter_temp} = 0; {iter_temp} < ({keys_temp}).length; {iter_temp} = {iter_temp} + 1) {{"
+                        ));
+                        out.push(format!(
+                            "let {} = ({keys_temp})[{iter_temp}];",
+                            generic.key_name
+                        ));
+                        if let Some(value_name) = generic.value_name {
+                            out.push(format!(
+                                "let {value_name} = ({table_temp})[{}];",
+                                generic.key_name
+                            ));
+                        }
+                        blocks.push(LuaBlock::For);
+                        continue;
+                    }
+                }
+            }
+
             let eq_index = header.find('=').ok_or(ParseError {
                 line: line_no,
                 message: "lua for loop must contain '='".to_string(),
@@ -1043,6 +1120,166 @@ pub(super) fn lower(source: &str) -> Result<String, ParseError> {
     }
 
     Ok(out.join("\n"))
+}
+
+#[derive(Copy, Clone)]
+enum LuaIteratorKind {
+    Pairs,
+    Ipairs,
+}
+
+struct LuaGenericFor {
+    key_name: String,
+    value_name: Option<String>,
+    iterable: String,
+    kind: LuaIteratorKind,
+}
+
+fn parse_lua_generic_for_header(header: &str) -> Option<LuaGenericFor> {
+    let (vars_raw, iter_raw) = split_once_top_level_keyword(header, "in")?;
+    let vars = split_top_level_csv(vars_raw)
+        .into_iter()
+        .map(|part| part.trim().to_string())
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>();
+    if vars.is_empty() || vars.len() > 2 {
+        return None;
+    }
+    if !vars.iter().all(|name| is_valid_lua_ident(name)) {
+        return None;
+    }
+
+    let (kind, iterable) = parse_lua_iterator_call(iter_raw.trim())?;
+    Some(LuaGenericFor {
+        key_name: vars[0].clone(),
+        value_name: vars.get(1).cloned(),
+        iterable,
+        kind,
+    })
+}
+
+fn parse_lua_iterator_call(input: &str) -> Option<(LuaIteratorKind, String)> {
+    let (kind, call_head) = if let Some(rest) = input.strip_prefix("pairs") {
+        (LuaIteratorKind::Pairs, rest)
+    } else if let Some(rest) = input.strip_prefix("ipairs") {
+        (LuaIteratorKind::Ipairs, rest)
+    } else {
+        return None;
+    };
+    let call_head = call_head.trim_start();
+    if !call_head.starts_with('(') {
+        return None;
+    }
+    let bytes = call_head.as_bytes();
+    let mut i = 0usize;
+    let mut depth = 0usize;
+    let mut in_string: Option<u8> = None;
+    let mut escaped = false;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if let Some(delim) = in_string {
+            if escaped {
+                escaped = false;
+            } else if b == b'\\' {
+                escaped = true;
+            } else if b == delim {
+                in_string = None;
+            }
+            i += 1;
+            continue;
+        }
+        if b == b'"' || b == b'\'' {
+            in_string = Some(b);
+            escaped = false;
+            i += 1;
+            continue;
+        }
+        if b == b'(' {
+            depth += 1;
+            i += 1;
+            continue;
+        }
+        if b == b')' {
+            depth = depth.saturating_sub(1);
+            i += 1;
+            if depth == 0 {
+                let remainder = call_head[i..].trim();
+                if !remainder.is_empty() {
+                    return None;
+                }
+                let iterable = call_head[1..i - 1].trim();
+                if iterable.is_empty() {
+                    return None;
+                }
+                return Some((kind, iterable.to_string()));
+            }
+            continue;
+        }
+        i += 1;
+    }
+    None
+}
+
+fn split_once_top_level_keyword<'a>(input: &'a str, keyword: &str) -> Option<(&'a str, &'a str)> {
+    let bytes = input.as_bytes();
+    let keyword_bytes = keyword.as_bytes();
+    let mut i = 0usize;
+    let mut paren_depth = 0usize;
+    let mut bracket_depth = 0usize;
+    let mut brace_depth = 0usize;
+    let mut in_string: Option<u8> = None;
+    let mut escaped = false;
+
+    while i < bytes.len() {
+        let b = bytes[i];
+        if let Some(delim) = in_string {
+            if escaped {
+                escaped = false;
+            } else if b == b'\\' {
+                escaped = true;
+            } else if b == delim {
+                in_string = None;
+            }
+            i += 1;
+            continue;
+        }
+
+        if b == b'"' || b == b'\'' {
+            in_string = Some(b);
+            escaped = false;
+            i += 1;
+            continue;
+        }
+
+        match b {
+            b'(' => paren_depth += 1,
+            b')' => paren_depth = paren_depth.saturating_sub(1),
+            b'[' => bracket_depth += 1,
+            b']' => bracket_depth = bracket_depth.saturating_sub(1),
+            b'{' => brace_depth += 1,
+            b'}' => brace_depth = brace_depth.saturating_sub(1),
+            _ => {}
+        }
+
+        if paren_depth == 0
+            && bracket_depth == 0
+            && brace_depth == 0
+            && i + keyword_bytes.len() <= bytes.len()
+            && &bytes[i..i + keyword_bytes.len()] == keyword_bytes
+        {
+            let prev_is_boundary =
+                i == 0 || bytes[i - 1].is_ascii_whitespace() || bytes[i - 1] == b',';
+            let next = i + keyword_bytes.len();
+            let next_is_boundary =
+                next >= bytes.len() || bytes[next].is_ascii_whitespace() || bytes[next] == b',';
+            if prev_is_boundary && next_is_boundary {
+                return Some((input[..i].trim_end(), input[next..].trim_start()));
+            }
+        }
+
+        i += 1;
+    }
+    None
 }
 
 fn is_lua_require_line(line: &str) -> bool {
@@ -1258,14 +1495,19 @@ fn rewrite_lua_expr(
     line_no: usize,
 ) -> Result<String, ParseError> {
     let method_rewritten = rewrite_lua_method_calls(expr, lowering_context, line_no)?;
-    let length_rewritten = rewrite_lua_length_operator(&method_rewritten, line_no)?;
+    let length_rewritten =
+        rewrite_lua_length_operator(&method_rewritten, lowering_context, line_no)?;
     Ok(rewrite_lua_expr_tokens(
         &length_rewritten,
         vm_namespace_aliases,
     ))
 }
 
-fn rewrite_lua_length_operator(expr: &str, line_no: usize) -> Result<String, ParseError> {
+fn rewrite_lua_length_operator(
+    expr: &str,
+    lowering_context: &mut LuaLoweringContext,
+    line_no: usize,
+) -> Result<String, ParseError> {
     let bytes = expr.as_bytes();
     let mut out = String::with_capacity(expr.len());
     let mut i = 0usize;
@@ -1309,7 +1551,8 @@ fn rewrite_lua_length_operator(expr: &str, line_no: usize) -> Result<String, Par
             });
         }
         let operand_end = parse_lua_length_operand_end(expr, operand_start, line_no)?;
-        out.push_str("len(");
+        lowering_context.needs_table_len_helper = true;
+        out.push_str("__lua_len(");
         out.push_str(&expr[operand_start..operand_end]);
         out.push(')');
         i = operand_end;
@@ -1595,7 +1838,7 @@ fn rewrite_lua_method_invocation(
                     message: "lua string method ':len' expects no arguments".to_string(),
                 });
             }
-            format!("len({receiver})")
+            format!("({receiver}).length")
         }
         "sub" => match args.as_slice() {
             [start] => {
@@ -1873,20 +2116,56 @@ fn __lua_string_norm_end_exclusive(total_len, raw_index) {
 }
 
 fn __lua_string_sub_from(value, start_raw) {
-    let total_len = len(value);
+    let total_len = (value).length;
     let start = __lua_string_norm_start_index(total_len, start_raw);
-    slice(value, start, total_len - start);
+    (value)[start:];
 }
 
 fn __lua_string_sub_range(value, start_raw, end_raw) {
-    let total_len = len(value);
+    let total_len = (value).length;
     let start = __lua_string_norm_start_index(total_len, start_raw);
     let end_exclusive = __lua_string_norm_end_exclusive(total_len, end_raw);
-    slice(value, start, end_exclusive - start);
+    (value)[start:end_exclusive];
+}"#;
+
+const LUA_TABLE_LEN_HELPER: &str = r#"fn __lua_has_key(container, key) {
+    let available_keys = (container).keys;
+    let found = false;
+    let i = 0;
+    while i < (available_keys).length {
+        if (available_keys)[i] == key {
+            found = true;
+            i = (available_keys).length;
+        } else {
+            i = i + 1;
+        }
+    }
+    found;
+}
+
+fn __lua_len(value) {
+    let out = 0;
+    let ty = type(value);
+    if ty == "map" {
+        let count = 0;
+        while __lua_has_key(value, count) {
+            count = count + 1;
+        }
+        out = count;
+    } else if ty == "array" {
+        out = (value).length;
+    } else {
+        out = (value).length;
+    }
+    out;
 }"#;
 
 fn emit_lua_helpers(lowering_context: &LuaLoweringContext) -> Vec<String> {
     let mut helper_lines = Vec::new();
+    if lowering_context.needs_table_len_helper {
+        helper_lines.extend(LUA_TABLE_LEN_HELPER.lines().map(str::to_string));
+        helper_lines.push(String::new());
+    }
     if lowering_context.needs_string_sub_helpers {
         helper_lines.extend(LUA_STRING_SUB_HELPERS.lines().map(str::to_string));
         helper_lines.push(String::new());

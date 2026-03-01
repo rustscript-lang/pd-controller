@@ -155,7 +155,9 @@ mod source_loader;
 use ir::LinkedIr;
 use linker::merge_units;
 
-pub use ir::{ClosureExpr, Expr, FrontendIr, FunctionDecl, FunctionImpl, MatchPattern, Stmt};
+pub use ir::{
+    ClosureExpr, Expr, FrontendIr, FunctionDecl, FunctionImpl, MatchPattern, MatchTypePattern, Stmt,
+};
 
 pub struct CompiledProgram {
     pub program: Program,
@@ -630,16 +632,7 @@ impl Compiler {
                 let end_label = self.fresh_label("match_end");
                 for (pattern, arm_expr) in arms {
                     let next_label = self.fresh_label("match_next");
-                    self.assembler.ldloc(*value_slot);
-                    match pattern {
-                        MatchPattern::Int(v) => {
-                            self.assembler.push_const(Value::Int(*v));
-                        }
-                        MatchPattern::String(v) => {
-                            self.assembler.push_const(Value::String(v.clone()));
-                        }
-                    }
-                    self.assembler.ceq();
+                    self.compile_match_pattern_condition(*value_slot, pattern)?;
                     self.assembler.brfalse_label(&next_label);
                     self.compile_expr(arm_expr)?;
                     self.assembler.stloc(*result_slot);
@@ -661,6 +654,74 @@ impl Compiler {
             }
         }
         Ok(())
+    }
+
+    fn compile_match_pattern_condition(
+        &mut self,
+        value_slot: u8,
+        pattern: &MatchPattern,
+    ) -> Result<(), CompileError> {
+        match pattern {
+            MatchPattern::Int(v) => {
+                self.assembler.ldloc(value_slot);
+                self.assembler.push_const(Value::Int(*v));
+                self.assembler.ceq();
+            }
+            MatchPattern::String(v) => {
+                self.assembler.ldloc(value_slot);
+                self.assembler.push_const(Value::String(v.clone()));
+                self.assembler.ceq();
+            }
+            MatchPattern::Null => {
+                self.assembler.ldloc(value_slot);
+                self.assembler.push_const(Value::Null);
+                self.assembler.ceq();
+            }
+            MatchPattern::Type(type_pattern) => {
+                self.compile_match_type_pattern_condition(value_slot, type_pattern)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn compile_match_type_pattern_condition(
+        &mut self,
+        value_slot: u8,
+        type_pattern: &MatchTypePattern,
+    ) -> Result<(), CompileError> {
+        match type_pattern {
+            MatchTypePattern::Int => self.compile_type_name_equals(value_slot, "int"),
+            MatchTypePattern::Float => self.compile_type_name_equals(value_slot, "float"),
+            MatchTypePattern::Bool => self.compile_type_name_equals(value_slot, "bool"),
+            MatchTypePattern::String => self.compile_type_name_equals(value_slot, "string"),
+            MatchTypePattern::Array => self.compile_type_name_equals(value_slot, "array"),
+            MatchTypePattern::Map => self.compile_type_name_equals(value_slot, "map"),
+            MatchTypePattern::Number => {
+                let number_fallback_label = self.fresh_label("match_type_number_fallback");
+                let number_end_label = self.fresh_label("match_type_number_end");
+
+                self.compile_type_name_equals(value_slot, "int");
+                self.assembler.brfalse_label(&number_fallback_label);
+                self.assembler.push_const(Value::Bool(true));
+                self.assembler.br_label(&number_end_label);
+                self.assembler
+                    .label(&number_fallback_label)
+                    .map_err(CompileError::Assembler)?;
+                self.compile_type_name_equals(value_slot, "float");
+                self.assembler
+                    .label(&number_end_label)
+                    .map_err(CompileError::Assembler)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn compile_type_name_equals(&mut self, value_slot: u8, expected: &str) {
+        self.assembler.ldloc(value_slot);
+        self.assembler.call(BuiltinFunction::TypeOf.call_index(), 1);
+        self.assembler
+            .push_const(Value::String(expected.to_string()));
+        self.assembler.ceq();
     }
 
     fn fresh_label(&mut self, prefix: &str) -> String {

@@ -64,8 +64,8 @@ fn rustscript_io_namespace_builtin_calls_are_supported() {
 fn rustscript_array_primitives_are_supported_without_namespace() {
     let source = r#"
         let values = [];
-        values[len(values)] = 7;
-        values[0] + len(values);
+        values[values.length] = 7;
+        values[0] + values.length;
     "#;
     let compiled = compile_source(source).expect("compile should succeed");
     let mut vm = Vm::with_locals(compiled.program, compiled.locals);
@@ -91,7 +91,7 @@ fn rustscript_bracket_slice_syntax_is_supported() {
         let g = arr[:2];
         let h = arr[3:];
         let i = arr[:-2];
-        len(a) + len(b) + len(c) + len(d) + len(e) + len(f) + len(g) + len(h) + len(i);
+        a.length + b.length + c.length + d.length + e.length + f.length + g.length + h.length + i.length;
     "#;
     let compiled = compile_source(source).expect("compile should succeed");
     let mut vm = Vm::with_locals(compiled.program, compiled.locals);
@@ -318,12 +318,40 @@ fn rustscript_match_expression_rejects_unsupported_patterns() {
     match err {
         vm::SourceError::Parse(parse) => {
             assert!(
-                parse.message.contains("only int/string literals and '_'"),
+                parse
+                    .message
+                    .contains("int/string/null literals, type patterns"),
                 "unexpected parse error: {parse:?}"
             );
         }
         other => panic!("expected parse error, got {other:?}"),
     }
+}
+
+#[test]
+fn rustscript_match_expression_supports_type_patterns() {
+    let source = r#"
+        let a = match "value" {
+            Some(String) => 1,
+            _ => 0,
+        };
+        let b = match 7 {
+            Some(Number) => 2,
+            _ => 0,
+        };
+        let c = match true {
+            Some(Number) => 100,
+            _ => 3,
+        };
+        a + b + c;
+    "#;
+
+    let compiled = compile_source(source).expect("compile should succeed");
+    let mut vm = Vm::with_locals(compiled.program, compiled.locals);
+
+    let status = vm.run().expect("vm should run");
+    assert_eq!(status, VmStatus::Halted);
+    assert_eq!(vm.stack(), &[Value::Int(6)]);
 }
 
 #[test]
@@ -655,7 +683,7 @@ fn rustscript_modulo_and_logical_operators_work() {
 fn rustscript_null_literal_is_supported() {
     let source = r#"
         let v = null;
-        type_of(v) == "null";
+        type(v) == "null";
     "#;
 
     let compiled = compile_source(source).expect("compile should succeed");
@@ -663,6 +691,104 @@ fn rustscript_null_literal_is_supported() {
     let status = vm.run().expect("vm should run");
     assert_eq!(status, VmStatus::Halted);
     assert_eq!(vm.stack(), &[Value::Bool(true)]);
+}
+
+#[test]
+fn rustscript_option_namespace_style_is_supported() {
+    let source = r#"
+        let some = Option::Some(1 + 1);
+        let none = Option::None;
+        let some2 = Option::Some(40);
+
+        let a = match none {
+            null => 1,
+            _ => 0,
+        };
+        let b = match some {
+            null => 0,
+            _ => 1,
+        };
+        let c = match some2 {
+            Some(Number) => 1,
+            _ => 0,
+        };
+
+        let t = type(Option::None);
+        if t == "null" {
+            (a + b + c) + some2;
+        } else {
+            0;
+        }
+    "#;
+
+    let compiled = compile_source(source).expect("compile should succeed");
+    let mut vm = Vm::with_locals(compiled.program, compiled.locals);
+    let status = vm.run().expect("vm should run");
+    assert_eq!(status, VmStatus::Halted);
+    assert_eq!(vm.stack(), &[Value::Int(43)]);
+}
+
+#[test]
+fn rustscript_match_type_pattern_is_not_shadowed_by_local_name() {
+    let source = r#"
+        let String = 3;
+        let b = match "" {
+            Some(String) => 2,
+            _ => 3,
+        };
+        b;
+    "#;
+
+    let compiled = compile_source(source).expect("compile should succeed");
+    let mut vm = Vm::with_locals(compiled.program, compiled.locals);
+    let status = vm.run().expect("vm should run");
+    assert_eq!(status, VmStatus::Halted);
+    assert_eq!(vm.stack(), &[Value::Int(2)]);
+}
+
+#[test]
+fn rustscript_legacy_option_aliases_are_rejected() {
+    let source = r#"
+        let some = Some(1);
+        some;
+    "#;
+
+    let err = match compile_source(source) {
+        Ok(_) => panic!("bare Some(...) should be rejected"),
+        Err(err) => err,
+    };
+    match err {
+        vm::SourceError::Parse(parse) => {
+            assert!(
+                parse.message.contains("unknown function 'Some'"),
+                "unexpected parse error: {parse:?}"
+            );
+        }
+        other => panic!("expected parse error, got {other:?}"),
+    }
+}
+
+#[test]
+fn rustscript_type_name_of_val_alias_is_rejected() {
+    let source = r#"
+        type_name_of_val(null);
+    "#;
+
+    let err = match compile_source(source) {
+        Ok(_) => panic!("type_name_of_val alias should be rejected"),
+        Err(err) => err,
+    };
+    match err {
+        vm::SourceError::Parse(parse) => {
+            assert!(
+                parse
+                    .message
+                    .contains("unknown function 'type_name_of_val'"),
+                "unexpected parse error: {parse:?}"
+            );
+        }
+        other => panic!("expected parse error, got {other:?}"),
+    }
 }
 
 #[test]

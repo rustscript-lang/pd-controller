@@ -4,7 +4,7 @@ use crate::builtins::BuiltinFunction;
 
 use super::{
     ParseError, STDLIB_PRINT_ARITY, STDLIB_PRINT_NAME,
-    ir::{ClosureExpr, Expr, FunctionDecl, FunctionImpl, MatchPattern, Stmt},
+    ir::{ClosureExpr, Expr, FunctionDecl, FunctionImpl, MatchPattern, MatchTypePattern, Stmt},
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1127,35 +1127,8 @@ impl Parser {
                 } else if self.functions.contains_key(&name) {
                     let decl = self.resolve_function_for_call(&name, args.len())?;
                     Expr::Call(decl.index, args)
-                } else if let Some(builtin) = BuiltinFunction::from_name(&name) {
-                    let arg_arity = u8::try_from(args.len()).map_err(|_| ParseError {
-                        line: self.current_line(),
-                        message: "function arity too large".to_string(),
-                    })?;
-                    if arg_arity != builtin.arity() {
-                        return Err(ParseError {
-                            line: self.current_line(),
-                            message: format!(
-                                "function '{}' expects {} arguments",
-                                builtin.name(),
-                                builtin.arity()
-                            ),
-                        });
-                    }
-                    if builtin == BuiltinFunction::Concat {
-                        let mut args = args.into_iter();
-                        let lhs = args.next().ok_or_else(|| ParseError {
-                            line: self.current_line(),
-                            message: "concat expects two arguments".to_string(),
-                        })?;
-                        let rhs = args.next().ok_or_else(|| ParseError {
-                            line: self.current_line(),
-                            message: "concat expects two arguments".to_string(),
-                        })?;
-                        Expr::Add(Box::new(lhs), Box::new(rhs))
-                    } else {
-                        Expr::Call(builtin.call_index(), args)
-                    }
+                } else if let Some(expr) = self.try_build_language_builtin_call(&name, &args)? {
+                    expr
                 } else if let Some(host_name) = self.resolve_vm_direct_call_target(&name) {
                     let host_name = host_name.to_string();
                     self.build_vm_host_call_expr(&host_name, args)?
@@ -1365,22 +1338,80 @@ impl Parser {
     }
 
     fn parse_match_pattern(&mut self) -> Result<Option<MatchPattern>, ParseError> {
+        if self.match_kind(&TokenKind::LParen) {
+            let pattern = self.parse_match_pattern()?;
+            self.expect(
+                &TokenKind::RParen,
+                "expected ')' after parenthesized match pattern",
+            )?;
+            return Ok(pattern);
+        }
         if let Some(value) = self.match_int() {
             return Ok(Some(MatchPattern::Int(value)));
         }
         if let Some(value) = self.match_string() {
             return Ok(Some(MatchPattern::String(value)));
         }
-        if let Some(name) = self.match_ident()
-            && name == "_"
-        {
-            return Ok(None);
+        if self.match_kind(&TokenKind::Null) {
+            return Ok(Some(MatchPattern::Null));
+        }
+        if let Some(name) = self.match_ident() {
+            if name == "_" {
+                return Ok(None);
+            }
+            if let Some(type_pattern) = self.parse_match_type_constructor_pattern(&name)? {
+                return Ok(Some(MatchPattern::Type(type_pattern)));
+            }
         }
         Err(ParseError {
             line: self.current_line(),
-            message: "match patterns currently support only int/string literals and '_'"
-                .to_string(),
+            message:
+                "match patterns currently support int/string/null literals, type patterns via Some(TypeName) or Option::Some(TypeName), and '_'"
+                    .to_string(),
         })
+    }
+
+    fn parse_match_type_constructor_pattern(
+        &mut self,
+        head: &str,
+    ) -> Result<Option<MatchTypePattern>, ParseError> {
+        if head == "Some" {
+            return self.parse_some_type_pattern();
+        }
+        if head == "Option" {
+            if !self.match_path_separator() {
+                return Ok(None);
+            }
+            let member = self.expect_ident("expected 'Some' after 'Option::' in match pattern")?;
+            if member != "Some" {
+                return Err(ParseError {
+                    line: self.current_line(),
+                    message: "match type patterns use Option::Some(TypeName) or Some(TypeName)"
+                        .to_string(),
+                });
+            }
+            return self.parse_some_type_pattern();
+        }
+        Ok(None)
+    }
+
+    fn parse_some_type_pattern(&mut self) -> Result<Option<MatchTypePattern>, ParseError> {
+        self.expect(
+            &TokenKind::LParen,
+            "expected '(' after Some in match type pattern",
+        )?;
+        let type_name = self.expect_ident("expected type name inside Some(...)")?;
+        let type_pattern = match_type_pattern_from_ident(&type_name).ok_or_else(|| ParseError {
+            line: self.current_line(),
+            message:
+                "unknown match type pattern; expected one of Int/Float/Number/Bool/String/Array/Map"
+                    .to_string(),
+        })?;
+        self.expect(
+            &TokenKind::RParen,
+            "expected ')' after Some(TypeName) match pattern",
+        )?;
+        Ok(Some(type_pattern))
     }
 
     fn parse_postfix_access(&mut self, mut expr: Expr) -> Result<Expr, ParseError> {
@@ -1415,10 +1446,16 @@ impl Parser {
             }
             if self.match_kind(&TokenKind::Dot) {
                 let member = self.expect_ident("expected member name after '.'")?;
-                expr = self.build_builtin_call_expr(
-                    BuiltinFunction::Get,
-                    vec![expr, Expr::String(member)],
-                )?;
+                if member == "length" {
+                    expr = self.build_builtin_call_expr(BuiltinFunction::Len, vec![expr])?;
+                } else if member == "keys" {
+                    expr = self.build_builtin_call_expr(BuiltinFunction::Keys, vec![expr])?;
+                } else {
+                    expr = self.build_builtin_call_expr(
+                        BuiltinFunction::Get,
+                        vec![expr, Expr::String(member)],
+                    )?;
+                }
                 continue;
             }
             if self.match_kind(&TokenKind::Question) {
@@ -1616,61 +1653,41 @@ impl Parser {
             return self.build_builtin_call_expr(BuiltinFunction::MapNew, Vec::new());
         }
 
-        enum BraceLiteralKind {
-            Array,
-            Map,
+        enum BraceLiteralEntry {
+            Array(Expr),
+            Map { key: Expr, value: Expr },
         }
 
-        let mut kind: Option<BraceLiteralKind> = None;
-        let mut out_array = self.build_builtin_call_expr(BuiltinFunction::ArrayNew, Vec::new())?;
-        let mut out_map = self.build_builtin_call_expr(BuiltinFunction::MapNew, Vec::new())?;
+        let mut entries = Vec::<BraceLiteralEntry>::new();
+        let mut has_array_entries = false;
+        let mut has_map_entries = false;
 
         loop {
             let is_map_entry = self.check_map_entry_start();
-            match kind {
-                None => {
-                    kind = Some(if is_map_entry {
-                        BraceLiteralKind::Map
-                    } else {
-                        BraceLiteralKind::Array
-                    });
-                }
-                Some(BraceLiteralKind::Array) if is_map_entry => {
-                    return Err(ParseError {
-                        line: self.current_line(),
-                        message: "cannot mix map entries into array literal".to_string(),
-                    });
-                }
-                Some(BraceLiteralKind::Map) if !is_map_entry => {
-                    return Err(ParseError {
-                        line: self.current_line(),
-                        message: "cannot mix array entries into map literal".to_string(),
-                    });
-                }
-                _ => {}
-            }
-
-            match kind {
-                Some(BraceLiteralKind::Array) => {
-                    let value = self.parse_expr()?;
-                    out_array = self.build_builtin_call_expr(
-                        BuiltinFunction::ArrayPush,
-                        vec![out_array, value],
+            if is_map_entry {
+                has_map_entries = true;
+                let key = if self.match_kind(&TokenKind::LBracket) {
+                    let expr = self.parse_expr()?;
+                    self.expect(
+                        &TokenKind::RBracket,
+                        "expected ']' after map key expression",
                     )?;
+                    expr
+                } else {
+                    self.parse_map_key_literal()?
+                };
+                if !(self.match_kind(&TokenKind::Colon) || self.match_kind(&TokenKind::Equal)) {
+                    return Err(ParseError {
+                        line: self.current_line(),
+                        message: "expected ':' or '=' after map key".to_string(),
+                    });
                 }
-                Some(BraceLiteralKind::Map) => {
-                    let key = self.parse_map_key_literal()?;
-                    if !(self.match_kind(&TokenKind::Colon) || self.match_kind(&TokenKind::Equal)) {
-                        return Err(ParseError {
-                            line: self.current_line(),
-                            message: "expected ':' or '=' after map key".to_string(),
-                        });
-                    }
-                    let value = self.parse_expr()?;
-                    out_map = self
-                        .build_builtin_call_expr(BuiltinFunction::Set, vec![out_map, key, value])?;
-                }
-                None => unreachable!(),
+                let value = self.parse_expr()?;
+                entries.push(BraceLiteralEntry::Map { key, value });
+            } else {
+                has_array_entries = true;
+                let value = self.parse_expr()?;
+                entries.push(BraceLiteralEntry::Array(value));
             }
 
             if self.match_kind(&TokenKind::Comma) {
@@ -1683,9 +1700,37 @@ impl Parser {
         }
 
         self.expect(&TokenKind::RBrace, "expected '}' after brace literal")?;
-        match kind {
-            Some(BraceLiteralKind::Array) => Ok(out_array),
-            Some(BraceLiteralKind::Map) | None => Ok(out_map),
+
+        if has_map_entries {
+            let mut out = self.build_builtin_call_expr(BuiltinFunction::MapNew, Vec::new())?;
+            let mut next_array_index = 0i64;
+            for entry in entries {
+                match entry {
+                    BraceLiteralEntry::Array(value) => {
+                        out = self.build_builtin_call_expr(
+                            BuiltinFunction::Set,
+                            vec![out, Expr::Int(next_array_index), value],
+                        )?;
+                        next_array_index = next_array_index.saturating_add(1);
+                    }
+                    BraceLiteralEntry::Map { key, value } => {
+                        out = self
+                            .build_builtin_call_expr(BuiltinFunction::Set, vec![out, key, value])?;
+                    }
+                }
+            }
+            Ok(out)
+        } else if has_array_entries {
+            let mut out = self.build_builtin_call_expr(BuiltinFunction::ArrayNew, Vec::new())?;
+            for entry in entries {
+                if let BraceLiteralEntry::Array(value) = entry {
+                    out =
+                        self.build_builtin_call_expr(BuiltinFunction::ArrayPush, vec![out, value])?;
+                }
+            }
+            Ok(out)
+        } else {
+            self.build_builtin_call_expr(BuiltinFunction::MapNew, Vec::new())
         }
     }
 
@@ -1718,6 +1763,31 @@ impl Parser {
         let Some(current) = self.tokens.get(self.pos) else {
             return false;
         };
+        if matches!(current.kind, TokenKind::LBracket) {
+            let mut depth = 0usize;
+            let mut cursor = self.pos;
+            while let Some(token) = self.tokens.get(cursor) {
+                match token.kind {
+                    TokenKind::LBracket => depth += 1,
+                    TokenKind::RBracket => {
+                        depth = depth.saturating_sub(1);
+                        if depth == 0 {
+                            return matches!(
+                                self.tokens.get(cursor + 1),
+                                Some(Token {
+                                    kind: TokenKind::Colon | TokenKind::Equal,
+                                    ..
+                                })
+                            );
+                        }
+                    }
+                    TokenKind::Eof => return false,
+                    _ => {}
+                }
+                cursor += 1;
+            }
+            return false;
+        }
         let Some(next) = self.tokens.get(self.pos + 1) else {
             return false;
         };
@@ -1754,6 +1824,31 @@ impl Parser {
             });
         }
         Ok(Expr::Call(builtin.call_index(), args))
+    }
+
+    fn try_build_language_builtin_call(
+        &mut self,
+        name: &str,
+        args: &[Expr],
+    ) -> Result<Option<Expr>, ParseError> {
+        match name {
+            "type" | "typeof" => {
+                if args.len() != 1 {
+                    return Err(ParseError {
+                        line: self.current_line(),
+                        message: "type expects exactly one argument".to_string(),
+                    });
+                }
+                Ok(Some(self.build_builtin_call_expr(
+                    BuiltinFunction::TypeOf,
+                    args.to_vec(),
+                )?))
+            }
+            "assert" => Ok(Some(
+                self.build_builtin_call_expr(BuiltinFunction::Assert, args.to_vec())?,
+            )),
+            _ => Ok(None),
+        }
     }
 
     fn build_vm_host_call_expr(
@@ -2436,5 +2531,18 @@ impl Parser {
             .collect();
         locals.sort_by_key(|(_, index)| *index);
         locals
+    }
+}
+
+fn match_type_pattern_from_ident(name: &str) -> Option<MatchTypePattern> {
+    match name {
+        "Int" | "int" => Some(MatchTypePattern::Int),
+        "Float" | "float" => Some(MatchTypePattern::Float),
+        "Number" | "number" => Some(MatchTypePattern::Number),
+        "Bool" | "bool" => Some(MatchTypePattern::Bool),
+        "String" | "string" => Some(MatchTypePattern::String),
+        "Array" | "array" => Some(MatchTypePattern::Array),
+        "Map" | "map" => Some(MatchTypePattern::Map),
+        _ => None,
     }
 }

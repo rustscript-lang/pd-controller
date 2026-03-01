@@ -1633,6 +1633,10 @@ fn emit_native_step_call_inline(
                         jit_native_builtin_map_new_bridge as *const (),
                         "builtin map_new helper",
                     )?,
+                    BuiltinFunction::Count => helper_ptr_to_u64(
+                        jit_native_builtin_count_bridge as *const (),
+                        "builtin count helper",
+                    )?,
                     BuiltinFunction::Assert => helper_ptr_to_u64(
                         jit_native_builtin_assert_bridge as *const (),
                         "builtin assert helper",
@@ -2403,6 +2407,34 @@ extern "C" fn jit_native_builtin_len_bridge(vm_ptr: *mut Vm) -> i32 {
     STATUS_CONTINUE
 }
 
+extern "C" fn jit_native_builtin_count_bridge(vm_ptr: *mut Vm) -> i32 {
+    if vm_ptr.is_null() {
+        set_bridge_error(VmError::JitNative(
+            "native trace builtin count helper received null vm pointer".to_string(),
+        ));
+        return STATUS_ERROR;
+    }
+
+    let vm = unsafe { &mut *vm_ptr };
+    let value = match vm.pop_value() {
+        Ok(value) => value,
+        Err(err) => {
+            set_bridge_error(err);
+            return STATUS_ERROR;
+        }
+    };
+    let count = match value {
+        Value::Array(values) => values.len() as i64,
+        Value::Map(entries) => entries.len() as i64,
+        _ => {
+            set_bridge_error(VmError::TypeMismatch("array/map"));
+            return STATUS_ERROR;
+        }
+    };
+    vm.stack.push(Value::Int(count));
+    STATUS_CONTINUE
+}
+
 extern "C" fn jit_native_builtin_slice_bridge(vm_ptr: *mut Vm) -> i32 {
     if vm_ptr.is_null() {
         set_bridge_error(VmError::JitNative(
@@ -2703,10 +2735,14 @@ extern "C" fn jit_native_builtin_set_bridge(vm_ptr: *mut Vm) -> i32 {
             } else if index == out.len() {
                 out.push(value);
             } else {
-                set_bridge_error(VmError::HostError(format!(
-                    "array set index {index} out of bounds"
-                )));
-                return STATUS_ERROR;
+                let mut entries = out
+                    .into_iter()
+                    .enumerate()
+                    .map(|(idx, existing)| (Value::Int(idx as i64), existing))
+                    .collect::<Vec<_>>();
+                entries.push((Value::Int(index as i64), value));
+                vm.stack.push(Value::Map(entries));
+                return STATUS_CONTINUE;
             }
             vm.stack.push(Value::Array(out));
         }
@@ -3272,6 +3308,28 @@ mod tests {
     }
 
     #[test]
+    fn call_step_bridge_executes_builtin_count() {
+        let mut vm = Vm::new(Program::new(Vec::new(), Vec::new()));
+        vm.stack.push(Value::Map(vec![
+            (Value::String("x".to_string()), Value::Int(1)),
+            (Value::String("y".to_string()), Value::Int(2)),
+        ]));
+
+        let status = execute_single_step(
+            &mut vm,
+            TraceStep::Call {
+                index: BuiltinFunction::Count.call_index(),
+                argc: 1,
+                call_ip: 0,
+            },
+        )
+        .expect("native count call should run");
+        assert_eq!(status, STATUS_CONTINUE);
+        assert_eq!(vm.stack(), &[Value::Int(2)]);
+        assert!(take_bridge_error().is_none());
+    }
+
+    #[test]
     fn call_step_bridge_executes_builtin_concat() {
         let mut vm = Vm::new(Program::new(Vec::new(), Vec::new()));
         vm.stack.push(Value::String("ab".to_string()));
@@ -3400,6 +3458,63 @@ mod tests {
                 Value::Int(1),
                 Value::Int(2),
                 Value::Int(7)
+            ])]
+        );
+        assert!(take_bridge_error().is_none());
+    }
+
+    #[test]
+    fn call_step_bridge_executes_builtin_set_sparse_index_converts_to_map() {
+        let mut vm = Vm::new(Program::new(Vec::new(), Vec::new()));
+        vm.stack
+            .push(Value::Array(vec![Value::Int(1), Value::Int(2)]));
+        vm.stack.push(Value::Int(100));
+        vm.stack.push(Value::Int(7));
+
+        let status = execute_single_step(
+            &mut vm,
+            TraceStep::Call {
+                index: BuiltinFunction::Set.call_index(),
+                argc: 3,
+                call_ip: 0,
+            },
+        )
+        .expect("native set call should run");
+        assert_eq!(status, STATUS_CONTINUE);
+        assert_eq!(
+            vm.stack(),
+            &[Value::Map(vec![
+                (Value::Int(0), Value::Int(1)),
+                (Value::Int(1), Value::Int(2)),
+                (Value::Int(100), Value::Int(7)),
+            ])]
+        );
+        assert!(take_bridge_error().is_none());
+    }
+
+    #[test]
+    fn call_step_bridge_executes_builtin_keys() {
+        let mut vm = Vm::new(Program::new(Vec::new(), Vec::new()));
+        vm.stack.push(Value::Map(vec![
+            (Value::String("x".to_string()), Value::Int(10)),
+            (Value::String("y".to_string()), Value::Int(20)),
+        ]));
+
+        let status = execute_single_step(
+            &mut vm,
+            TraceStep::Call {
+                index: BuiltinFunction::Keys.call_index(),
+                argc: 1,
+                call_ip: 0,
+            },
+        )
+        .expect("native keys call should run");
+        assert_eq!(status, STATUS_CONTINUE);
+        assert_eq!(
+            vm.stack(),
+            &[Value::Array(vec![
+                Value::String("x".to_string()),
+                Value::String("y".to_string()),
             ])]
         );
         assert!(take_bridge_error().is_none());
