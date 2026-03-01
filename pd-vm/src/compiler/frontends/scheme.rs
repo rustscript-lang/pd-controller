@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use super::super::ParseError;
 use super::super::ir::{Expr, FrontendIr, Stmt};
 use super::{is_ident_continue, is_ident_start};
+use crate::source_map::{LineSpanMapping, LoweredSource};
 
 static GENSYM_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
@@ -33,7 +34,7 @@ pub(super) fn lower_to_ir(source: &str) -> Result<FrontendIr, ParseError> {
         return Ok(ir);
     }
     let lowered = lower(source)?;
-    super::parse_with_parser(&lowered, false, false)
+    super::parse_lowered_with_mapping(source, lowered, false, false)
 }
 
 fn try_lower_direct_subset_to_ir(source: &str) -> Result<Option<FrontendIr>, ParseError> {
@@ -77,7 +78,7 @@ impl SchemeDirectIrBuilder {
 
     fn lower_assign(&self, name: &str, expr: Expr, line: u32) -> Result<Stmt, ParseError> {
         let Some(index) = self.locals.get(name).copied() else {
-            return Err(ParseError {
+            return Err(ParseError { span: None, code: None,
                 line: line as usize,
                 message: format!("unknown local '{name}'"),
             });
@@ -103,7 +104,7 @@ impl SchemeDirectIrBuilder {
 
     fn alloc_local(&mut self) -> Result<u8, ParseError> {
         let index = self.next_local;
-        self.next_local = self.next_local.checked_add(1).ok_or(ParseError {
+        self.next_local = self.next_local.checked_add(1).ok_or(ParseError { span: None, code: None,
             line: 1,
             message: "local index overflow".to_string(),
         })?;
@@ -454,16 +455,28 @@ where
     lower_scheme_direct_binary(args, builder, build)
 }
 
-pub(super) fn lower(source: &str) -> Result<String, ParseError> {
+pub(super) fn lower(source: &str) -> Result<LoweredSource, ParseError> {
     let mut parser = SchemeParser::new(source)?;
     let forms = parser.parse_program()?;
 
     let mut out = Vec::new();
+    let mut line_map = Vec::new();
     for form in &forms {
+        let before = out.len();
         lower_stmt(form, 0, &mut out)?;
+        let added = out.len().saturating_sub(before);
+        line_map.extend(std::iter::repeat(form.line).take(added));
     }
 
-    Ok(out.join("\n"))
+    if line_map.is_empty() {
+        line_map.push(1);
+    }
+    Ok(LoweredSource {
+        text: out.join("\n"),
+        mapping: LineSpanMapping {
+            lowered_to_original_line: line_map,
+        },
+    })
 }
 
 #[derive(Clone, Debug)]
@@ -636,7 +649,7 @@ impl<'a> SchemeLexer<'a> {
         let mut out = String::new();
         loop {
             let Some(ch) = self.current else {
-                return Err(ParseError {
+                return Err(ParseError { span: None, code: None,
                     line,
                     message: "unterminated string literal".to_string(),
                 });
@@ -650,7 +663,7 @@ impl<'a> SchemeLexer<'a> {
                 '\\' => {
                     self.advance();
                     let Some(escaped) = self.current else {
-                        return Err(ParseError {
+                        return Err(ParseError { span: None, code: None,
                             line,
                             message: "unterminated string escape".to_string(),
                         });
@@ -663,7 +676,7 @@ impl<'a> SchemeLexer<'a> {
                         '"' => '"',
                         '0' => '\0',
                         other => {
-                            return Err(ParseError {
+                            return Err(ParseError { span: None, code: None,
                                 line,
                                 message: format!("invalid escape '\\{other}'"),
                             });
@@ -696,7 +709,7 @@ impl<'a> SchemeLexer<'a> {
 
     fn classify_atom(&self, atom: String, line: usize) -> Result<TokenKind, ParseError> {
         if atom.is_empty() {
-            return Err(ParseError {
+            return Err(ParseError { span: None, code: None,
                 line,
                 message: "expected token".to_string(),
             });
@@ -719,7 +732,7 @@ impl<'a> SchemeLexer<'a> {
                 "nul" | "null" => '\0',
                 s if s.chars().count() == 1 => s.chars().next().unwrap(),
                 _ => {
-                    return Err(ParseError {
+                    return Err(ParseError { span: None, code: None,
                         line,
                         message: format!("unknown character literal '#\\{rest}'"),
                     });
@@ -796,7 +809,7 @@ impl SchemeParser {
         while self.check_datum_comment() {
             self.advance(); // skip the #; symbol token
             if self.check_eof() {
-                return Err(ParseError {
+                return Err(ParseError { span: None, code: None,
                     line: self.current().line,
                     message: "expected form after #;".to_string(),
                 });
@@ -807,7 +820,7 @@ impl SchemeParser {
         let token = self.advance().clone();
         match token.kind {
             TokenKind::LParen => self.parse_list(token.line),
-            TokenKind::RParen => Err(ParseError {
+            TokenKind::RParen => Err(ParseError { span: None, code: None,
                 line: token.line,
                 message: "unexpected ')'".to_string(),
             }),
@@ -848,7 +861,7 @@ impl SchemeParser {
                 line: token.line,
                 node: SchemeNode::Symbol(value),
             }),
-            TokenKind::Eof => Err(ParseError {
+            TokenKind::Eof => Err(ParseError { span: None, code: None,
                 line: token.line,
                 message: "unexpected end of input".to_string(),
             }),
@@ -863,7 +876,7 @@ impl SchemeParser {
         let mut items = Vec::new();
         while !self.check_rparen() {
             if self.check_eof() {
-                return Err(ParseError {
+                return Err(ParseError { span: None, code: None,
                     line,
                     message: "unterminated list".to_string(),
                 });
@@ -950,7 +963,7 @@ fn lower_define_stmt(
     out: &mut Vec<String>,
 ) -> Result<(), ParseError> {
     if args.len() < 2 {
-        return Err(ParseError {
+        return Err(ParseError { span: None, code: None,
             line,
             message: "define expects a target and value".to_string(),
         });
@@ -959,7 +972,7 @@ fn lower_define_stmt(
     match &args[0].node {
         SchemeNode::Symbol(name_raw) => {
             if args.len() != 2 {
-                return Err(ParseError {
+                return Err(ParseError { span: None, code: None,
                     line,
                     message: "variable define expects exactly one value".to_string(),
                 });
@@ -971,18 +984,18 @@ fn lower_define_stmt(
         }
         SchemeNode::List(signature) => {
             if signature.is_empty() {
-                return Err(ParseError {
+                return Err(ParseError { span: None, code: None,
                     line,
                     message: "function define requires a name".to_string(),
                 });
             }
             if args.len() < 2 {
-                return Err(ParseError {
+                return Err(ParseError { span: None, code: None,
                     line,
                     message: "function define expects at least one body expression".to_string(),
                 });
             }
-            let name_raw = signature[0].as_symbol().ok_or(ParseError {
+            let name_raw = signature[0].as_symbol().ok_or(ParseError { span: None, code: None,
                 line,
                 message: "function define name must be a symbol".to_string(),
             })?;
@@ -990,7 +1003,7 @@ fn lower_define_stmt(
 
             let mut params = Vec::new();
             for param in &signature[1..] {
-                let param_raw = param.as_symbol().ok_or(ParseError {
+                let param_raw = param.as_symbol().ok_or(ParseError { span: None, code: None,
                     line: param.line,
                     message: "function parameter must be a symbol".to_string(),
                 })?;
@@ -1008,7 +1021,7 @@ fn lower_define_stmt(
             );
             Ok(())
         }
-        _ => Err(ParseError {
+        _ => Err(ParseError { span: None, code: None,
             line,
             message: "define target must be a symbol or parameter list".to_string(),
         }),
@@ -1022,13 +1035,13 @@ fn lower_set_stmt(
     out: &mut Vec<String>,
 ) -> Result<(), ParseError> {
     if args.len() != 2 {
-        return Err(ParseError {
+        return Err(ParseError { span: None, code: None,
             line,
             message: "set! expects exactly two arguments".to_string(),
         });
     }
 
-    let name_raw = args[0].as_symbol().ok_or(ParseError {
+    let name_raw = args[0].as_symbol().ok_or(ParseError { span: None, code: None,
         line: args[0].line,
         message: "set! target must be a symbol".to_string(),
     })?;
@@ -1045,7 +1058,7 @@ fn lower_if_stmt(
     out: &mut Vec<String>,
 ) -> Result<(), ParseError> {
     if args.len() < 2 || args.len() > 3 {
-        return Err(ParseError {
+        return Err(ParseError { span: None, code: None,
             line,
             message: "if expects (if condition then [else])".to_string(),
         });
@@ -1073,7 +1086,7 @@ fn lower_when_unless_stmt(
     negate: bool,
 ) -> Result<(), ParseError> {
     if args.len() < 2 {
-        return Err(ParseError {
+        return Err(ParseError { span: None, code: None,
             line,
             message: format!(
                 "{} expects a condition and at least one body form",
@@ -1102,7 +1115,7 @@ fn lower_cond_stmt(
     out: &mut Vec<String>,
 ) -> Result<(), ParseError> {
     if args.is_empty() {
-        return Err(ParseError {
+        return Err(ParseError { span: None, code: None,
             line,
             message: "cond expects at least one clause".to_string(),
         });
@@ -1110,12 +1123,12 @@ fn lower_cond_stmt(
 
     let mut first = true;
     for clause_form in args {
-        let clause = clause_form.as_list().ok_or(ParseError {
+        let clause = clause_form.as_list().ok_or(ParseError { span: None, code: None,
             line: clause_form.line,
             message: "each cond clause must be a list".to_string(),
         })?;
         if clause.is_empty() {
-            return Err(ParseError {
+            return Err(ParseError { span: None, code: None,
                 line: clause_form.line,
                 message: "cond clause must not be empty".to_string(),
             });
@@ -1124,7 +1137,7 @@ fn lower_cond_stmt(
         let is_else = clause[0].as_symbol() == Some("else");
         if is_else {
             if clause.len() < 2 {
-                return Err(ParseError {
+                return Err(ParseError { span: None, code: None,
                     line: clause_form.line,
                     message: "cond else clause must have at least one body form".to_string(),
                 });
@@ -1142,7 +1155,7 @@ fn lower_cond_stmt(
         }
 
         if clause.len() < 2 {
-            return Err(ParseError {
+            return Err(ParseError { span: None, code: None,
                 line: clause_form.line,
                 message: "cond clause must have a test and at least one body form".to_string(),
             });
@@ -1171,7 +1184,7 @@ fn lower_case_stmt(
     out: &mut Vec<String>,
 ) -> Result<(), ParseError> {
     if args.len() < 2 {
-        return Err(ParseError {
+        return Err(ParseError { span: None, code: None,
             line,
             message: "case expects a key expression and at least one clause".to_string(),
         });
@@ -1183,12 +1196,12 @@ fn lower_case_stmt(
 
     let mut first = true;
     for clause_form in &args[1..] {
-        let clause = clause_form.as_list().ok_or(ParseError {
+        let clause = clause_form.as_list().ok_or(ParseError { span: None, code: None,
             line: clause_form.line,
             message: "each case clause must be a list".to_string(),
         })?;
         if clause.is_empty() {
-            return Err(ParseError {
+            return Err(ParseError { span: None, code: None,
                 line: clause_form.line,
                 message: "case clause must not be empty".to_string(),
             });
@@ -1197,7 +1210,7 @@ fn lower_case_stmt(
         let is_else = clause[0].as_symbol() == Some("else");
         if is_else {
             if clause.len() < 2 {
-                return Err(ParseError {
+                return Err(ParseError { span: None, code: None,
                     line: clause_form.line,
                     message: "case else clause must have at least one body form".to_string(),
                 });
@@ -1214,12 +1227,12 @@ fn lower_case_stmt(
             return Ok(());
         }
 
-        let datums = clause[0].as_list().ok_or(ParseError {
+        let datums = clause[0].as_list().ok_or(ParseError { span: None, code: None,
             line: clause[0].line,
             message: "case datum list must be a list".to_string(),
         })?;
         if clause.len() < 2 {
-            return Err(ParseError {
+            return Err(ParseError { span: None, code: None,
                 line: clause_form.line,
                 message: "case clause must have datums and at least one body form".to_string(),
             });
@@ -1233,7 +1246,7 @@ fn lower_case_stmt(
         let combined = if conditions.len() == 1 {
             conditions.into_iter().next().unwrap()
         } else {
-            // (a || b || c) â€” but we don't have || operator, so chain with if-expressions
+            // (a || b || c) â€?but we don't have || operator, so chain with if-expressions
             // Use nested: if a => { true } else if b => { true } else => { false }
             lower_or_chain_text(&conditions)
         };
@@ -1260,7 +1273,7 @@ fn lower_display_stmt(
     out: &mut Vec<String>,
 ) -> Result<(), ParseError> {
     if args.len() != 1 {
-        return Err(ParseError {
+        return Err(ParseError { span: None, code: None,
             line,
             message: "display/write expects exactly one argument".to_string(),
         });
@@ -1277,7 +1290,7 @@ fn lower_newline_stmt(
     out: &mut Vec<String>,
 ) -> Result<(), ParseError> {
     if !args.is_empty() {
-        return Err(ParseError {
+        return Err(ParseError { span: None, code: None,
             line,
             message: "newline does not accept arguments".to_string(),
         });
@@ -1293,7 +1306,7 @@ fn lower_for_each_stmt(
     out: &mut Vec<String>,
 ) -> Result<(), ParseError> {
     if args.len() != 2 {
-        return Err(ParseError {
+        return Err(ParseError { span: None, code: None,
             line,
             message: "for-each expects (for-each proc list)".to_string(),
         });
@@ -1343,7 +1356,7 @@ fn lower_while_stmt(
     out: &mut Vec<String>,
 ) -> Result<(), ParseError> {
     if args.is_empty() {
-        return Err(ParseError {
+        return Err(ParseError { span: None, code: None,
             line,
             message: "while expects (while condition body...)".to_string(),
         });
@@ -1365,13 +1378,13 @@ fn lower_do_stmt(
     out: &mut Vec<String>,
 ) -> Result<(), ParseError> {
     if args.len() < 2 {
-        return Err(ParseError {
+        return Err(ParseError { span: None, code: None,
             line,
             message: "do expects (do ((name init [step]) ...) (test expr...) body...)".to_string(),
         });
     }
 
-    let bindings = args[0].as_list().ok_or(ParseError {
+    let bindings = args[0].as_list().ok_or(ParseError { span: None, code: None,
         line: args[0].line,
         message: "do bindings must be a list".to_string(),
     })?;
@@ -1379,24 +1392,24 @@ fn lower_do_stmt(
     let mut step_updates = Vec::new();
 
     for (index, binding_form) in bindings.iter().enumerate() {
-        let binding = binding_form.as_list().ok_or(ParseError {
+        let binding = binding_form.as_list().ok_or(ParseError { span: None, code: None,
             line: binding_form.line,
             message: "each do binding must be a list".to_string(),
         })?;
         if binding.len() < 2 || binding.len() > 3 {
-            return Err(ParseError {
+            return Err(ParseError { span: None, code: None,
                 line: binding_form.line,
                 message: "do binding must be (name init [step])".to_string(),
             });
         }
 
-        let name_raw = binding[0].as_symbol().ok_or(ParseError {
+        let name_raw = binding[0].as_symbol().ok_or(ParseError { span: None, code: None,
             line: binding[0].line,
             message: "do binding name must be a symbol".to_string(),
         })?;
         let name = normalize_identifier(name_raw, binding[0].line, "do binding name")?;
         if !binding_names.insert(name.clone()) {
-            return Err(ParseError {
+            return Err(ParseError { span: None, code: None,
                 line: binding[0].line,
                 message: format!("duplicate do binding '{name_raw}'"),
             });
@@ -1412,12 +1425,12 @@ fn lower_do_stmt(
         }
     }
 
-    let test_clause = args[1].as_list().ok_or(ParseError {
+    let test_clause = args[1].as_list().ok_or(ParseError { span: None, code: None,
         line: args[1].line,
         message: "do test clause must be a list".to_string(),
     })?;
     if test_clause.is_empty() {
-        return Err(ParseError {
+        return Err(ParseError { span: None, code: None,
             line: args[1].line,
             message: "do test clause must start with a test expression".to_string(),
         });
@@ -1461,24 +1474,24 @@ fn lower_for_stmt(
     out: &mut Vec<String>,
 ) -> Result<(), ParseError> {
     if args.len() < 2 {
-        return Err(ParseError {
+        return Err(ParseError { span: None, code: None,
             line,
             message: "for expects (for (name start end [step]) body...)".to_string(),
         });
     }
 
-    let header = args[0].as_list().ok_or(ParseError {
+    let header = args[0].as_list().ok_or(ParseError { span: None, code: None,
         line: args[0].line,
         message: "for header must be a list".to_string(),
     })?;
     if header.len() < 3 || header.len() > 4 {
-        return Err(ParseError {
+        return Err(ParseError { span: None, code: None,
             line: args[0].line,
             message: "for header must be (name start end [step])".to_string(),
         });
     }
 
-    let name_raw = header[0].as_symbol().ok_or(ParseError {
+    let name_raw = header[0].as_symbol().ok_or(ParseError { span: None, code: None,
         line: header[0].line,
         message: "for loop variable must be a symbol".to_string(),
     })?;
@@ -1510,7 +1523,7 @@ fn lower_break_stmt(
     out: &mut Vec<String>,
 ) -> Result<(), ParseError> {
     if !args.is_empty() {
-        return Err(ParseError {
+        return Err(ParseError { span: None, code: None,
             line,
             message: "break does not accept arguments".to_string(),
         });
@@ -1526,7 +1539,7 @@ fn lower_continue_stmt(
     out: &mut Vec<String>,
 ) -> Result<(), ParseError> {
     if !args.is_empty() {
-        return Err(ParseError {
+        return Err(ParseError { span: None, code: None,
             line,
             message: "continue does not accept arguments".to_string(),
         });
@@ -1543,12 +1556,12 @@ fn lower_index_set_stmt(
     out: &mut Vec<String>,
 ) -> Result<(), ParseError> {
     if args.len() != 3 {
-        return Err(ParseError {
+        return Err(ParseError { span: None, code: None,
             line,
             message: format!("{head} expects exactly three arguments"),
         });
     }
-    let target_raw = args[0].as_symbol().ok_or(ParseError {
+    let target_raw = args[0].as_symbol().ok_or(ParseError { span: None, code: None,
         line: args[0].line,
         message: format!("{head} target must be a symbol"),
     })?;
@@ -1581,24 +1594,24 @@ fn lower_declare_stmt(
     out: &mut Vec<String>,
 ) -> Result<(), ParseError> {
     if args.len() != 1 {
-        return Err(ParseError {
+        return Err(ParseError { span: None, code: None,
             line,
             message: "declare expects exactly one signature list".to_string(),
         });
     }
 
-    let signature = args[0].as_list().ok_or(ParseError {
+    let signature = args[0].as_list().ok_or(ParseError { span: None, code: None,
         line: args[0].line,
         message: "declare signature must be a list".to_string(),
     })?;
     if signature.is_empty() {
-        return Err(ParseError {
+        return Err(ParseError { span: None, code: None,
             line: args[0].line,
             message: "declare signature cannot be empty".to_string(),
         });
     }
 
-    let name_raw = signature[0].as_symbol().ok_or(ParseError {
+    let name_raw = signature[0].as_symbol().ok_or(ParseError { span: None, code: None,
         line: signature[0].line,
         message: "declare function name must be a symbol".to_string(),
     })?;
@@ -1606,7 +1619,7 @@ fn lower_declare_stmt(
 
     let mut params = Vec::new();
     for param in &signature[1..] {
-        let param_raw = param.as_symbol().ok_or(ParseError {
+        let param_raw = param.as_symbol().ok_or(ParseError { span: None, code: None,
             line: param.line,
             message: "declare parameter must be a symbol".to_string(),
         })?;
@@ -1652,7 +1665,7 @@ fn lower_import_require_stmt(
         match head {
             "only" | "only-in" => {
                 if clause.len() < 3 {
-                    return Err(ParseError {
+                    return Err(ParseError { span: None, code: None,
                         line,
                         message: format!("{head} import requires module path and bindings"),
                     });
@@ -1664,7 +1677,7 @@ fn lower_import_require_stmt(
                         None
                     }
                 }) else {
-                    return Err(ParseError {
+                    return Err(ParseError { span: None, code: None,
                         line: clause[1].line,
                         message: format!("{head} module path must be a symbol or string"),
                     });
@@ -1684,23 +1697,23 @@ fn lower_import_require_stmt(
                         continue;
                     }
                     let Some(pair) = binding.as_list() else {
-                        return Err(ParseError {
+                        return Err(ParseError { span: None, code: None,
                             line: binding.line,
                             message: "vm import binding must be a symbol or (imported local)"
                                 .to_string(),
                         });
                     };
                     if pair.len() != 2 {
-                        return Err(ParseError {
+                        return Err(ParseError { span: None, code: None,
                             line: binding.line,
                             message: "vm import rename must be (imported local)".to_string(),
                         });
                     }
-                    let imported = pair[0].as_symbol().ok_or(ParseError {
+                    let imported = pair[0].as_symbol().ok_or(ParseError { span: None, code: None,
                         line: pair[0].line,
                         message: "vm import rename source must be a symbol".to_string(),
                     })?;
-                    let local = pair[1].as_symbol().ok_or(ParseError {
+                    let local = pair[1].as_symbol().ok_or(ParseError { span: None, code: None,
                         line: pair[1].line,
                         message: "vm import rename target must be a symbol".to_string(),
                     })?;
@@ -1724,7 +1737,7 @@ fn lower_import_require_stmt(
             }
             "prefix" | "prefix-in" => {
                 if clause.len() < 3 {
-                    return Err(ParseError {
+                    return Err(ParseError { span: None, code: None,
                         line,
                         message: format!("{head} import requires module path and prefix"),
                     });
@@ -1821,7 +1834,7 @@ fn lower_optional_chain_symbol(name: &str, line: usize) -> Result<Option<String>
 
     let parts: Vec<&str> = name.split("?.").collect();
     if parts.len() < 2 || parts.iter().any(|part| part.is_empty()) {
-        return Err(ParseError {
+        return Err(ParseError { span: None, code: None,
             line,
             message: format!("invalid optional chain symbol '{name}'"),
         });
@@ -1831,7 +1844,7 @@ fn lower_optional_chain_symbol(name: &str, line: usize) -> Result<Option<String>
     let mut out = root;
     for member in &parts[1..] {
         if !is_valid_member_ident(member) {
-            return Err(ParseError {
+            return Err(ParseError { span: None, code: None,
                 line,
                 message: format!("invalid optional chain member '{member}' in '{name}'"),
             });
@@ -1852,20 +1865,20 @@ fn is_valid_member_ident(member: &str) -> bool {
 
 fn lower_list_expr(items: &[SchemeForm], line: usize) -> Result<String, ParseError> {
     if items.is_empty() {
-        return Err(ParseError {
+        return Err(ParseError { span: None, code: None,
             line,
             message: "cannot lower empty list expression".to_string(),
         });
     }
 
-    let head = items[0].as_symbol().ok_or(ParseError {
+    let head = items[0].as_symbol().ok_or(ParseError { span: None, code: None,
         line: items[0].line,
         message: "list head must be a symbol".to_string(),
     })?;
     let args = &items[1..];
 
     if is_forbidden_scheme_builtin_name(head) {
-        return Err(ParseError {
+        return Err(ParseError { span: None, code: None,
             line,
             message: format!(
                 "direct builtin call '{head}' is not exposed in Scheme frontend; {}",
@@ -1897,7 +1910,7 @@ fn lower_list_expr(items: &[SchemeForm], line: usize) -> Result<String, ParseErr
         "/" => fold_infix_expr(args, "/", line, 2, "/ expects at least two arguments"),
         "-" => {
             if args.is_empty() {
-                return Err(ParseError {
+                return Err(ParseError { span: None, code: None,
                     line,
                     message: "- expects at least one argument".to_string(),
                 });
@@ -1912,7 +1925,7 @@ fn lower_list_expr(items: &[SchemeForm], line: usize) -> Result<String, ParseErr
         "quotient" => lower_binary_expr(args, "/", line, "quotient expects exactly two arguments"),
         "abs" => {
             if args.len() != 1 {
-                return Err(ParseError {
+                return Err(ParseError { span: None, code: None,
                     line,
                     message: "abs expects exactly one argument".to_string(),
                 });
@@ -1927,7 +1940,7 @@ fn lower_list_expr(items: &[SchemeForm], line: usize) -> Result<String, ParseErr
         }
         "min" => {
             if args.len() < 2 {
-                return Err(ParseError {
+                return Err(ParseError { span: None, code: None,
                     line,
                     message: "min expects at least two arguments".to_string(),
                 });
@@ -1948,7 +1961,7 @@ fn lower_list_expr(items: &[SchemeForm], line: usize) -> Result<String, ParseErr
         }
         "max" => {
             if args.len() < 2 {
-                return Err(ParseError {
+                return Err(ParseError { span: None, code: None,
                     line,
                     message: "max expects at least two arguments".to_string(),
                 });
@@ -1975,7 +1988,7 @@ fn lower_list_expr(items: &[SchemeForm], line: usize) -> Result<String, ParseErr
         ">" => lower_binary_expr(args, ">", line, "> expects exactly two arguments"),
         "<=" => {
             if args.len() != 2 {
-                return Err(ParseError {
+                return Err(ParseError { span: None, code: None,
                     line,
                     message: "<= expects exactly two arguments".to_string(),
                 });
@@ -1986,7 +1999,7 @@ fn lower_list_expr(items: &[SchemeForm], line: usize) -> Result<String, ParseErr
         }
         ">=" => {
             if args.len() != 2 {
-                return Err(ParseError {
+                return Err(ParseError { span: None, code: None,
                     line,
                     message: ">= expects exactly two arguments".to_string(),
                 });
@@ -1999,7 +2012,7 @@ fn lower_list_expr(items: &[SchemeForm], line: usize) -> Result<String, ParseErr
         // Boolean
         "not" => {
             if args.len() != 1 {
-                return Err(ParseError {
+                return Err(ParseError { span: None, code: None,
                     line,
                     message: "not expects exactly one argument".to_string(),
                 });
@@ -2013,7 +2026,7 @@ fn lower_list_expr(items: &[SchemeForm], line: usize) -> Result<String, ParseErr
         // Type predicates
         "type" | "type-of" => {
             if args.len() != 1 {
-                return Err(ParseError {
+                return Err(ParseError { span: None, code: None,
                     line,
                     message: format!("{head} expects exactly one argument"),
                 });
@@ -2029,18 +2042,18 @@ fn lower_list_expr(items: &[SchemeForm], line: usize) -> Result<String, ParseErr
         "pair?" => lower_type_check(args, line, "array"), // Lists are represented as arrays
         "procedure?" => {
             if args.len() != 1 {
-                return Err(ParseError {
+                return Err(ParseError { span: None, code: None,
                     line,
                     message: "procedure? expects exactly one argument".to_string(),
                 });
             }
-            // In our VM, closures don't have a separate type â€” always return false
+            // In our VM, closures don't have a separate type â€?always return false
             Ok("false".to_string())
         }
         "symbol?" => {
             // No symbol type in the VM
             if args.len() != 1 {
-                return Err(ParseError {
+                return Err(ParseError { span: None, code: None,
                     line,
                     message: "symbol? expects exactly one argument".to_string(),
                 });
@@ -2073,7 +2086,7 @@ fn lower_list_expr(items: &[SchemeForm], line: usize) -> Result<String, ParseErr
         }
         "cons" => {
             if args.len() != 2 {
-                return Err(ParseError {
+                return Err(ParseError { span: None, code: None,
                     line,
                     message: "cons expects exactly two arguments".to_string(),
                 });
@@ -2092,7 +2105,7 @@ fn lower_list_expr(items: &[SchemeForm], line: usize) -> Result<String, ParseErr
         }
         "car" => {
             if args.len() != 1 {
-                return Err(ParseError {
+                return Err(ParseError { span: None, code: None,
                     line,
                     message: "car expects exactly one argument".to_string(),
                 });
@@ -2102,7 +2115,7 @@ fn lower_list_expr(items: &[SchemeForm], line: usize) -> Result<String, ParseErr
         }
         "cdr" => {
             if args.len() != 1 {
-                return Err(ParseError {
+                return Err(ParseError { span: None, code: None,
                     line,
                     message: "cdr expects exactly one argument".to_string(),
                 });
@@ -2112,7 +2125,7 @@ fn lower_list_expr(items: &[SchemeForm], line: usize) -> Result<String, ParseErr
         }
         "cadr" => {
             if args.len() != 1 {
-                return Err(ParseError {
+                return Err(ParseError { span: None, code: None,
                     line,
                     message: "cadr expects exactly one argument".to_string(),
                 });
@@ -2122,7 +2135,7 @@ fn lower_list_expr(items: &[SchemeForm], line: usize) -> Result<String, ParseErr
         }
         "caddr" => {
             if args.len() != 1 {
-                return Err(ParseError {
+                return Err(ParseError { span: None, code: None,
                     line,
                     message: "caddr expects exactly one argument".to_string(),
                 });
@@ -2132,7 +2145,7 @@ fn lower_list_expr(items: &[SchemeForm], line: usize) -> Result<String, ParseErr
         }
         "length" => {
             if args.len() != 1 {
-                return Err(ParseError {
+                return Err(ParseError { span: None, code: None,
                     line,
                     message: "length expects exactly one argument".to_string(),
                 });
@@ -2156,7 +2169,7 @@ fn lower_list_expr(items: &[SchemeForm], line: usize) -> Result<String, ParseErr
         }
         "reverse" => {
             if args.len() != 1 {
-                return Err(ParseError {
+                return Err(ParseError { span: None, code: None,
                     line,
                     message: "reverse expects exactly one argument".to_string(),
                 });
@@ -2197,7 +2210,7 @@ fn lower_list_expr(items: &[SchemeForm], line: usize) -> Result<String, ParseErr
         }
         "string-length" => {
             if args.len() != 1 {
-                return Err(ParseError {
+                return Err(ParseError { span: None, code: None,
                     line,
                     message: "string-length expects exactly one argument".to_string(),
                 });
@@ -2207,7 +2220,7 @@ fn lower_list_expr(items: &[SchemeForm], line: usize) -> Result<String, ParseErr
         }
         "string-ref" => {
             if args.len() != 2 {
-                return Err(ParseError {
+                return Err(ParseError { span: None, code: None,
                     line,
                     message: "string-ref expects exactly two arguments".to_string(),
                 });
@@ -2227,7 +2240,7 @@ fn lower_list_expr(items: &[SchemeForm], line: usize) -> Result<String, ParseErr
                 let start = lower_expr(&args[1])?;
                 Ok(format!("({s})[{start}:]"))
             } else {
-                Err(ParseError {
+                Err(ParseError { span: None, code: None,
                     line,
                     message: "substring expects 2 or 3 arguments".to_string(),
                 })
@@ -2235,7 +2248,7 @@ fn lower_list_expr(items: &[SchemeForm], line: usize) -> Result<String, ParseErr
         }
         "number->string" => {
             if args.len() != 1 {
-                return Err(ParseError {
+                return Err(ParseError { span: None, code: None,
                     line,
                     message: "number->string expects exactly one argument".to_string(),
                 });
@@ -2245,12 +2258,12 @@ fn lower_list_expr(items: &[SchemeForm], line: usize) -> Result<String, ParseErr
         }
         "string->number" => {
             if args.len() != 1 {
-                return Err(ParseError {
+                return Err(ParseError { span: None, code: None,
                     line,
                     message: "string->number expects exactly one argument".to_string(),
                 });
             }
-            // No parse builtin â€” return 0 as a placeholder
+            // No parse builtin â€?return 0 as a placeholder
             Ok("0".to_string())
         }
 
@@ -2265,12 +2278,12 @@ fn lower_list_expr(items: &[SchemeForm], line: usize) -> Result<String, ParseErr
         "hash" => {
             let mut rendered = Vec::new();
             for entry in args {
-                let pair = entry.as_list().ok_or(ParseError {
+                let pair = entry.as_list().ok_or(ParseError { span: None, code: None,
                     line: entry.line,
                     message: "hash entries must be two-item lists".to_string(),
                 })?;
                 if pair.len() != 2 {
-                    return Err(ParseError {
+                    return Err(ParseError { span: None, code: None,
                         line: entry.line,
                         message: "hash entries must contain exactly key and value".to_string(),
                     });
@@ -2283,7 +2296,7 @@ fn lower_list_expr(items: &[SchemeForm], line: usize) -> Result<String, ParseErr
         }
         "keys" => {
             if args.len() != 1 {
-                return Err(ParseError {
+                return Err(ParseError { span: None, code: None,
                     line,
                     message: "keys expects exactly one argument".to_string(),
                 });
@@ -2293,7 +2306,7 @@ fn lower_list_expr(items: &[SchemeForm], line: usize) -> Result<String, ParseErr
         }
         "vector-ref" => {
             if args.len() != 2 {
-                return Err(ParseError {
+                return Err(ParseError { span: None, code: None,
                     line,
                     message: "vector-ref expects exactly two arguments".to_string(),
                 });
@@ -2304,7 +2317,7 @@ fn lower_list_expr(items: &[SchemeForm], line: usize) -> Result<String, ParseErr
         }
         "hash-ref" => {
             if args.len() != 2 {
-                return Err(ParseError {
+                return Err(ParseError { span: None, code: None,
                     line,
                     message: "hash-ref expects exactly two arguments".to_string(),
                 });
@@ -2315,7 +2328,7 @@ fn lower_list_expr(items: &[SchemeForm], line: usize) -> Result<String, ParseErr
         }
         "slice-range" => {
             if args.len() != 3 {
-                return Err(ParseError {
+                return Err(ParseError { span: None, code: None,
                     line,
                     message: "slice-range expects exactly three arguments".to_string(),
                 });
@@ -2327,7 +2340,7 @@ fn lower_list_expr(items: &[SchemeForm], line: usize) -> Result<String, ParseErr
         }
         "slice-to" => {
             if args.len() != 2 {
-                return Err(ParseError {
+                return Err(ParseError { span: None, code: None,
                     line,
                     message: "slice-to expects exactly two arguments".to_string(),
                 });
@@ -2338,7 +2351,7 @@ fn lower_list_expr(items: &[SchemeForm], line: usize) -> Result<String, ParseErr
         }
         "slice-from" => {
             if args.len() != 2 {
-                return Err(ParseError {
+                return Err(ParseError { span: None, code: None,
                     line,
                     message: "slice-from expects exactly two arguments".to_string(),
                 });
@@ -2351,7 +2364,7 @@ fn lower_list_expr(items: &[SchemeForm], line: usize) -> Result<String, ParseErr
         // Special forms (as expressions)
         "quote" => {
             if args.len() != 1 {
-                return Err(ParseError {
+                return Err(ParseError { span: None, code: None,
                     line,
                     message: "quote expects exactly one argument".to_string(),
                 });
@@ -2367,7 +2380,7 @@ fn lower_list_expr(items: &[SchemeForm], line: usize) -> Result<String, ParseErr
         // Statement-only forms
         "while" | "do" | "for" | "define" | "set!" | "declare" | "break" | "continue" | "begin"
         | "vector-set!" | "hash-set!" | "when" | "unless" | "cond" | "case" | "display"
-        | "write" | "newline" | "for-each" => Err(ParseError {
+        | "write" | "newline" | "for-each" => Err(ParseError { span: None, code: None,
             line,
             message: format!("special form '{head}' is only valid in statement position"),
         }),
@@ -2378,7 +2391,7 @@ fn lower_list_expr(items: &[SchemeForm], line: usize) -> Result<String, ParseErr
                 let mut segments = Vec::new();
                 for segment in vm_path.split('.') {
                     if !is_valid_member_ident(segment) {
-                        return Err(ParseError {
+                        return Err(ParseError { span: None, code: None,
                             line,
                             message: format!(
                                 "invalid vm namespace segment '{segment}' in '{head}'"
@@ -2388,7 +2401,7 @@ fn lower_list_expr(items: &[SchemeForm], line: usize) -> Result<String, ParseErr
                     segments.push(segment);
                 }
                 if segments.is_empty() {
-                    return Err(ParseError {
+                    return Err(ParseError { span: None, code: None,
                         line,
                         message: "vm namespace call requires at least one member".to_string(),
                     });
@@ -2452,7 +2465,7 @@ fn scheme_builtin_syntax_hint(name: &str) -> &'static str {
         "io_open" | "io_popen" | "io_read_all" | "io_read_line" | "io_write" | "io_flush"
         | "io_close" | "io_exists" => "use io namespace syntax (for example io::open)",
         "re_is_match" | "re_find" | "re_replace" | "re_split" | "re_captures" => {
-            "use re namespace syntax (for example re::is_match)"
+            "use re namespace syntax (for example re::match with optional flags arg)"
         }
         _ => "use Scheme frontend forms instead of VM builtin helpers",
     }
@@ -2467,20 +2480,20 @@ fn lower_hash_key_expr(form: &SchemeForm) -> Result<String, ParseError> {
 
 fn lower_lambda_expr(args: &[SchemeForm], line: usize) -> Result<String, ParseError> {
     if args.len() < 2 {
-        return Err(ParseError {
+        return Err(ParseError { span: None, code: None,
             line,
             message: "lambda expects (lambda (params...) body...)".to_string(),
         });
     }
 
-    let params_list = args[0].as_list().ok_or(ParseError {
+    let params_list = args[0].as_list().ok_or(ParseError { span: None, code: None,
         line: args[0].line,
         message: "lambda parameters must be a list".to_string(),
     })?;
 
     let mut params = Vec::new();
     for param in params_list {
-        let name_raw = param.as_symbol().ok_or(ParseError {
+        let name_raw = param.as_symbol().ok_or(ParseError { span: None, code: None,
             line: param.line,
             message: "lambda parameter must be a symbol".to_string(),
         })?;
@@ -2503,7 +2516,7 @@ fn fold_infix_expr(
     arity_message: &str,
 ) -> Result<String, ParseError> {
     if args.len() < min_arity {
-        return Err(ParseError {
+        return Err(ParseError { span: None, code: None,
             line,
             message: arity_message.to_string(),
         });
@@ -2524,7 +2537,7 @@ fn lower_binary_expr(
     message: &str,
 ) -> Result<String, ParseError> {
     if args.len() != 2 {
-        return Err(ParseError {
+        return Err(ParseError { span: None, code: None,
             line,
             message: message.to_string(),
         });
@@ -2559,7 +2572,7 @@ fn render_string(value: &str) -> String {
 /// Helper to lower multiple body expressions into a block expression
 fn lower_body_exprs(exprs: &[SchemeForm], line: usize) -> Result<String, ParseError> {
     if exprs.is_empty() {
-        return Err(ParseError {
+        return Err(ParseError { span: None, code: None,
             line,
             message: "body must have at least one expression".to_string(),
         });
@@ -2581,7 +2594,7 @@ fn lower_body_exprs(exprs: &[SchemeForm], line: usize) -> Result<String, ParseEr
 
 fn lower_modulo_expr(args: &[SchemeForm], line: usize) -> Result<String, ParseError> {
     if args.len() != 2 {
-        return Err(ParseError {
+        return Err(ParseError { span: None, code: None,
             line,
             message: "modulo expects exactly two arguments".to_string(),
         });
@@ -2594,7 +2607,7 @@ fn lower_modulo_expr(args: &[SchemeForm], line: usize) -> Result<String, ParseEr
 
 fn lower_remainder_expr(args: &[SchemeForm], line: usize) -> Result<String, ParseError> {
     if args.len() != 2 {
-        return Err(ParseError {
+        return Err(ParseError { span: None, code: None,
             line,
             message: "remainder expects exactly two arguments".to_string(),
         });
@@ -2638,7 +2651,7 @@ fn lower_or_expr(args: &[SchemeForm]) -> Result<String, ParseError> {
 
 fn lower_if_expr(args: &[SchemeForm], line: usize) -> Result<String, ParseError> {
     if args.len() < 2 || args.len() > 3 {
-        return Err(ParseError {
+        return Err(ParseError { span: None, code: None,
             line,
             message: "if expression expects (if condition then [else])".to_string(),
         });
@@ -2662,7 +2675,7 @@ fn lower_let_expr(
     letrec: bool,
 ) -> Result<String, ParseError> {
     if args.len() < 2 {
-        return Err(ParseError {
+        return Err(ParseError { span: None, code: None,
             line,
             message: "let expression expects bindings and at least one body form".to_string(),
         });
@@ -2672,7 +2685,7 @@ fn lower_let_expr(
     if let Some(name_sym) = args[0].as_symbol() {
         // Named let
         if args.len() < 3 {
-            return Err(ParseError {
+            return Err(ParseError { span: None, code: None,
                 line,
                 message: "named let expects name, bindings, and body".to_string(),
             });
@@ -2680,7 +2693,7 @@ fn lower_let_expr(
         return lower_named_let_expr(name_sym, &args[1], &args[2..], line);
     }
 
-    let bindings = args[0].as_list().ok_or(ParseError {
+    let bindings = args[0].as_list().ok_or(ParseError { span: None, code: None,
         line: args[0].line,
         message: "let bindings must be a list".to_string(),
     })?;
@@ -2695,17 +2708,17 @@ fn lower_let_expr(
         // letrec: lower recursive lambdas to function declarations.
         let mut deferred = Vec::<(String, String)>::new();
         for binding in bindings {
-            let pair = binding.as_list().ok_or(ParseError {
+            let pair = binding.as_list().ok_or(ParseError { span: None, code: None,
                 line: binding.line,
                 message: "let binding must be a list".to_string(),
             })?;
             if pair.len() != 2 {
-                return Err(ParseError {
+                return Err(ParseError { span: None, code: None,
                     line: binding.line,
                     message: "let binding must be (name value)".to_string(),
                 });
             }
-            let name_raw = pair[0].as_symbol().ok_or(ParseError {
+            let name_raw = pair[0].as_symbol().ok_or(ParseError { span: None, code: None,
                 line: pair[0].line,
                 message: "let binding name must be a symbol".to_string(),
             })?;
@@ -2725,17 +2738,17 @@ fn lower_let_expr(
     } else if sequential {
         // let*: sequential
         for binding in bindings {
-            let pair = binding.as_list().ok_or(ParseError {
+            let pair = binding.as_list().ok_or(ParseError { span: None, code: None,
                 line: binding.line,
                 message: "let binding must be a list".to_string(),
             })?;
             if pair.len() != 2 {
-                return Err(ParseError {
+                return Err(ParseError { span: None, code: None,
                     line: binding.line,
                     message: "let binding must be (name value)".to_string(),
                 });
             }
-            let name_raw = pair[0].as_symbol().ok_or(ParseError {
+            let name_raw = pair[0].as_symbol().ok_or(ParseError { span: None, code: None,
                 line: pair[0].line,
                 message: "let binding name must be a symbol".to_string(),
             })?;
@@ -2747,12 +2760,12 @@ fn lower_let_expr(
         // let: parallel (use temp vars)
         let mut temps = Vec::new();
         for (idx, binding) in bindings.iter().enumerate() {
-            let pair = binding.as_list().ok_or(ParseError {
+            let pair = binding.as_list().ok_or(ParseError { span: None, code: None,
                 line: binding.line,
                 message: "let binding must be a list".to_string(),
             })?;
             if pair.len() != 2 {
-                return Err(ParseError {
+                return Err(ParseError { span: None, code: None,
                     line: binding.line,
                     message: "let binding must be (name value)".to_string(),
                 });
@@ -2779,7 +2792,7 @@ fn lower_named_let_expr(
     body: &[SchemeForm],
     line: usize,
 ) -> Result<String, ParseError> {
-    let bindings = bindings_form.as_list().ok_or(ParseError {
+    let bindings = bindings_form.as_list().ok_or(ParseError { span: None, code: None,
         line: bindings_form.line,
         message: "named let bindings must be a list".to_string(),
     })?;
@@ -2787,17 +2800,17 @@ fn lower_named_let_expr(
     let mut params = Vec::new();
     let mut init_vals = Vec::new();
     for binding in bindings {
-        let pair = binding.as_list().ok_or(ParseError {
+        let pair = binding.as_list().ok_or(ParseError { span: None, code: None,
             line: binding.line,
             message: "named let binding must be a list".to_string(),
         })?;
         if pair.len() != 2 {
-            return Err(ParseError {
+            return Err(ParseError { span: None, code: None,
                 line: binding.line,
                 message: "named let binding must be (name value)".to_string(),
             });
         }
-        let name_raw = pair[0].as_symbol().ok_or(ParseError {
+        let name_raw = pair[0].as_symbol().ok_or(ParseError { span: None, code: None,
             line: pair[0].line,
             message: "named let binding name must be a symbol".to_string(),
         })?;
@@ -2830,18 +2843,18 @@ fn lower_letrec_lambda_binding(
         return Ok(None);
     };
     if items.len() < 3 {
-        return Err(ParseError {
+        return Err(ParseError { span: None, code: None,
             line,
             message: "lambda expects (lambda (params...) body...)".to_string(),
         });
     }
-    let params_list = items[1].as_list().ok_or(ParseError {
+    let params_list = items[1].as_list().ok_or(ParseError { span: None, code: None,
         line: items[1].line,
         message: "lambda parameters must be a list".to_string(),
     })?;
     let mut params = Vec::new();
     for param in params_list {
-        let raw = param.as_symbol().ok_or(ParseError {
+        let raw = param.as_symbol().ok_or(ParseError { span: None, code: None,
             line: param.line,
             message: "lambda parameter must be a symbol".to_string(),
         })?;
@@ -2878,7 +2891,7 @@ fn lower_type_check(
     expected_type: &str,
 ) -> Result<String, ParseError> {
     if args.len() != 1 {
-        return Err(ParseError {
+        return Err(ParseError { span: None, code: None,
             line,
             message: "type predicate expects exactly one argument".to_string(),
         });
@@ -2896,7 +2909,7 @@ where
     F: FnOnce(String) -> String,
 {
     if args.len() != 1 {
-        return Err(ParseError {
+        return Err(ParseError { span: None, code: None,
             line,
             message: "predicate expects exactly one argument".to_string(),
         });
@@ -2907,7 +2920,7 @@ where
 
 fn lower_map_expr(args: &[SchemeForm], line: usize) -> Result<String, ParseError> {
     if args.len() != 2 {
-        return Err(ParseError {
+        return Err(ParseError { span: None, code: None,
             line,
             message: "map expects (map proc list)".to_string(),
         });
@@ -2940,7 +2953,7 @@ fn lower_map_expr(args: &[SchemeForm], line: usize) -> Result<String, ParseError
 
 fn lower_filter_expr(args: &[SchemeForm], line: usize) -> Result<String, ParseError> {
     if args.len() != 2 {
-        return Err(ParseError {
+        return Err(ParseError { span: None, code: None,
             line,
             message: "filter expects (filter pred list)".to_string(),
         });
@@ -2974,29 +2987,29 @@ fn lower_filter_expr(args: &[SchemeForm], line: usize) -> Result<String, ParseEr
 
 fn lower_apply_expr(args: &[SchemeForm], line: usize) -> Result<String, ParseError> {
     if args.len() < 2 {
-        return Err(ParseError {
+        return Err(ParseError { span: None, code: None,
             line,
             message: "apply expects at least a function and argument list".to_string(),
         });
     }
     // apply func arg1 arg2 ... arglist
-    // We don't have true varargs or spread â€” approximate by requiring exactly 2 args
+    // We don't have true varargs or spread â€?approximate by requiring exactly 2 args
     if args.len() != 2 {
-        return Err(ParseError {
+        return Err(ParseError { span: None, code: None,
             line,
             message: "apply in this subset expects exactly (apply func arglist)".to_string(),
         });
     }
     let func = lower_expr(&args[0])?;
     let arglist = lower_expr(&args[1])?;
-    // Can't actually spread â€” just call with the whole list (won't work as intended)
+    // Can't actually spread â€?just call with the whole list (won't work as intended)
     // This is a limitation of the lowering approach
     Ok(format!("{func}({arglist})"))
 }
 
 fn normalize_identifier(name: &str, line: usize, context: &str) -> Result<String, ParseError> {
     if name.is_empty() {
-        return Err(ParseError {
+        return Err(ParseError { span: None, code: None,
             line,
             message: format!("{context} cannot be empty"),
         });
@@ -3010,21 +3023,21 @@ fn normalize_identifier(name: &str, line: usize, context: &str) -> Result<String
 
     let mut chars = out.chars();
     let Some(first) = chars.next() else {
-        return Err(ParseError {
+        return Err(ParseError { span: None, code: None,
             line,
             message: format!("{context} cannot be empty"),
         });
     };
 
     if !is_ident_start(first) || !chars.all(is_ident_continue) {
-        return Err(ParseError {
+        return Err(ParseError { span: None, code: None,
             line,
             message: format!("unsupported identifier '{name}' in {context}"),
         });
     }
 
     if is_reserved_identifier(&out) {
-        return Err(ParseError {
+        return Err(ParseError { span: None, code: None,
             line,
             message: format!("identifier '{name}' is reserved"),
         });

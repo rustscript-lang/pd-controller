@@ -1,10 +1,11 @@
 use super::super::ParseError;
+use crate::source_map::LoweredSource;
 use super::{is_ident_continue, is_ident_start};
 
-pub(super) fn lower(source: &str) -> Result<String, ParseError> {
+pub(super) fn lower(source: &str) -> Result<LoweredSource, ParseError> {
     let print_rewritten = rewrite_rss_print_macro(source);
     let alias_rewritten = rewrite_rss_aliases(&print_rewritten);
-    Ok(alias_rewritten)
+    Ok(LoweredSource::identity(alias_rewritten))
 }
 
 fn rewrite_rss_print_macro(source: &str) -> String {

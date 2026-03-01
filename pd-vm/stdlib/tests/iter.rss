@@ -1,4 +1,4 @@
-use super::rss::iter::{all_true, any_true, chunk, enumerate, range, range_step, skip, sum, take};
+use super::rss::iter::{all_true, any_true, chunk, each, enumerate, filter, map, range, range_step, reduce, skip, sum, take};
 
 let ascending = range(5);
 assert(ascending.length == 5);
@@ -39,3 +39,26 @@ assert(any_true([false, false, true]));
 assert(any_true([false, false]) == false);
 assert(all_true([true, true]));
 assert(all_true([true, false]) == false);
+
+let plus_one = map([1, 2, 3], |value| value + 1);
+assert(plus_one.length == 3);
+assert(plus_one[0] == 2);
+assert(plus_one[2] == 4);
+
+fn double(value) {
+    value * 2;
+}
+let doubled = map([1, 2, 3], double);
+assert(doubled.length == 3);
+assert(doubled[1] == 4);
+
+let evens = filter([1, 2, 3, 4, 5, 6], |value| value % 2 == 0);
+assert(evens.length == 3);
+assert(evens[0] == 2);
+assert(evens[2] == 6);
+
+let total = reduce([1, 2, 3, 4], 0, |acc, value| acc + value);
+assert(total == 10);
+
+let each_result = each([7, 8], |value| value + 1);
+assert(type(each_result) == "null");

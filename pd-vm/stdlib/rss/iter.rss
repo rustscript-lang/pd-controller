@@ -104,3 +104,45 @@ pub fn all_true(values) {
     }
     out;
 }
+
+pub fn map(values, func) {
+    let out = [];
+    let index = 0;
+    while index < (values).length {
+        out[(out).length] = func(values[index]);
+        index = index + 1;
+    }
+    out;
+}
+
+pub fn filter(values, pred) {
+    let out = [];
+    let index = 0;
+    while index < (values).length {
+        let value = values[index];
+        if pred(value) {
+            out[(out).length] = value;
+        }
+        index = index + 1;
+    }
+    out;
+}
+
+pub fn reduce(values, init, func) {
+    let acc = init;
+    let index = 0;
+    while index < (values).length {
+        acc = func(acc, values[index]);
+        index = index + 1;
+    }
+    acc;
+}
+
+pub fn each(values, func) {
+    let index = 0;
+    while index < (values).length {
+        let each_result = func(values[index]);
+        index = index + 1;
+    }
+    null;
+}

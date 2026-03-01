@@ -3,6 +3,8 @@ mod lua;
 mod rustscript;
 mod scheme;
 
+use crate::source_map::{LoweredSource, SourceMap};
+
 use super::{ParseError, SourceFlavor, ir::FrontendIr, parser::Parser};
 
 trait FrontendCompiler {
@@ -35,14 +37,14 @@ pub(super) fn is_ident_continue(ch: char) -> bool {
 impl FrontendCompiler for RustScriptCompiler {
     fn lower_to_ir(&self, source: &str) -> Result<FrontendIr, ParseError> {
         let lowered = rustscript::lower(source)?;
-        parse_with_parser(&lowered, false, false)
+        parse_lowered_with_mapping(source, lowered, false, false)
     }
 }
 
 impl FrontendCompiler for JavaScriptCompiler {
     fn lower_to_ir(&self, source: &str) -> Result<FrontendIr, ParseError> {
         let lowered = javascript::lower(source)?;
-        parse_with_parser(&lowered, false, true)
+        parse_lowered_with_mapping(source, lowered, false, true)
     }
 }
 
@@ -60,11 +62,24 @@ impl FrontendCompiler for SchemeCompiler {
 
 fn parse_with_parser(
     source: &str,
+    source_id: u32,
     allow_implicit_externs: bool,
     allow_implicit_semicolons: bool,
 ) -> Result<FrontendIr, ParseError> {
-    let mut parser = Parser::new(source, allow_implicit_externs, allow_implicit_semicolons)?;
-    let stmts = parser.parse_program()?;
+    let mut parser = Parser::new(
+        source,
+        source_id,
+        allow_implicit_externs,
+        allow_implicit_semicolons,
+    )?;
+    let stmts = parser.parse_program().map_err(|mut err| {
+        if err.span.is_none() {
+            let mut map = SourceMap::new();
+            let sid = map.add_source("<source>", source.to_string());
+            err = err.with_line_span_from_source(&map, sid);
+        }
+        err
+    })?;
     Ok(FrontendIr {
         stmts,
         locals: parser.local_count(),
@@ -72,4 +87,42 @@ fn parse_with_parser(
         functions: parser.function_decls(),
         function_impls: parser.function_impls(),
     })
+}
+
+fn parse_lowered_with_mapping(
+    original_source: &str,
+    lowered: LoweredSource,
+    allow_implicit_externs: bool,
+    allow_implicit_semicolons: bool,
+) -> Result<FrontendIr, ParseError> {
+    let mut source_map = SourceMap::new();
+    let original_source_id = source_map.add_source("<source>", original_source.to_string());
+    let lowered_source_id = source_map.add_source("<lowered>", lowered.text.clone());
+
+    match parse_with_parser(
+        &lowered.text,
+        lowered_source_id,
+        allow_implicit_externs,
+        allow_implicit_semicolons,
+    ) {
+        Ok(ir) => Ok(ir),
+        Err(mut err) => {
+            err = err.with_line_span_from_source(&source_map, lowered_source_id);
+            if let Some(span) = err.span
+                && let Some(mapped) = lowered.mapping.map_span(
+                    &source_map,
+                    lowered_source_id,
+                    original_source_id,
+                    span,
+                )
+            {
+                err.span = Some(mapped);
+                if let Some((line, _)) = source_map.line_col_for_offset(original_source_id, mapped.lo)
+                {
+                    err.line = line;
+                }
+            }
+            Err(err)
+        }
+    }
 }

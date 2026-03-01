@@ -83,3 +83,11 @@ fn stdlib_math_spec_passes() {
     let stack = run_rustscript_spec(&path);
     assert_eq!(stack, Vec::<Value>::new());
 }
+
+#[test]
+fn stdlib_re_spec_passes() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let path = root.join("stdlib/tests/re.rss");
+    let stack = run_rustscript_spec(&path);
+    assert_eq!(stack, Vec::<Value>::new());
+}

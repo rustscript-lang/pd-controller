@@ -1,6 +1,7 @@
 use super::super::ParseError;
 use super::super::ir::{Expr, FrontendIr, Stmt};
 use super::{is_ident_continue, is_ident_start};
+use crate::source_map::LoweredSource;
 use std::collections::HashMap;
 use std::collections::HashSet;
 
@@ -33,7 +34,7 @@ pub(super) fn lower_to_ir(source: &str) -> Result<FrontendIr, ParseError> {
         return Ok(ir);
     }
     let lowered = lower(source)?;
-    super::parse_with_parser(&lowered, false, false)
+    super::parse_lowered_with_mapping(source, lowered, false, false)
 }
 
 fn try_lower_direct_subset_to_ir(source: &str) -> Result<Option<FrontendIr>, ParseError> {
@@ -296,7 +297,7 @@ impl LuaDirectIrBuilder {
 
     fn lower_assign(&self, name: &str, expr: Expr, line: u32) -> Result<Stmt, ParseError> {
         let Some(index) = self.locals.get(name).copied() else {
-            return Err(ParseError {
+            return Err(ParseError { span: None, code: None,
                 line: line as usize,
                 message: format!("unknown local '{name}'"),
             });
@@ -322,7 +323,7 @@ impl LuaDirectIrBuilder {
 
     fn alloc_local(&mut self) -> Result<u8, ParseError> {
         let index = self.next_local;
-        self.next_local = self.next_local.checked_add(1).ok_or(ParseError {
+        self.next_local = self.next_local.checked_add(1).ok_or(ParseError { span: None, code: None,
             line: 1,
             message: "local index overflow".to_string(),
         })?;
@@ -753,7 +754,7 @@ fn tokenize_lua_direct_expr(input: &str) -> Option<Vec<LuaDirectToken>> {
     Some(out)
 }
 
-pub(super) fn lower(source: &str) -> Result<String, ParseError> {
+pub(super) fn lower(source: &str) -> Result<LoweredSource, ParseError> {
     let cleaned_source = remove_lua_comments(source)?;
     let mut out = Vec::new();
     let mut blocks = Vec::new();
@@ -789,7 +790,7 @@ pub(super) fn lower(source: &str) -> Result<String, ParseError> {
         if let Some(rest) = trimmed.strip_prefix("local function ") {
             let signature = rest.trim().trim_end_matches(';').trim();
             if !signature.ends_with(')') {
-                return Err(ParseError {
+                return Err(ParseError { span: None, code: None,
                     line: line_no,
                     message: "lua local function declaration must end with ')'".to_string(),
                 });
@@ -815,7 +816,7 @@ pub(super) fn lower(source: &str) -> Result<String, ParseError> {
         if let Some(rest) = trimmed.strip_prefix("function ") {
             let signature = rest.trim().trim_end_matches(';').trim();
             if !signature.ends_with(')') {
-                return Err(ParseError {
+                return Err(ParseError { span: None, code: None,
                     line: line_no,
                     message: "lua function declaration must end with ')'".to_string(),
                 });
@@ -931,7 +932,7 @@ pub(super) fn lower(source: &str) -> Result<String, ParseError> {
                 }
             }
 
-            let eq_index = header.find('=').ok_or(ParseError {
+            let eq_index = header.find('=').ok_or(ParseError { span: None, code: None,
                 line: line_no,
                 message: "lua for loop must contain '='".to_string(),
             })?;
@@ -942,7 +943,7 @@ pub(super) fn lower(source: &str) -> Result<String, ParseError> {
                 _ => false,
             };
             if !valid_name {
-                return Err(ParseError {
+                return Err(ParseError { span: None, code: None,
                     line: line_no,
                     message: "invalid lua for loop variable".to_string(),
                 });
@@ -950,7 +951,7 @@ pub(super) fn lower(source: &str) -> Result<String, ParseError> {
             let rhs = header[eq_index + 1..].trim();
             let parts = split_top_level_csv(rhs);
             if parts.len() < 2 || parts.len() > 3 {
-                return Err(ParseError {
+                return Err(ParseError { span: None, code: None,
                     line: line_no,
                     message: "lua numeric for loop must be 'for name = start, end [, step] do'"
                         .to_string(),
@@ -975,7 +976,7 @@ pub(super) fn lower(source: &str) -> Result<String, ParseError> {
                 line_no,
             )?;
             if step_expr.starts_with('-') {
-                return Err(ParseError {
+                return Err(ParseError { span: None, code: None,
                     line: line_no,
                     message: "negative lua for steps are not supported in this subset".to_string(),
                 });
@@ -1001,7 +1002,7 @@ pub(super) fn lower(source: &str) -> Result<String, ParseError> {
 
         if let Some(rest) = trimmed.strip_prefix("until ") {
             if !matches!(blocks.last(), Some(LuaBlock::Repeat)) {
-                return Err(ParseError {
+                return Err(ParseError { span: None, code: None,
                     line: line_no,
                     message: "lua 'until' without matching 'repeat'".to_string(),
                 });
@@ -1022,7 +1023,7 @@ pub(super) fn lower(source: &str) -> Result<String, ParseError> {
             && let Some(condition) = rest.strip_suffix(" then")
         {
             if !matches!(blocks.last(), Some(LuaBlock::If)) {
-                return Err(ParseError {
+                return Err(ParseError { span: None, code: None,
                     line: line_no,
                     message: "lua 'elseif' without matching 'if'".to_string(),
                 });
@@ -1041,7 +1042,7 @@ pub(super) fn lower(source: &str) -> Result<String, ParseError> {
 
         if trimmed == "else" {
             if !matches!(blocks.last(), Some(LuaBlock::If)) {
-                return Err(ParseError {
+                return Err(ParseError { span: None, code: None,
                     line: line_no,
                     message: "lua 'else' without matching 'if'".to_string(),
                 });
@@ -1051,13 +1052,13 @@ pub(super) fn lower(source: &str) -> Result<String, ParseError> {
         }
 
         if trimmed == "end" {
-            let block = blocks.pop().ok_or(ParseError {
+            let block = blocks.pop().ok_or(ParseError { span: None, code: None,
                 line: line_no,
                 message: "lua 'end' without matching block".to_string(),
             })?;
             match block {
                 LuaBlock::Repeat => {
-                    return Err(ParseError {
+                    return Err(ParseError { span: None, code: None,
                         line: line_no,
                         message: "lua 'repeat' block must be closed with 'until'".to_string(),
                     });
@@ -1106,7 +1107,7 @@ pub(super) fn lower(source: &str) -> Result<String, ParseError> {
     }
 
     if !blocks.is_empty() {
-        return Err(ParseError {
+        return Err(ParseError { span: None, code: None,
             line: source.lines().count().max(1),
             message: "unterminated lua block: expected 'end'".to_string(),
         });
@@ -1119,7 +1120,7 @@ pub(super) fn lower(source: &str) -> Result<String, ParseError> {
         out = combined;
     }
 
-    Ok(out.join("\n"))
+    Ok(LoweredSource::identity(out.join("\n")))
 }
 
 #[derive(Copy, Clone)]
@@ -1426,7 +1427,7 @@ fn rewrite_lua_inline_function_literal(line: &str, line_no: usize) -> Result<Str
             '(' => depth += 1,
             ')' => {
                 if depth == 0 {
-                    return Err(ParseError {
+                    return Err(ParseError { span: None, code: None,
                         line: line_no,
                         message: "malformed lua function literal parameters".to_string(),
                     });
@@ -1441,20 +1442,20 @@ fn rewrite_lua_inline_function_literal(line: &str, line_no: usize) -> Result<Str
         }
     }
 
-    let close_index = close_index.ok_or(ParseError {
+    let close_index = close_index.ok_or(ParseError { span: None, code: None,
         line: line_no,
         message: "lua function literal missing ')'".to_string(),
     })?;
     let params = after_keyword[1..close_index].trim();
 
     let body_and_end = after_keyword[close_index + 1..].trim();
-    let body_raw = body_and_end.strip_suffix("end").ok_or(ParseError {
+    let body_raw = body_and_end.strip_suffix("end").ok_or(ParseError { span: None, code: None,
         line: line_no,
         message: "lua function literal must end with 'end'".to_string(),
     })?;
     let body_raw = body_raw.trim();
     if !body_raw.starts_with("return") {
-        return Err(ParseError {
+        return Err(ParseError { span: None, code: None,
             line: line_no,
             message: "lua function literal must use 'return <expr>'".to_string(),
         });
@@ -1466,14 +1467,14 @@ fn rewrite_lua_inline_function_literal(line: &str, line_no: usize) -> Result<Str
             .next()
             .is_some_and(|ch| ch.is_ascii_whitespace())
     {
-        return Err(ParseError {
+        return Err(ParseError { span: None, code: None,
             line: line_no,
             message: "lua function literal must use 'return <expr>'".to_string(),
         });
     }
     let body = after_return.trim().trim_end_matches(';').trim();
     if body.is_empty() {
-        return Err(ParseError {
+        return Err(ParseError { span: None, code: None,
             line: line_no,
             message: "lua function literal return expression cannot be empty".to_string(),
         });
@@ -1543,7 +1544,7 @@ fn rewrite_lua_length_operator(
 
         let operand_start = skip_inline_whitespace(bytes, i + 1);
         if operand_start >= bytes.len() {
-            return Err(ParseError {
+            return Err(ParseError { span: None, code: None,
                 line: line_no,
                 message: "lua length operator '#' missing operand".to_string(),
             });
@@ -1579,7 +1580,7 @@ fn parse_lua_length_operand_end(
         return parse_lua_string_end(input, start, line_no);
     }
     if !is_ident_start(first as char) {
-        return Err(ParseError {
+        return Err(ParseError { span: None, code: None,
             line: line_no,
             message: "unsupported operand for lua length operator '#'".to_string(),
         });
@@ -1651,7 +1652,7 @@ fn parse_balanced_segment(
 ) -> Result<usize, ParseError> {
     let bytes = input.as_bytes();
     if start >= bytes.len() || bytes[start] != open {
-        return Err(ParseError {
+        return Err(ParseError { span: None, code: None,
             line: line_no,
             message: "malformed lua expression while parsing '#' operand".to_string(),
         });
@@ -1700,7 +1701,7 @@ fn parse_balanced_segment(
         i += 1;
     }
 
-    Err(ParseError {
+    Err(ParseError { span: None, code: None,
         line: line_no,
         message: "unterminated lua expression while parsing '#' operand".to_string(),
     })
@@ -1722,7 +1723,7 @@ fn parse_lua_string_end(input: &str, start: usize, line_no: usize) -> Result<usi
         }
         i += 1;
     }
-    Err(ParseError {
+    Err(ParseError { span: None, code: None,
         line: line_no,
         message: "unterminated lua string while parsing '#' operand".to_string(),
     })
@@ -1831,7 +1832,7 @@ fn rewrite_lua_method_invocation(
     let rewritten = match method {
         "len" => {
             if !args.is_empty() {
-                return Err(ParseError {
+                return Err(ParseError { span: None, code: None,
                     line: line_no,
                     message: "lua string method ':len' expects no arguments".to_string(),
                 });
@@ -1848,14 +1849,14 @@ fn rewrite_lua_method_invocation(
                 format!("__lua_string_sub_range({receiver}, {start}, {end})")
             }
             _ => {
-                return Err(ParseError {
+                return Err(ParseError { span: None, code: None,
                     line: line_no,
                     message: "lua string method ':sub' expects 1 or 2 arguments".to_string(),
                 });
             }
         },
         "find" | "match" | "gsub" => {
-            return Err(ParseError {
+            return Err(ParseError { span: None, code: None,
                 line: line_no,
                 message: format!(
                     "lua string method ':{method}' (Lua pattern API) is not supported in this subset yet"
@@ -1912,7 +1913,7 @@ fn parse_balanced_call_args(
         }
         if b == b')' {
             if depth == 0 {
-                return Err(ParseError {
+                return Err(ParseError { span: None, code: None,
                     line: line_no,
                     message: "malformed lua method call argument list".to_string(),
                 });
@@ -1928,7 +1929,7 @@ fn parse_balanced_call_args(
         i += 1;
     }
 
-    Err(ParseError {
+    Err(ParseError { span: None, code: None,
         line: line_no,
         message: "unterminated lua method call argument list".to_string(),
     })
@@ -2314,7 +2315,7 @@ fn remove_lua_comments(source: &str) -> Result<String, ParseError> {
     }
 
     if in_block_comment {
-        return Err(ParseError {
+        return Err(ParseError { span: None, code: None,
             line,
             message: "unterminated lua block comment".to_string(),
         });

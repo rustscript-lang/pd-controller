@@ -1,8 +1,9 @@
 use super::super::{ParseError, STDLIB_PRINT_NAME};
+use crate::source_map::{LineSpanMapping, LoweredSource};
 use super::{is_ident_continue, is_ident_start};
 use std::collections::HashSet;
 
-pub(super) fn lower(source: &str) -> Result<String, ParseError> {
+pub(super) fn lower(source: &str) -> Result<LoweredSource, ParseError> {
     reject_js_direct_builtin_calls(source)?;
     let console_rewritten = rewrite_console_log_calls(source);
     let typeof_rewritten = rewrite_js_typeof_operator(&console_rewritten);
@@ -13,6 +14,7 @@ pub(super) fn lower(source: &str) -> Result<String, ParseError> {
     });
 
     let mut lines = Vec::new();
+    let mut line_map = Vec::new();
     let mut in_import_block = false;
     let mut import_block = String::new();
     let mut vm_import_emitted = false;
@@ -30,9 +32,11 @@ pub(super) fn lower(source: &str) -> Result<String, ParseError> {
                     vm_namespace_aliases.insert(alias);
                 }
                 lines.push("use vm::*;".to_string());
+                line_map.push(line_no);
                 vm_import_emitted = true;
             } else {
                 lines.push(String::new());
+                line_map.push(line_no);
             }
             if trimmed.contains(" from ") || trimmed.ends_with(';') {
                 in_import_block = false;
@@ -48,9 +52,11 @@ pub(super) fn lower(source: &str) -> Result<String, ParseError> {
                     vm_namespace_aliases.insert(alias);
                 }
                 lines.push("use vm::*;".to_string());
+                line_map.push(line_no);
                 vm_import_emitted = true;
             } else {
                 lines.push(String::new());
+                line_map.push(line_no);
             }
             if !trimmed.contains(" from ") && !trimmed.ends_with(';') {
                 in_import_block = true;
@@ -63,20 +69,29 @@ pub(super) fn lower(source: &str) -> Result<String, ParseError> {
             }
             if !vm_import_emitted {
                 lines.push("use vm::*;".to_string());
+                line_map.push(line_no);
                 vm_import_emitted = true;
             } else {
                 lines.push(String::new());
+                line_map.push(line_no);
             }
             continue;
         }
         if is_js_external_decl_line(raw_line) {
             lines.push(String::new());
+            line_map.push(line_no);
             continue;
         }
         let namespace_rewritten = rewrite_js_vm_namespace_calls(raw_line, &vm_namespace_aliases);
         lines.push(rewrite_js_arrow_line(&namespace_rewritten, line_no)?);
+        line_map.push(line_no);
     }
-    Ok(lines.join("\n"))
+    Ok(LoweredSource {
+        text: lines.join("\n"),
+        mapping: LineSpanMapping {
+            lowered_to_original_line: line_map,
+        },
+    })
 }
 
 fn reject_js_direct_builtin_calls(source: &str) -> Result<(), ParseError> {
@@ -177,7 +192,7 @@ fn reject_js_direct_builtin_calls(source: &str) -> Result<(), ParseError> {
         let next = skip_js_whitespace(bytes, i);
         if next < bytes.len() && bytes[next] == b'(' {
             let hint = js_builtin_syntax_hint(ident);
-            return Err(ParseError {
+            return Err(ParseError { span: None, code: None,
                 line,
                 message: format!(
                     "direct builtin call '{ident}(...)' is not exposed in JavaScript frontend; {hint}"
@@ -230,7 +245,7 @@ fn js_builtin_syntax_hint(name: &str) -> &'static str {
         "io_open" | "io_popen" | "io_read_all" | "io_read_line" | "io_write" | "io_flush"
         | "io_close" | "io_exists" => "use io namespace syntax (for example 'io::open(...)')",
         "re_is_match" | "re_find" | "re_replace" | "re_split" | "re_captures" => {
-            "use re namespace syntax (for example 're::is_match(...)')"
+            "use re namespace syntax (for example 're::match(pattern, text, \"i\")')"
         }
         _ => "use frontend language syntax instead of VM builtin helpers",
     }
@@ -947,7 +962,7 @@ fn rewrite_js_arrow_line(line: &str, line_no: usize) -> Result<String, ParseErro
     let left = &line[..arrow_index];
     let right = line[arrow_index + 2..].trim_start();
     if right.starts_with('{') {
-        return Err(ParseError {
+        return Err(ParseError { span: None, code: None,
             line: line_no,
             message: "arrow closures with block bodies are not supported in this subset"
                 .to_string(),
@@ -963,7 +978,7 @@ fn rewrite_js_arrow_line(line: &str, line_no: usize) -> Result<String, ParseErro
                 ')' => depth += 1,
                 '(' => {
                     if depth == 0 {
-                        return Err(ParseError {
+                        return Err(ParseError { span: None, code: None,
                             line: line_no,
                             message: "malformed arrow closure parameters".to_string(),
                         });
@@ -977,7 +992,7 @@ fn rewrite_js_arrow_line(line: &str, line_no: usize) -> Result<String, ParseErro
                 _ => {}
             }
         }
-        let open = open_index.ok_or(ParseError {
+        let open = open_index.ok_or(ParseError { span: None, code: None,
             line: line_no,
             message: "could not find '(' for arrow closure parameters".to_string(),
         })?;
