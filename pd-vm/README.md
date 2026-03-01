@@ -139,7 +139,8 @@ Compiler subset limitations and TODOs are tracked in `compiler/README.md`.
 
 ## Wasm parser/compiler mode
 
-For browser/editor linting scenarios, `pd-vm` now supports a compiler-only build that excludes VM runtime/JIT/debugger/CLI.
+For browser/editor linting scenarios, `pd-vm` supports a compiler-only build that excludes
+VM runtime/JIT/debugger/CLI.
 
 Build the wasm target with compiler/parser APIs only:
 
@@ -147,9 +148,8 @@ Build the wasm target with compiler/parser APIs only:
 cargo check -p pd-vm --target wasm32-unknown-unknown --no-default-features
 ```
 
-Linting entrypoint for editor integrations:
-- `lint_source_with_flavor(source, flavor) -> LintReport`
-- `lint_source(source) -> LintReport` (RustScript default)
+Linting integration lives in the sibling `pd-vm-lint-wasm` crate, which wraps compiler errors
+into JSON diagnostics via the `lint_source_json` export.
 
 ## Trace JIT (x86_64 + aarch64)
 

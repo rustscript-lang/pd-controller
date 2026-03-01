@@ -1,4 +1,4 @@
-use crate::compiler::{SourceError, SourceFlavor, compile_source_with_flavor};
+use vm::{SourceError, SourceFlavor, compile_source_with_flavor};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LintDiagnostic {
@@ -39,8 +39,4 @@ pub fn lint_source_with_flavor(source: &str, flavor: SourceFlavor) -> LintReport
             }],
         },
     }
-}
-
-pub fn lint_source(source: &str) -> LintReport {
-    lint_source_with_flavor(source, SourceFlavor::RustScript)
 }
