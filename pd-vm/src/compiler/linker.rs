@@ -67,6 +67,8 @@ pub(super) fn merge_units(
         for (unit_index, mut function_impl) in unit.parsed.function_impls {
             let merged_index = function_map.get(&unit_index).copied().ok_or_else(|| {
                 SourcePathError::Source(SourceError::Parse(ParseError {
+                    span: None,
+                    code: None,
                     line: 1,
                     message: "function implementation remap failed while merging imported modules"
                         .to_string(),
@@ -84,6 +86,8 @@ pub(super) fn merge_units(
                 .is_some()
             {
                 return Err(SourcePathError::Source(SourceError::Parse(ParseError {
+                    span: None,
+                    code: None,
                     line: 1,
                     message: "duplicate RSS function implementation while merging imported modules"
                         .to_string(),
@@ -93,12 +97,16 @@ pub(super) fn merge_units(
 
         local_base = local_base.checked_add(unit_local_count).ok_or_else(|| {
             SourcePathError::Source(SourceError::Parse(ParseError {
+                span: None,
+                code: None,
                 line: 1,
                 message: "local count overflow while merging imported modules".to_string(),
             }))
         })?;
         if local_base > (u8::MAX as usize) {
             return Err(SourcePathError::Source(SourceError::Parse(ParseError {
+                span: None,
+                code: None,
                 line: 1,
                 message: "too many locals across imported modules".to_string(),
             })));
@@ -127,6 +135,8 @@ fn remap_functions(
             let existing = &mut merged_functions[*existing_index as usize];
             if existing.arity != func.arity {
                 return Err(SourcePathError::Source(SourceError::Parse(ParseError {
+                    span: None,
+                    code: None,
                     line: 1,
                     message: format!(
                         "function '{}' declared with conflicting arity {} vs {}",
@@ -139,6 +149,8 @@ fn remap_functions(
         } else {
             let next_index = u16::try_from(merged_functions.len()).map_err(|_| {
                 SourcePathError::Source(SourceError::Parse(ParseError {
+                    span: None,
+                    code: None,
                     line: 1,
                     message: "too many functions across imported modules".to_string(),
                 }))
@@ -162,12 +174,16 @@ fn remap_functions(
 fn remap_local_index(index: u8, local_base: usize) -> Result<u8, SourcePathError> {
     let remapped = (index as usize).checked_add(local_base).ok_or_else(|| {
         SourcePathError::Source(SourceError::Parse(ParseError {
+            span: None,
+            code: None,
             line: 1,
             message: "local index overflow while merging imported modules".to_string(),
         }))
     })?;
     u8::try_from(remapped).map_err(|_| {
         SourcePathError::Source(SourceError::Parse(ParseError {
+            span: None,
+            code: None,
             line: 1,
             message: "local index overflow while merging imported modules".to_string(),
         }))
@@ -253,6 +269,8 @@ fn remap_expr_indices(
                 *index = remapped_index;
             } else if BuiltinFunction::from_call_index(*index).is_none() {
                 return Err(SourcePathError::Source(SourceError::Parse(ParseError {
+                    span: None,
+                    code: None,
                     line: 1,
                     message: "function index remap failed while merging imported modules"
                         .to_string(),
@@ -264,6 +282,8 @@ fn remap_expr_indices(
                 *index = remapped_index;
             } else if BuiltinFunction::from_call_index(*index).is_none() {
                 return Err(SourcePathError::Source(SourceError::Parse(ParseError {
+                    span: None,
+                    code: None,
                     line: 1,
                     message: "function index remap failed while merging imported modules"
                         .to_string(),

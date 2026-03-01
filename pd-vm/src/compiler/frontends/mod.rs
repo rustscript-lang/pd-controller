@@ -3,7 +3,7 @@ mod lua;
 mod rustscript;
 mod scheme;
 
-use crate::source_map::{LoweredSource, SourceMap};
+use crate::compiler::source_map::{LoweredSource, SourceMap};
 
 use super::{ParseError, SourceFlavor, ir::FrontendIr, parser::Parser};
 
@@ -72,14 +72,7 @@ fn parse_with_parser(
         allow_implicit_externs,
         allow_implicit_semicolons,
     )?;
-    let stmts = parser.parse_program().map_err(|mut err| {
-        if err.span.is_none() {
-            let mut map = SourceMap::new();
-            let sid = map.add_source("<source>", source.to_string());
-            err = err.with_line_span_from_source(&map, sid);
-        }
-        err
-    })?;
+    let stmts = parser.parse_program()?;
     Ok(FrontendIr {
         stmts,
         locals: parser.local_count(),
@@ -117,7 +110,8 @@ fn parse_lowered_with_mapping(
                 )
             {
                 err.span = Some(mapped);
-                if let Some((line, _)) = source_map.line_col_for_offset(original_source_id, mapped.lo)
+                if let Some((line, _)) =
+                    source_map.line_col_for_offset(original_source_id, mapped.lo)
                 {
                     err.line = line;
                 }

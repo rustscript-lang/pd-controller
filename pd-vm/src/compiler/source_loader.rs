@@ -1,6 +1,8 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
+use crate::compiler::source_map::SourceMap;
+
 use super::frontends::{is_ident_continue, is_ident_start};
 use super::{
     SourceError, SourceFlavor, SourcePathError, frontends,
@@ -68,8 +70,13 @@ pub(super) fn load_units_for_source_file(
         }
     };
 
+    let mut root_source_map = SourceMap::new();
+    let root_source_id =
+        root_source_map.add_source(path.display().to_string(), root_parse_source.clone());
     let root_parsed = frontends::parse_source(&root_parse_source, flavor)
-        .map_err(SourceError::Parse)
+        .map_err(|err| {
+            SourceError::Parse(err.with_line_span_from_source(&root_source_map, root_source_id))
+        })
         .map_err(SourcePathError::Source)?;
     units.push(ParsedUnit {
         parsed: root_parsed,
@@ -1045,8 +1052,15 @@ fn collect_module_units(
         visiting.pop();
 
         let module_source = strip_import_directives(&module_source_raw, SourceFlavor::RustScript);
+        let mut module_source_map = SourceMap::new();
+        let module_source_id =
+            module_source_map.add_source(resolved.display().to_string(), module_source.clone());
         let parsed = frontends::parse_source(&module_source, SourceFlavor::RustScript)
-            .map_err(SourceError::Parse)
+            .map_err(|err| {
+                SourceError::Parse(
+                    err.with_line_span_from_source(&module_source_map, module_source_id),
+                )
+            })
             .map_err(SourcePathError::Source)?;
         let exports = parsed
             .functions

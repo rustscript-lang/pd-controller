@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+﻿use std::collections::HashMap;
 
 use crate::debug_info::DebugInfoBuilder;
 use crate::{OpCode, Program, Value};

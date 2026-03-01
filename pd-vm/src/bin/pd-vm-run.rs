@@ -5,9 +5,10 @@ use std::path::{Path, PathBuf};
 use rustyline::DefaultEditor;
 use rustyline::error::ReadlineError;
 use vm::{
-    CallOutcome, Debugger, DisassembleOptions, FunctionDecl, HostFunction, Value, Vm, VmError,
-    VmRecording, VmStatus, compile_source, compile_source_file, disassemble_vmbc_with_options,
-    encode_program, replay_recording_stdio,
+    CallOutcome, Debugger, DisassembleOptions, FunctionDecl, HostFunction, SourceMap,
+    SourcePathError, Value, Vm, VmError, VmRecording, VmStatus, compile_source,
+    compile_source_file, disassemble_vmbc_with_options, encode_program, render_source_error,
+    render_vm_error, replay_recording_stdio,
 };
 
 const DEFAULT_SOURCE: &str = "examples/example.rss";
@@ -50,6 +51,14 @@ impl Default for CliConfig {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    if let Err(err) = run_main() {
+        eprintln!("{err}");
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+fn run_main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let cli = parse_cli_args(&args).map_err(io::Error::other)?;
     if cli.help {
@@ -77,7 +86,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let source_path = resolve_source_path(cli.source.as_deref())?;
-    let compiled = compile_source_file(&source_path)?;
+    let compiled = compile_source_file(&source_path)
+        .map_err(|err| io::Error::other(render_source_path_error(&source_path, &err)))?;
     if let Some(output_path) = cli.emit_vmbc_path.as_ref() {
         let encoded = encode_program(&compiled.program)?;
         std::fs::write(output_path, &encoded)?;
@@ -97,7 +107,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let program = recording_program.expect("recording mode should clone program");
         let mut debugger = Debugger::with_recording(program);
         loop {
-            let status = vm.run_with_debugger(&mut debugger)?;
+            let status = vm
+                .run_with_debugger(&mut debugger)
+                .map_err(|err| io::Error::other(render_vm_error(&vm, &err)))?;
             match status {
                 VmStatus::Halted => {
                     println!("vm halted");
@@ -139,9 +151,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     loop {
         let status = if let Some(debugger) = debugger.as_mut() {
-            vm.run_with_debugger(debugger)?
+            vm.run_with_debugger(debugger)
+                .map_err(|err| io::Error::other(render_vm_error(&vm, &err)))?
         } else {
-            vm.run()?
+            vm.run()
+                .map_err(|err| io::Error::other(render_vm_error(&vm, &err)))?
         };
         match status {
             VmStatus::Halted => {
@@ -159,6 +173,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("{}", vm.dump_jit_info());
     }
     Ok(())
+}
+
+fn render_source_path_error(source_path: &Path, err: &SourcePathError) -> String {
+    match err {
+        SourcePathError::Source(vm::SourceError::Parse(parse)) => {
+            let source = std::fs::read_to_string(source_path).unwrap_or_default();
+            let mut source_map = SourceMap::new();
+            let source_id = source_map.add_source(source_path.display().to_string(), source);
+            let parse = parse
+                .clone()
+                .with_line_span_from_source(&source_map, source_id);
+            render_source_error(&source_map, &parse, true)
+        }
+        SourcePathError::InvalidImportSyntax {
+            path,
+            line,
+            message,
+        } => {
+            let source = std::fs::read_to_string(path).unwrap_or_default();
+            let mut source_map = SourceMap::new();
+            let source_id = source_map.add_source(path.display().to_string(), source);
+            let parse = vm::ParseError::at_line(*line, message.clone())
+                .with_line_span_from_source(&source_map, source_id);
+            render_source_error(&source_map, &parse, true)
+        }
+        _ => err.to_string(),
+    }
 }
 
 fn parse_cli_args(args: &[String]) -> Result<CliConfig, String> {
@@ -450,7 +491,7 @@ fn run_repl() -> Result<(), Box<dyn std::error::Error>> {
                 let compiled = match compile_repl_snippet(&snippet, &session.locals) {
                     Ok(compiled) => compiled,
                     Err(err) => {
-                        println!("{err}");
+                        println!("{}", render_repl_compile_error(&snippet, &err));
                         continue;
                     }
                 };
@@ -473,7 +514,7 @@ fn run_repl() -> Result<(), Box<dyn std::error::Error>> {
                         Ok(VmStatus::Yielded) => continue,
                         Err(err) => {
                             sync_repl_session(&vm, &mut session);
-                            println!("runtime error: {err}");
+                            println!("{}", render_vm_error(&vm, &err));
                             break;
                         }
                     }
@@ -715,10 +756,25 @@ fn remap_repl_source_error(error: vm::SourceError, prelude_lines: usize) -> vm::
         vm::SourceError::Parse(mut parse) => {
             if prelude_lines > 0 {
                 parse.line = parse.line.saturating_sub(prelude_lines).max(1);
+                parse.span = None;
             }
             vm::SourceError::Parse(parse)
         }
         other => other,
+    }
+}
+
+fn render_repl_compile_error(snippet: &str, err: &vm::SourceError) -> String {
+    match err {
+        vm::SourceError::Parse(parse) => {
+            let mut source_map = SourceMap::new();
+            let source_id = source_map.add_source("<repl>", snippet.to_string());
+            let parse = parse
+                .clone()
+                .with_line_span_from_source(&source_map, source_id);
+            render_source_error(&source_map, &parse, true)
+        }
+        _ => err.to_string(),
     }
 }
 

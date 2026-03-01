@@ -289,8 +289,9 @@ fn builtin_set(args: Vec<Value>) -> VmResult<Vec<Value>> {
         }
         Value::Map(entries) => {
             let mut out = entries;
-            if let Some((_, existing_value)) =
-                out.iter_mut().find(|(existing_key, _)| *existing_key == key)
+            if let Some((_, existing_value)) = out
+                .iter_mut()
+                .find(|(existing_key, _)| *existing_key == key)
             {
                 *existing_value = value;
             } else {

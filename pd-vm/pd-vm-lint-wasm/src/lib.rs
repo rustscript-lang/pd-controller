@@ -14,6 +14,16 @@ struct LintResponse {
 struct LintDiagnostic {
     line: usize,
     message: String,
+    span: Option<LintSpanJson>,
+    rendered: String,
+}
+
+#[derive(Serialize)]
+struct LintSpanJson {
+    start_line: usize,
+    start_col: usize,
+    end_line: usize,
+    end_col: usize,
 }
 
 fn parse_flavor(raw: &str) -> SourceFlavor {
@@ -51,6 +61,13 @@ fn report_to_json(report: LintReport) -> Vec<u8> {
             .map(|item| LintDiagnostic {
                 line: item.line,
                 message: item.message,
+                span: item.span.map(|span| LintSpanJson {
+                    start_line: span.start_line,
+                    start_col: span.start_col,
+                    end_line: span.end_line,
+                    end_col: span.end_col,
+                }),
+                rendered: item.rendered,
             })
             .collect(),
     };
@@ -90,6 +107,8 @@ pub extern "C" fn lint_source_json(
                 diagnostics: vec![LintDiagnostic {
                     line: 1,
                     message: format!("invalid utf-8 source: {err}"),
+                    span: None,
+                    rendered: format!("invalid utf-8 source: {err}"),
                 }],
             };
             let fallback =
@@ -106,8 +125,8 @@ pub extern "C" fn lint_source_json(
 
 #[cfg(test)]
 mod tests {
-    use crate::analyzer::lint_source_with_flavor;
     use super::parse_flavor;
+    use crate::analyzer::lint_source_with_flavor;
     use vm::SourceFlavor;
 
     #[test]
@@ -161,6 +180,14 @@ mod tests {
             assert!(
                 !report.diagnostics[0].message.trim().is_empty(),
                 "expected non-empty diagnostic message for {flavor:?}",
+            );
+            assert!(
+                !report.diagnostics[0].rendered.trim().is_empty(),
+                "expected rendered diagnostic output for {flavor:?}",
+            );
+            assert!(
+                report.diagnostics[0].span.is_some(),
+                "expected span diagnostics for {flavor:?}"
             );
         }
     }

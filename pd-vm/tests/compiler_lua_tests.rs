@@ -131,7 +131,11 @@ fn lua_numeric_for_loop_with_negative_step_is_rejected() {
     };
     match err {
         vm::SourceError::Parse(parse) => {
-            assert!(parse.message.contains("negative lua for steps are not supported"));
+            assert!(
+                parse
+                    .message
+                    .contains("negative lua for steps are not supported")
+            );
         }
         other => panic!("unexpected error: {other}"),
     }

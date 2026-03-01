@@ -61,6 +61,41 @@ fn rustscript_io_namespace_builtin_calls_are_supported() {
 }
 
 #[test]
+fn rustscript_re_namespace_supports_optional_inline_flags_across_functions() {
+    let source = r#"
+        let a = re::match("^foo$", "FoO", "i");
+        let b = re::find("^foo", "FoO bar", "i");
+        let c = re::replace("foo", "FoO bar", "x", "i");
+        let d = re::split("x", "aXb", "i");
+        let e = re::captures("^(foo)-([0-9]+)$", "FoO-42", "i");
+
+        let score = 0;
+        if a {
+            score = score + 1;
+        }
+        if b == "FoO" {
+            score = score + 1;
+        }
+        if c == "x bar" {
+            score = score + 1;
+        }
+        if d.length == 2 && d[0] == "a" && d[1] == "b" {
+            score = score + 1;
+        }
+        if e.length == 3 && e[1] == "FoO" && e[2] == "42" {
+            score = score + 1;
+        }
+        score;
+    "#;
+    let compiled = compile_source(source).expect("compile should succeed");
+    let mut vm = Vm::with_locals(compiled.program, compiled.locals);
+
+    let status = vm.run().expect("vm should run");
+    assert_eq!(status, VmStatus::Halted);
+    assert_eq!(vm.stack(), &[Value::Int(5)]);
+}
+
+#[test]
 fn rustscript_float_literal_binding_is_supported() {
     let source = r#"
         let a=1.1;

@@ -1,6 +1,6 @@
 use super::super::ParseError;
-use crate::source_map::LoweredSource;
 use super::{is_ident_continue, is_ident_start};
+use crate::compiler::source_map::LoweredSource;
 
 pub(super) fn lower(source: &str) -> Result<LoweredSource, ParseError> {
     let print_rewritten = rewrite_rss_print_macro(source);

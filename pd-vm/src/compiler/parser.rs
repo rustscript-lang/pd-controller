@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::builtins::BuiltinFunction;
+use crate::compiler::source_map::{SourceId, Span};
 
 use super::{
     ParseError, STDLIB_PRINT_ARITY, STDLIB_PRINT_NAME,
@@ -61,6 +62,7 @@ enum TokenKind {
 struct Token {
     kind: TokenKind,
     line: usize,
+    span: Span,
 }
 
 enum NumberLiteral {
@@ -72,26 +74,32 @@ struct Lexer<'a> {
     chars: std::str::Chars<'a>,
     current: Option<char>,
     line: usize,
+    offset: usize,
+    source_id: SourceId,
 }
 
 impl<'a> Lexer<'a> {
-    fn new(source: &'a str) -> Self {
+    fn new(source: &'a str, source_id: SourceId) -> Self {
         let mut chars = source.chars();
         let current = chars.next();
         Self {
             chars,
             current,
             line: 1,
+            offset: 0,
+            source_id,
         }
     }
 
     fn next_token(&mut self) -> Result<Token, ParseError> {
         self.skip_whitespace_and_comments()?;
         let line = self.line;
+        let start = self.offset;
         let Some(ch) = self.current else {
             return Ok(Token {
                 kind: TokenKind::Eof,
                 line,
+                span: Span::new(self.source_id, start, start),
             });
         };
 
@@ -134,6 +142,8 @@ impl<'a> Lexer<'a> {
                     return Err(ParseError {
                         message: "unexpected character '&', did you mean '&&'?".to_string(),
                         line,
+                        span: Some(Span::new(self.source_id, start, self.offset.max(start + 1))),
+                        code: None,
                     });
                 }
             }
@@ -214,12 +224,10 @@ impl<'a> Lexer<'a> {
                 let value = self.consume_string()?;
                 TokenKind::String(value)
             }
-            c if c.is_ascii_digit() => {
-                match self.consume_number()? {
-                    NumberLiteral::Int(value) => TokenKind::Int(value),
-                    NumberLiteral::Float(value) => TokenKind::Float(value),
-                }
-            }
+            c if c.is_ascii_digit() => match self.consume_number()? {
+                NumberLiteral::Int(value) => TokenKind::Int(value),
+                NumberLiteral::Float(value) => TokenKind::Float(value),
+            },
             c if is_ident_start(c) => {
                 let ident = self.consume_ident();
                 match ident.as_str() {
@@ -245,16 +253,25 @@ impl<'a> Lexer<'a> {
                 return Err(ParseError {
                     line,
                     message: format!("unexpected character '{other}'"),
+                    span: Some(Span::new(self.source_id, start, self.offset.max(start + 1))),
+                    code: None,
                 });
             }
         };
 
-        Ok(Token { kind: token, line })
+        Ok(Token {
+            kind: token,
+            line,
+            span: Span::new(self.source_id, start, self.offset),
+        })
     }
 
     fn advance(&mut self) {
-        if self.current == Some('\n') {
-            self.line += 1;
+        if let Some(current) = self.current {
+            if current == '\n' {
+                self.line += 1;
+            }
+            self.offset += current.len_utf8();
         }
         self.current = self.chars.next();
     }
@@ -283,6 +300,8 @@ impl<'a> Lexer<'a> {
                 loop {
                     let Some(ch) = self.current else {
                         return Err(ParseError {
+                            span: None,
+                            code: None,
                             line: start_line,
                             message: "unterminated block comment".to_string(),
                         });
@@ -338,6 +357,8 @@ impl<'a> Lexer<'a> {
                 .parse::<f64>()
                 .map(NumberLiteral::Float)
                 .map_err(|_| ParseError {
+                    span: None,
+                    code: None,
                     line,
                     message: format!("invalid number '{text}'"),
                 });
@@ -346,6 +367,8 @@ impl<'a> Lexer<'a> {
         text.parse::<i64>()
             .map(NumberLiteral::Int)
             .map_err(|_| ParseError {
+                span: None,
+                code: None,
                 line,
                 message: format!("invalid number '{text}'"),
             })
@@ -355,6 +378,8 @@ impl<'a> Lexer<'a> {
         let line = self.line;
         if self.current != Some('"') {
             return Err(ParseError {
+                span: None,
+                code: None,
                 line,
                 message: "string literal must start with '\"'".to_string(),
             });
@@ -365,6 +390,8 @@ impl<'a> Lexer<'a> {
         loop {
             let Some(ch) = self.current else {
                 return Err(ParseError {
+                    span: None,
+                    code: None,
                     line,
                     message: "unterminated string literal".to_string(),
                 });
@@ -379,6 +406,8 @@ impl<'a> Lexer<'a> {
                     self.advance();
                     let Some(escaped) = self.current else {
                         return Err(ParseError {
+                            span: None,
+                            code: None,
                             line,
                             message: "unterminated string escape".to_string(),
                         });
@@ -392,6 +421,8 @@ impl<'a> Lexer<'a> {
                         '0' => '\0',
                         other => {
                             return Err(ParseError {
+                                span: None,
+                                code: None,
                                 line,
                                 message: format!("invalid escape '\\{other}'"),
                             });
@@ -459,10 +490,11 @@ struct ClosureCaptureContext {
 impl Parser {
     pub(super) fn new(
         source: &str,
+        source_id: SourceId,
         allow_implicit_externs: bool,
         allow_implicit_semicolons: bool,
     ) -> Result<Self, ParseError> {
-        let mut lexer = Lexer::new(source);
+        let mut lexer = Lexer::new(source, source_id);
         let mut tokens = Vec::new();
         loop {
             let token = lexer.next_token()?;
@@ -506,6 +538,8 @@ impl Parser {
                 return self.parse_fn_decl(true);
             }
             return Err(ParseError {
+                span: None,
+                code: None,
                 line: self.current_line(),
                 message: "expected 'fn' after 'pub'".to_string(),
             });
@@ -551,6 +585,8 @@ impl Parser {
         let line = self.last_line();
         if self.loop_depth == 0 {
             return Err(ParseError {
+                span: None,
+                code: None,
                 line: line as usize,
                 message: if is_break {
                     "'break' is only allowed inside loops".to_string()
@@ -576,6 +612,8 @@ impl Parser {
         let namespace = self.expect_ident("expected namespace after 'use'")?;
         if namespace != "vm" {
             return Err(ParseError {
+                span: None,
+                code: None,
                 line: self.current_line(),
                 message: format!(
                     "unsupported use namespace '{namespace}'; only 'vm' host namespace is supported here"
@@ -597,6 +635,8 @@ impl Parser {
 
         if !self.match_path_separator() {
             return Err(ParseError {
+                span: None,
+                code: None,
                 line: self.current_line(),
                 message: "expected ';', 'as <alias>', or '::{...}' after 'use vm'".to_string(),
             });
@@ -627,6 +667,8 @@ impl Parser {
                 && existing != &imported
             {
                 return Err(ParseError {
+                    span: None,
+                    code: None,
                     line: self.current_line(),
                     message: format!(
                         "host import alias '{local}' already maps to '{existing}', cannot remap to '{imported}'"
@@ -666,23 +708,31 @@ impl Parser {
         self.expect(&TokenKind::RParen, "expected ')' after parameters")?;
 
         let arity = u8::try_from(params.len()).map_err(|_| ParseError {
+            span: None,
+            code: None,
             line: self.current_line(),
             message: "function arity too large".to_string(),
         })?;
         if self.functions.contains_key(&name) {
             return Err(ParseError {
+                span: None,
+                code: None,
                 line: self.current_line(),
                 message: format!("duplicate function '{name}'"),
             });
         }
         if self.locals.contains_key(&name) {
             return Err(ParseError {
+                span: None,
+                code: None,
                 line: self.current_line(),
                 message: format!("name '{name}' already used by a local binding"),
             });
         }
         let index = self.next_function;
         self.next_function = self.next_function.checked_add(1).ok_or(ParseError {
+            span: None,
+            code: None,
             line: self.current_line(),
             message: "function index overflow".to_string(),
         })?;
@@ -735,6 +785,8 @@ impl Parser {
             while !parser.check(&TokenKind::RBrace) {
                 if parser.check(&TokenKind::Eof) {
                     return Err(ParseError {
+                        span: None,
+                        code: None,
                         line: parser.current_line(),
                         message: "unexpected end of input in function body".to_string(),
                     });
@@ -744,6 +796,8 @@ impl Parser {
 
             let Some(last_stmt) = body_stmts.pop() else {
                 return Err(ParseError {
+                    span: None,
+                    code: None,
                     line: parser.current_line(),
                     message: "function body must end with an expression statement".to_string(),
                 });
@@ -752,6 +806,8 @@ impl Parser {
                 expr
             } else {
                 return Err(ParseError {
+                    span: None,
+                    code: None,
                     line: parser.current_line(),
                     message: "function body must end with an expression statement".to_string(),
                 });
@@ -762,6 +818,8 @@ impl Parser {
                 .any(|stmt| matches!(stmt, Stmt::FuncDecl { .. }))
             {
                 return Err(ParseError {
+                    span: None,
+                    code: None,
                     line: parser.current_line(),
                     message: "nested function declarations are not supported".to_string(),
                 });
@@ -784,6 +842,8 @@ impl Parser {
         for param in params {
             if param_scope.contains_key(param) {
                 return Err(ParseError {
+                    span: None,
+                    code: None,
                     line: self.current_line(),
                     message: format!("duplicate function parameter '{param}'"),
                 });
@@ -802,12 +862,16 @@ impl Parser {
             .closure_capture_contexts
             .pop()
             .ok_or_else(|| ParseError {
+                span: None,
+                code: None,
                 line: self.current_line(),
                 message: "internal function capture state error".to_string(),
             })?;
         self.closure_scopes.pop();
         if !capture_context.capture_copies.is_empty() {
             return Err(ParseError {
+                span: None,
+                code: None,
                 line: self.current_line(),
                 message: "RustScript function definitions cannot capture outer locals".to_string(),
             });
@@ -948,6 +1012,8 @@ impl Parser {
         while !self.check(&TokenKind::RBrace) {
             if self.check(&TokenKind::Eof) {
                 return Err(ParseError {
+                    span: None,
+                    code: None,
                     line: self.current_line(),
                     message: "unexpected end of input in block".to_string(),
                 });
@@ -1080,9 +1146,11 @@ impl Parser {
         if let Some(name) = self.match_ident() {
             if self.match_path_separator() {
                 let mut path_segments = Vec::new();
-                path_segments.push(self.expect_ident("expected function name after '::'")?);
+                path_segments
+                    .push(self.expect_namespace_segment("expected function name after '::'")?);
                 while self.match_path_separator() {
-                    path_segments.push(self.expect_ident("expected function name after '::'")?);
+                    path_segments
+                        .push(self.expect_namespace_segment("expected function name after '::'")?);
                 }
                 self.expect(
                     &TokenKind::LParen,
@@ -1092,6 +1160,8 @@ impl Parser {
                 let member = path_segments
                     .first()
                     .ok_or_else(|| ParseError {
+                        span: None,
+                        code: None,
                         line: self.current_line(),
                         message: "expected function name after '::'".to_string(),
                     })?
@@ -1100,6 +1170,14 @@ impl Parser {
                     .get(1..)
                     .map(|tail| tail.to_vec())
                     .unwrap_or_default();
+                let mut args = args;
+                if subpath.is_empty()
+                    && name == "re"
+                    && let Some(builtin) = self.try_re_namespace_builtin_call(&member, &mut args)?
+                {
+                    let expr = self.build_builtin_call_expr(builtin, args)?;
+                    return Ok(expr);
+                }
                 if subpath.is_empty()
                     && let Some(builtin) = self.resolve_builtin_namespace_call(&name, &member)
                 {
@@ -1108,7 +1186,7 @@ impl Parser {
                 }
                 let host_name = self
                     .resolve_vm_namespace_call_target(&name, &member, &subpath)
-                    .ok_or_else(|| ParseError {
+                    .ok_or_else(|| ParseError { span: None, code: None,
                         line: self.current_line(),
                         message: format!(
                             "unknown namespace call '{}::{}'; supported namespaces are io:: and re:: (builtins), and vm:: (host imports via 'use vm;', 'use vm::*;', or 'use vm as <alias>;')",
@@ -1145,6 +1223,8 @@ impl Parser {
                     Expr::FunctionRef(decl.index)
                 } else {
                     return Err(ParseError {
+                        span: None,
+                        code: None,
                         line: self.current_line(),
                         message: format!("unknown local '{name}'"),
                     });
@@ -1171,6 +1251,8 @@ impl Parser {
         }
 
         Err(ParseError {
+            span: None,
+            code: None,
             line: self.current_line(),
             message: "expected expression".to_string(),
         })
@@ -1211,6 +1293,8 @@ impl Parser {
         while !self.check(&TokenKind::RBrace) {
             if self.check(&TokenKind::Eof) {
                 return Err(ParseError {
+                    span: None,
+                    code: None,
                     line: self.current_line(),
                     message: "unexpected end of input in if expression branch".to_string(),
                 });
@@ -1244,6 +1328,8 @@ impl Parser {
         } else {
             let Some(last_stmt) = stmts.pop() else {
                 return Err(ParseError {
+                    span: None,
+                    code: None,
                     line: self.current_line(),
                     message: "if expression branch must end with an expression".to_string(),
                 });
@@ -1252,6 +1338,8 @@ impl Parser {
                 expr
             } else {
                 return Err(ParseError {
+                    span: None,
+                    code: None,
                     line: self.current_line(),
                     message: "if expression branch must end with an expression".to_string(),
                 });
@@ -1280,6 +1368,8 @@ impl Parser {
         while !self.check(&TokenKind::RBrace) {
             if self.check(&TokenKind::Eof) {
                 return Err(ParseError {
+                    span: None,
+                    code: None,
                     line: self.current_line(),
                     message: "unexpected end of input in match expression".to_string(),
                 });
@@ -1294,6 +1384,8 @@ impl Parser {
                 Some(pattern) => {
                     if default.is_some() {
                         return Err(ParseError {
+                            span: None,
+                            code: None,
                             line: pattern_token_line,
                             message: "non-wildcard match arm cannot appear after '_' arm"
                                 .to_string(),
@@ -1304,6 +1396,8 @@ impl Parser {
                 None => {
                     if default.is_some() {
                         return Err(ParseError {
+                            span: None,
+                            code: None,
                             line: pattern_token_line,
                             message: "duplicate '_' match arm".to_string(),
                         });
@@ -1320,6 +1414,8 @@ impl Parser {
             }
             if !self.check(&TokenKind::RBrace) {
                 return Err(ParseError {
+                    span: None,
+                    code: None,
                     line: self.current_line(),
                     message: "expected ',' or '}' after match arm".to_string(),
                 });
@@ -1328,6 +1424,8 @@ impl Parser {
         self.expect(&TokenKind::RBrace, "expected '}' after match expression")?;
 
         let default = default.ok_or_else(|| ParseError {
+            span: None,
+            code: None,
             line: self.current_line(),
             message: "match expression requires a wildcard arm '_ => ...'".to_string(),
         })?;
@@ -1367,7 +1465,7 @@ impl Parser {
                 return Ok(Some(MatchPattern::Type(type_pattern)));
             }
         }
-        Err(ParseError {
+        Err(ParseError { span: None, code: None,
             line: self.current_line(),
             message:
                 "match patterns currently support int/string/null literals, type patterns via Some(TypeName) or Option::Some(TypeName), and '_'"
@@ -1389,6 +1487,8 @@ impl Parser {
             let member = self.expect_ident("expected 'Some' after 'Option::' in match pattern")?;
             if member != "Some" {
                 return Err(ParseError {
+                    span: None,
+                    code: None,
                     line: self.current_line(),
                     message: "match type patterns use Option::Some(TypeName) or Some(TypeName)"
                         .to_string(),
@@ -1406,6 +1506,8 @@ impl Parser {
         )?;
         let type_name = self.expect_ident("expected type name inside Some(...)")?;
         let type_pattern = match_type_pattern_from_ident(&type_name).ok_or_else(|| ParseError {
+            span: None,
+            code: None,
             line: self.current_line(),
             message:
                 "unknown match type pattern; expected one of Int/Float/Number/Bool/String/Array/Map"
@@ -1682,6 +1784,8 @@ impl Parser {
                 };
                 if !(self.match_kind(&TokenKind::Colon) || self.match_kind(&TokenKind::Equal)) {
                     return Err(ParseError {
+                        span: None,
+                        code: None,
                         line: self.current_line(),
                         message: "expected ':' or '=' after map key".to_string(),
                     });
@@ -1761,9 +1865,10 @@ impl Parser {
             return Ok(Expr::Null);
         }
         Err(ParseError {
+            span: None,
+            code: None,
             line: self.current_line(),
-            message: "map keys must be identifier/string/int/float/bool/null literals"
-                .to_string(),
+            message: "map keys must be identifier/string/int/float/bool/null literals".to_string(),
         })
     }
 
@@ -1819,11 +1924,15 @@ impl Parser {
         args: Vec<Expr>,
     ) -> Result<Expr, ParseError> {
         let arity = u8::try_from(args.len()).map_err(|_| ParseError {
+            span: None,
+            code: None,
             line: self.current_line(),
             message: "function arity too large".to_string(),
         })?;
         if arity != builtin.arity() {
             return Err(ParseError {
+                span: None,
+                code: None,
                 line: self.current_line(),
                 message: format!(
                     "function '{}' expects {} arguments",
@@ -1844,6 +1953,8 @@ impl Parser {
             "type" | "typeof" => {
                 if args.len() != 1 {
                     return Err(ParseError {
+                        span: None,
+                        code: None,
                         line: self.current_line(),
                         message: "type expects exactly one argument".to_string(),
                     });
@@ -1866,6 +1977,8 @@ impl Parser {
         args: Vec<Expr>,
     ) -> Result<Expr, ParseError> {
         let arity = u8::try_from(args.len()).map_err(|_| ParseError {
+            span: None,
+            code: None,
             line: self.current_line(),
             message: "function arity too large".to_string(),
         })?;
@@ -1924,7 +2037,7 @@ impl Parser {
                 _ => None,
             },
             "re" => match member {
-                "is_match" => Some(BuiltinFunction::ReIsMatch),
+                "match" | "is_match" => Some(BuiltinFunction::ReIsMatch),
                 "find" => Some(BuiltinFunction::ReFind),
                 "replace" => Some(BuiltinFunction::ReReplace),
                 "split" => Some(BuiltinFunction::ReSplit),
@@ -1933,6 +2046,70 @@ impl Parser {
             },
             _ => None,
         }
+    }
+
+    fn try_re_namespace_builtin_call(
+        &mut self,
+        member: &str,
+        args: &mut Vec<Expr>,
+    ) -> Result<Option<BuiltinFunction>, ParseError> {
+        let (builtin, base_arity, supports_optional_flags) = match member {
+            "match" | "is_match" => (BuiltinFunction::ReIsMatch, 2usize, true),
+            "find" => (BuiltinFunction::ReFind, 2usize, true),
+            "replace" => (BuiltinFunction::ReReplace, 3usize, true),
+            "split" => (BuiltinFunction::ReSplit, 2usize, true),
+            "captures" => (BuiltinFunction::ReCaptures, 2usize, true),
+            _ => return Ok(None),
+        };
+
+        if args.len() == base_arity {
+            return Ok(Some(builtin));
+        }
+
+        if supports_optional_flags && args.len() == base_arity + 1 {
+            let flags = args.pop().ok_or_else(|| ParseError {
+                span: None,
+                code: None,
+                line: self.current_line(),
+                message: "missing regex flags argument".to_string(),
+            })?;
+            let pattern = args.first().cloned().ok_or_else(|| ParseError {
+                span: None,
+                code: None,
+                line: self.current_line(),
+                message: "missing regex pattern argument".to_string(),
+            })?;
+            args[0] = self.apply_regex_flags_to_pattern_expr(pattern, flags)?;
+            return Ok(Some(builtin));
+        }
+
+        let expected = if supports_optional_flags {
+            format!("{base_arity} or {}", base_arity + 1)
+        } else {
+            base_arity.to_string()
+        };
+        Err(ParseError {
+            span: None,
+            code: None,
+            line: self.current_line(),
+            message: format!("function 're::{member}' expects {expected} arguments"),
+        })
+    }
+
+    fn apply_regex_flags_to_pattern_expr(
+        &mut self,
+        pattern: Expr,
+        flags: Expr,
+    ) -> Result<Expr, ParseError> {
+        let prefix = self.build_builtin_call_expr(
+            BuiltinFunction::Concat,
+            vec![Expr::String("(?".to_string()), flags],
+        )?;
+        let prefix = self.build_builtin_call_expr(
+            BuiltinFunction::Concat,
+            vec![prefix, Expr::String(")".to_string())],
+        )?;
+        self.build_builtin_call_expr(BuiltinFunction::Concat, vec![prefix, pattern])
     }
 
     fn parse_index_assign_with_terminator(
@@ -1949,6 +2126,8 @@ impl Parser {
             Expr::String(self.expect_ident("expected member name after '.'")?)
         } else {
             return Err(ParseError {
+                span: None,
+                code: None,
                 line: self.current_line(),
                 message: "expected '[' or '.' in indexed assignment".to_string(),
             });
@@ -2044,6 +2223,8 @@ impl Parser {
                 let param_name = self.expect_ident("expected closure parameter name")?;
                 if param_scope.contains_key(&param_name) {
                     return Err(ParseError {
+                        span: None,
+                        code: None,
                         line: self.current_line(),
                         message: format!("duplicate closure parameter '{param_name}'"),
                     });
@@ -2068,6 +2249,8 @@ impl Parser {
             .closure_capture_contexts
             .pop()
             .ok_or_else(|| ParseError {
+                span: None,
+                code: None,
                 line: self.current_line(),
                 message: "internal closure capture state error".to_string(),
             })?;
@@ -2101,6 +2284,8 @@ impl Parser {
             Err(ParseError {
                 line: self.current_line(),
                 message: message.to_string(),
+                span: Some(self.current_span()),
+                code: None,
             })
         }
     }
@@ -2112,6 +2297,21 @@ impl Parser {
             Err(ParseError {
                 line: self.current_line(),
                 message: message.to_string(),
+                span: Some(self.current_span()),
+                code: None,
+            })
+        }
+    }
+
+    fn expect_namespace_segment(&mut self, message: &str) -> Result<String, ParseError> {
+        if let Some(name) = self.match_namespace_segment() {
+            Ok(name)
+        } else {
+            Err(ParseError {
+                line: self.current_line(),
+                message: message.to_string(),
+                span: Some(self.current_span()),
+                code: None,
             })
         }
     }
@@ -2141,6 +2341,8 @@ impl Parser {
             return Ok(source_index);
         }
         Err(ParseError {
+            span: None,
+            code: None,
             line: self.current_line(),
             message: format!("unknown local '{name}'"),
         })
@@ -2163,6 +2365,8 @@ impl Parser {
         if let Some(decl) = self.functions.get(name).cloned() {
             if decl.arity as usize != arg_count {
                 return Err(ParseError {
+                    span: None,
+                    code: None,
                     line: self.current_line(),
                     message: format!("function '{name}' expects {} arguments", decl.arity),
                 });
@@ -2172,11 +2376,15 @@ impl Parser {
 
         if name == STDLIB_PRINT_NAME {
             let arg_arity = u8::try_from(arg_count).map_err(|_| ParseError {
+                span: None,
+                code: None,
                 line: self.current_line(),
                 message: "function arity too large".to_string(),
             })?;
             if arg_arity != STDLIB_PRINT_ARITY {
                 return Err(ParseError {
+                    span: None,
+                    code: None,
                     line: self.current_line(),
                     message: format!(
                         "function '{STDLIB_PRINT_NAME}' expects {STDLIB_PRINT_ARITY} arguments"
@@ -2187,6 +2395,8 @@ impl Parser {
         }
         if self.allow_implicit_externs {
             let arity = u8::try_from(arg_count).map_err(|_| ParseError {
+                span: None,
+                code: None,
                 line: self.current_line(),
                 message: "function arity too large".to_string(),
             })?;
@@ -2194,6 +2404,8 @@ impl Parser {
         }
 
         Err(ParseError {
+            span: None,
+            code: None,
             line: self.current_line(),
             message: format!("unknown function '{name}'"),
         })
@@ -2209,12 +2421,16 @@ impl Parser {
         }
         if self.locals.contains_key(name) {
             return Err(ParseError {
+                span: None,
+                code: None,
                 line: self.current_line(),
                 message: format!("name '{name}' already used by a local binding"),
             });
         }
         let index = self.next_function;
         self.next_function = self.next_function.checked_add(1).ok_or(ParseError {
+            span: None,
+            code: None,
             line: self.current_line(),
             message: "function index overflow".to_string(),
         })?;
@@ -2238,6 +2454,8 @@ impl Parser {
         if let Some(existing) = self.functions.get(name) {
             if existing.arity != arity {
                 return Err(ParseError {
+                    span: None,
+                    code: None,
                     line: self.current_line(),
                     message: format!("function '{name}' expects {} arguments", existing.arity),
                 });
@@ -2246,12 +2464,16 @@ impl Parser {
         }
         if self.locals.contains_key(name) {
             return Err(ParseError {
+                span: None,
+                code: None,
                 line: self.current_line(),
                 message: format!("name '{name}' already used by a local binding"),
             });
         }
         let index = self.next_function;
         self.next_function = self.next_function.checked_add(1).ok_or(ParseError {
+            span: None,
+            code: None,
             line: self.current_line(),
             message: "function index overflow".to_string(),
         })?;
@@ -2276,6 +2498,8 @@ impl Parser {
         if let Some(existing) = self.functions.get(name) {
             if existing.arity != arity {
                 return Err(ParseError {
+                    span: None,
+                    code: None,
                     line: self.current_line(),
                     message: format!("function '{name}' expects {} arguments", existing.arity),
                 });
@@ -2284,12 +2508,16 @@ impl Parser {
         }
         if self.locals.contains_key(name) {
             return Err(ParseError {
+                span: None,
+                code: None,
                 line: self.current_line(),
                 message: format!("name '{name}' already used by a local binding"),
             });
         }
         let index = self.next_function;
         self.next_function = self.next_function.checked_add(1).ok_or(ParseError {
+            span: None,
+            code: None,
             line: self.current_line(),
             message: "function index overflow".to_string(),
         })?;
@@ -2318,6 +2546,8 @@ impl Parser {
     fn allocate_hidden_local(&mut self) -> Result<u8, ParseError> {
         let index = self.next_local;
         self.next_local = self.next_local.checked_add(1).ok_or(ParseError {
+            span: None,
+            code: None,
             line: self.current_line(),
             message: "local index overflow".to_string(),
         })?;
@@ -2400,6 +2630,16 @@ impl Parser {
         }
     }
 
+    fn match_namespace_segment(&mut self) -> Option<String> {
+        if let Some(name) = self.match_ident() {
+            return Some(name);
+        }
+        if self.match_kind(&TokenKind::Match) {
+            return Some("match".to_string());
+        }
+        None
+    }
+
     fn match_string(&mut self) -> Option<String> {
         match self.tokens.get(self.pos) {
             Some(Token {
@@ -2436,6 +2676,8 @@ impl Parser {
         }
         if !self.allow_implicit_semicolons {
             return Err(ParseError {
+                span: None,
+                code: None,
                 line: self.current_line(),
                 message: message.to_string(),
             });
@@ -2455,6 +2697,8 @@ impl Parser {
         }
 
         Err(ParseError {
+            span: None,
+            code: None,
             line: self.current_line(),
             message: message.to_string(),
         })
@@ -2542,6 +2786,18 @@ impl Parser {
 
     fn current_line_u32(&self) -> u32 {
         u32::try_from(self.current_line()).unwrap_or(u32::MAX)
+    }
+
+    fn current_span(&self) -> Span {
+        self.tokens
+            .get(self.pos)
+            .map(|token| token.span)
+            .unwrap_or_else(|| {
+                self.tokens
+                    .last()
+                    .map(|token| Span::new(token.span.source_id, token.span.hi, token.span.hi))
+                    .unwrap_or(Span::new(0, 0, 0))
+            })
     }
 
     fn last_line(&self) -> u32 {

@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use crate::assembler::{Assembler, AssemblerError};
 use crate::builtins::BuiltinFunction;
+use self::source_map::{SourceMap, Span};
 #[cfg(feature = "runtime")]
 use crate::vm::Vm;
 use crate::{HostImport, Program, Value};
@@ -24,11 +25,65 @@ pub enum CompileError {
 pub struct ParseError {
     pub line: usize,
     pub message: String,
+    pub span: Option<Span>,
+    pub code: Option<String>,
+}
+
+impl ParseError {
+    pub fn new(message: impl Into<String>) -> Self {
+        Self {
+            line: 1,
+            message: message.into(),
+            span: None,
+            code: None,
+        }
+    }
+
+    pub fn at_line(line: usize, message: impl Into<String>) -> Self {
+        Self {
+            line,
+            message: message.into(),
+            span: None,
+            code: None,
+        }
+    }
+
+    pub fn at_span(span: Span, message: impl Into<String>) -> Self {
+        Self {
+            line: 1,
+            message: message.into(),
+            span: Some(span),
+            code: None,
+        }
+    }
+
+    pub fn with_code(mut self, code: impl Into<String>) -> Self {
+        self.code = Some(code.into());
+        self
+    }
+
+    pub fn with_line_span_from_source(mut self, source_map: &SourceMap, source_id: u32) -> Self {
+        if self.span.is_some() {
+            return self;
+        }
+        if let Some(span) = source_map.line_span(source_id, self.line) {
+            self.span = Some(span);
+        }
+        self
+    }
 }
 
 impl std::fmt::Display for ParseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "line {}: {}", self.line, self.message)
+        if let Some(span) = self.span {
+            write!(
+                f,
+                "{} (source {} [{}..{}])",
+                self.message, span.source_id, span.lo, span.hi
+            )
+        } else {
+            write!(f, "line {}: {}", self.line, self.message)
+        }
     }
 }
 
@@ -150,9 +205,11 @@ const STDLIB_PRINT_NAME: &str = "print";
 const STDLIB_PRINT_ARITY: u8 = 1;
 
 mod frontends;
+pub mod diagnostics;
 pub mod ir;
 mod linker;
 mod parser;
+pub mod source_map;
 mod source_loader;
 
 use ir::LinkedIr;
@@ -194,6 +251,8 @@ fn compile_parsed_output(parsed: LinkedIr) -> Result<CompiledProgram, SourceErro
     for (next_index, func) in runtime_import_functions.iter_mut().enumerate() {
         let next_index = u16::try_from(next_index).map_err(|_| {
             SourceError::Parse(ParseError {
+                span: None,
+                code: None,
                 line: 1,
                 message: "too many host imports after RSS function inlining".to_string(),
             })
@@ -246,7 +305,19 @@ pub fn compile_source_with_flavor(
     source: &str,
     flavor: SourceFlavor,
 ) -> Result<CompiledProgram, SourceError> {
-    let parsed = frontends::parse_source(source, flavor).map_err(SourceError::Parse)?;
+    let owned_source = source.to_string();
+    run_with_compiler_stack(move || compile_source_with_flavor_impl(&owned_source, flavor))
+}
+
+fn compile_source_with_flavor_impl(
+    source: &str,
+    flavor: SourceFlavor,
+) -> Result<CompiledProgram, SourceError> {
+    let mut source_map = SourceMap::new();
+    let source_id = source_map.add_source("<source>", source.to_string());
+    let parsed = frontends::parse_source(source, flavor).map_err(|err| {
+        SourceError::Parse(err.with_line_span_from_source(&source_map, source_id))
+    })?;
     compile_parsed_output(LinkedIr {
         source: source.to_string(),
         stmts: parsed.stmts,
@@ -258,13 +329,42 @@ pub fn compile_source_with_flavor(
 }
 
 pub fn compile_source_file(path: impl AsRef<Path>) -> Result<CompiledProgram, SourcePathError> {
-    let path = path.as_ref();
+    let path = path.as_ref().to_path_buf();
+    run_with_compiler_stack(move || compile_source_file_impl(&path))
+}
+
+fn compile_source_file_impl(path: &Path) -> Result<CompiledProgram, SourcePathError> {
     let flavor = SourceFlavor::from_path(path)?;
     let source_raw = std::fs::read_to_string(path)?;
     let (root_source, units) =
         source_loader::load_units_for_source_file(path, flavor, &source_raw)?;
     let merged = merge_units(root_source, units)?;
     compile_parsed_output(merged).map_err(SourcePathError::Source)
+}
+
+fn run_with_compiler_stack<T, F>(f: F) -> T
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    #[cfg(target_arch = "wasm32")]
+    {
+        f()
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        const COMPILER_STACK_SIZE: usize = 32 * 1024 * 1024;
+        let handle = std::thread::Builder::new()
+            .name("pd-vm-compile".to_string())
+            .stack_size(COMPILER_STACK_SIZE)
+            .spawn(f)
+            .expect("failed to spawn compiler thread");
+        match handle.join() {
+            Ok(value) => value,
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
+    }
 }
 
 pub struct Compiler {

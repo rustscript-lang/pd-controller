@@ -1,6 +1,6 @@
 use super::super::{ParseError, STDLIB_PRINT_NAME};
-use crate::source_map::{LineSpanMapping, LoweredSource};
 use super::{is_ident_continue, is_ident_start};
+use crate::compiler::source_map::{LineSpanMapping, LoweredSource};
 use std::collections::HashSet;
 
 pub(super) fn lower(source: &str) -> Result<LoweredSource, ParseError> {
@@ -192,7 +192,9 @@ fn reject_js_direct_builtin_calls(source: &str) -> Result<(), ParseError> {
         let next = skip_js_whitespace(bytes, i);
         if next < bytes.len() && bytes[next] == b'(' {
             let hint = js_builtin_syntax_hint(ident);
-            return Err(ParseError { span: None, code: None,
+            return Err(ParseError {
+                span: None,
+                code: None,
                 line,
                 message: format!(
                     "direct builtin call '{ident}(...)' is not exposed in JavaScript frontend; {hint}"
@@ -962,7 +964,9 @@ fn rewrite_js_arrow_line(line: &str, line_no: usize) -> Result<String, ParseErro
     let left = &line[..arrow_index];
     let right = line[arrow_index + 2..].trim_start();
     if right.starts_with('{') {
-        return Err(ParseError { span: None, code: None,
+        return Err(ParseError {
+            span: None,
+            code: None,
             line: line_no,
             message: "arrow closures with block bodies are not supported in this subset"
                 .to_string(),
@@ -978,7 +982,9 @@ fn rewrite_js_arrow_line(line: &str, line_no: usize) -> Result<String, ParseErro
                 ')' => depth += 1,
                 '(' => {
                     if depth == 0 {
-                        return Err(ParseError { span: None, code: None,
+                        return Err(ParseError {
+                            span: None,
+                            code: None,
                             line: line_no,
                             message: "malformed arrow closure parameters".to_string(),
                         });
@@ -992,7 +998,9 @@ fn rewrite_js_arrow_line(line: &str, line_no: usize) -> Result<String, ParseErro
                 _ => {}
             }
         }
-        let open = open_index.ok_or(ParseError { span: None, code: None,
+        let open = open_index.ok_or(ParseError {
+            span: None,
+            code: None,
             line: line_no,
             message: "could not find '(' for arrow closure parameters".to_string(),
         })?;
