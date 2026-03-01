@@ -1,6 +1,5 @@
 mod builtins;
 
-pub mod analyzer;
 pub mod assembler;
 pub mod bytecode;
 pub mod compiler;
@@ -14,7 +13,6 @@ pub mod vm;
 #[cfg(feature = "runtime")]
 pub mod vmbc;
 
-pub use analyzer::{LintDiagnostic, LintReport, lint_source, lint_source_with_flavor};
 pub use assembler::{AsmParseError, Assembler, AssemblerError, BytecodeBuilder, assemble};
 pub use bytecode::{HostImport, OpCode, Program, Value};
 pub use compiler::{

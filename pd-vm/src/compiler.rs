@@ -12,6 +12,9 @@ pub enum CompileError {
     Assembler(AssemblerError),
     CallArityOverflow,
     ClosureUsedAsValue,
+    CallableUsedAsValue,
+    NonCallableLocal(u8),
+    CallableArityMismatch { expected: usize, got: usize },
     BreakOutsideLoop,
     ContinueOutsideLoop,
     InlineFunctionRecursion(String),
@@ -271,11 +274,18 @@ pub struct Compiler {
     function_impls: HashMap<u16, FunctionImpl>,
     call_index_remap: HashMap<u16, u16>,
     inline_call_stack: Vec<u16>,
+    callable_bindings: HashMap<u8, CallableBinding>,
 }
 
 struct LoopContext {
     continue_label: String,
     break_label: String,
+}
+
+#[derive(Clone)]
+enum CallableBinding {
+    Closure(ClosureExpr),
+    Function(u16),
 }
 
 impl Default for Compiler {
@@ -293,6 +303,7 @@ impl Compiler {
             function_impls: HashMap::new(),
             call_index_remap: HashMap::new(),
             inline_call_stack: Vec::new(),
+            callable_bindings: HashMap::new(),
         }
     }
 
@@ -339,20 +350,15 @@ impl Compiler {
             }
             Stmt::Let { index, expr, line } => {
                 self.assembler.mark_line(*line);
-                self.compile_expr(expr)?;
-                self.assembler.stloc(*index);
+                self.assign_expr_to_slot(*index, expr)?;
             }
             Stmt::Assign { index, expr, line } => {
                 self.assembler.mark_line(*line);
-                self.compile_expr(expr)?;
-                self.assembler.stloc(*index);
+                self.assign_expr_to_slot(*index, expr)?;
             }
             Stmt::ClosureLet { line, closure } => {
                 self.assembler.mark_line(*line);
-                for (source_index, captured_slot) in &closure.capture_copies {
-                    self.assembler.ldloc(*source_index);
-                    self.assembler.stloc(*captured_slot);
-                }
+                self.bind_closure_captures(closure);
             }
             Stmt::FuncDecl { .. } => {}
             Stmt::Expr { expr, line } => {
@@ -365,6 +371,7 @@ impl Compiler {
                 else_branch,
                 line,
             } => {
+                let callable_snapshot = self.callable_bindings.clone();
                 self.assembler.mark_line(*line);
                 let else_label = self.fresh_label("else");
                 let end_label = self.fresh_label("endif");
@@ -375,10 +382,12 @@ impl Compiler {
                 self.assembler
                     .label(&else_label)
                     .map_err(CompileError::Assembler)?;
+                self.callable_bindings = callable_snapshot.clone();
                 self.compile_stmts(else_branch)?;
                 self.assembler
                     .label(&end_label)
                     .map_err(CompileError::Assembler)?;
+                self.callable_bindings = callable_snapshot;
             }
             Stmt::For {
                 init,
@@ -387,6 +396,7 @@ impl Compiler {
                 body,
                 line,
             } => {
+                let callable_snapshot = self.callable_bindings.clone();
                 self.assembler.mark_line(*line);
                 self.compile_stmt(init)?;
                 let start_label = self.fresh_label("for_start");
@@ -411,12 +421,14 @@ impl Compiler {
                 self.assembler
                     .label(&end_label)
                     .map_err(CompileError::Assembler)?;
+                self.callable_bindings = callable_snapshot;
             }
             Stmt::While {
                 condition,
                 body,
                 line,
             } => {
+                let callable_snapshot = self.callable_bindings.clone();
                 self.assembler.mark_line(*line);
                 let start_label = self.fresh_label("while_start");
                 let end_label = self.fresh_label("while_end");
@@ -435,6 +447,7 @@ impl Compiler {
                 self.assembler
                     .label(&end_label)
                     .map_err(CompileError::Assembler)?;
+                self.callable_bindings = callable_snapshot;
             }
             Stmt::Break { line } => {
                 self.assembler.mark_line(*line);
@@ -464,54 +477,34 @@ impl Compiler {
             Expr::Int(value) => {
                 self.assembler.push_const(Value::Int(*value));
             }
+            Expr::Float(value) => {
+                self.assembler.push_const(Value::Float(*value));
+            }
             Expr::Bool(value) => {
                 self.assembler.push_const(Value::Bool(*value));
             }
             Expr::String(value) => {
                 self.assembler.push_const(Value::String(value.clone()));
             }
+            Expr::FunctionRef(_) => {
+                return Err(CompileError::CallableUsedAsValue);
+            }
             Expr::Call(index, args) => {
-                if let Some(function_impl) = self.function_impls.get(index).cloned() {
-                    for (arg, slot) in args.iter().zip(function_impl.param_slots.iter()) {
-                        self.compile_expr(arg)?;
-                        self.assembler.stloc(*slot);
-                    }
-                    if self.inline_call_stack.contains(index) {
-                        return Err(CompileError::InlineFunctionRecursion(format!(
-                            "recursive RustScript function call detected for function index {}",
-                            index
-                        )));
-                    }
-                    self.inline_call_stack.push(*index);
-                    let result = (|| -> Result<(), CompileError> {
-                        self.compile_stmts(&function_impl.body_stmts)?;
-                        self.compile_expr(&function_impl.body_expr)
-                    })();
-                    self.inline_call_stack.pop();
-                    result?;
-                    return Ok(());
-                }
-                for arg in args {
-                    self.compile_expr(arg)?;
-                }
-                let argc = u8::try_from(args.len()).map_err(|_| CompileError::CallArityOverflow)?;
-                if let Some(builtin) = BuiltinFunction::from_call_index(*index) {
-                    debug_assert_eq!(argc, builtin.arity());
-                    self.assembler.call(*index, argc);
-                    return Ok(());
-                }
-                let remapped_index = self.call_index_remap.get(index).copied().unwrap_or(*index);
-                self.assembler.call(remapped_index, argc);
+                self.compile_function_call(*index, args)?;
             }
             Expr::Closure(_) => {
-                return Err(CompileError::ClosureUsedAsValue);
+                return Err(CompileError::CallableUsedAsValue);
             }
             Expr::ClosureCall(closure, args) => {
-                for (arg, slot) in args.iter().zip(closure.param_slots.iter()) {
-                    self.compile_expr(arg)?;
-                    self.assembler.stloc(*slot);
-                }
-                self.compile_expr(&closure.body)?;
+                self.compile_inline_closure_call(closure, args)?;
+            }
+            Expr::LocalCall(index, args) => {
+                let callable = self
+                    .callable_bindings
+                    .get(index)
+                    .cloned()
+                    .ok_or(CompileError::NonCallableLocal(*index))?;
+                self.compile_callable_call(callable, args)?;
             }
             Expr::Add(lhs, rhs) => {
                 if is_definitely_string_expr(lhs) {
@@ -599,6 +592,9 @@ impl Compiler {
                 self.assembler.cgt();
             }
             Expr::Var(index) => {
+                if self.callable_bindings.contains_key(index) {
+                    return Err(CompileError::CallableUsedAsValue);
+                }
                 self.assembler.ldloc(*index);
             }
             Expr::IfElse {
@@ -654,6 +650,125 @@ impl Compiler {
             }
         }
         Ok(())
+    }
+
+    fn bind_closure_captures(&mut self, closure: &ClosureExpr) {
+        for (source_index, captured_slot) in &closure.capture_copies {
+            self.assembler.ldloc(*source_index);
+            self.assembler.stloc(*captured_slot);
+        }
+    }
+
+    fn callable_binding_from_expr(
+        &mut self,
+        expr: &Expr,
+    ) -> Result<Option<CallableBinding>, CompileError> {
+        match expr {
+            Expr::Closure(closure) => {
+                self.bind_closure_captures(closure);
+                Ok(Some(CallableBinding::Closure(closure.clone())))
+            }
+            Expr::FunctionRef(index) => Ok(Some(CallableBinding::Function(*index))),
+            Expr::Var(index) => Ok(self.callable_bindings.get(index).cloned()),
+            _ => Ok(None),
+        }
+    }
+
+    fn assign_expr_to_slot(&mut self, slot: u8, expr: &Expr) -> Result<(), CompileError> {
+        if let Some(callable) = self.callable_binding_from_expr(expr)? {
+            self.callable_bindings.insert(slot, callable);
+            return Ok(());
+        }
+        self.callable_bindings.remove(&slot);
+        self.compile_expr(expr)?;
+        self.assembler.stloc(slot);
+        Ok(())
+    }
+
+    fn compile_function_call(&mut self, index: u16, args: &[Expr]) -> Result<(), CompileError> {
+        if let Some(function_impl) = self.function_impls.get(&index).cloned() {
+            return self.compile_inline_function_call(index, &function_impl, args);
+        }
+        self.compile_direct_call(index, args)
+    }
+
+    fn compile_inline_function_call(
+        &mut self,
+        index: u16,
+        function_impl: &FunctionImpl,
+        args: &[Expr],
+    ) -> Result<(), CompileError> {
+        if function_impl.param_slots.len() != args.len() {
+            return Err(CompileError::CallableArityMismatch {
+                expected: function_impl.param_slots.len(),
+                got: args.len(),
+            });
+        }
+        let callable_snapshot = self.callable_bindings.clone();
+        for (arg, slot) in args.iter().zip(function_impl.param_slots.iter()) {
+            self.assign_expr_to_slot(*slot, arg)?;
+        }
+        if self.inline_call_stack.contains(&index) {
+            self.callable_bindings = callable_snapshot;
+            return Err(CompileError::InlineFunctionRecursion(format!(
+                "recursive RustScript function call detected for function index {}",
+                index
+            )));
+        }
+        self.inline_call_stack.push(index);
+        let result = (|| -> Result<(), CompileError> {
+            self.compile_stmts(&function_impl.body_stmts)?;
+            self.compile_expr(&function_impl.body_expr)
+        })();
+        self.inline_call_stack.pop();
+        self.callable_bindings = callable_snapshot;
+        result
+    }
+
+    fn compile_inline_closure_call(
+        &mut self,
+        closure: &ClosureExpr,
+        args: &[Expr],
+    ) -> Result<(), CompileError> {
+        if closure.param_slots.len() != args.len() {
+            return Err(CompileError::CallableArityMismatch {
+                expected: closure.param_slots.len(),
+                got: args.len(),
+            });
+        }
+        let callable_snapshot = self.callable_bindings.clone();
+        for (arg, slot) in args.iter().zip(closure.param_slots.iter()) {
+            self.assign_expr_to_slot(*slot, arg)?;
+        }
+        let result = self.compile_expr(&closure.body);
+        self.callable_bindings = callable_snapshot;
+        result
+    }
+
+    fn compile_direct_call(&mut self, index: u16, args: &[Expr]) -> Result<(), CompileError> {
+        for arg in args {
+            self.compile_expr(arg)?;
+        }
+        let argc = u8::try_from(args.len()).map_err(|_| CompileError::CallArityOverflow)?;
+        if let Some(builtin) = BuiltinFunction::from_call_index(index) {
+            debug_assert_eq!(argc, builtin.arity());
+            self.assembler.call(index, argc);
+            return Ok(());
+        }
+        let remapped_index = self.call_index_remap.get(&index).copied().unwrap_or(index);
+        self.assembler.call(remapped_index, argc);
+        Ok(())
+    }
+
+    fn compile_callable_call(
+        &mut self,
+        callable: CallableBinding,
+        args: &[Expr],
+    ) -> Result<(), CompileError> {
+        match callable {
+            CallableBinding::Closure(closure) => self.compile_inline_closure_call(&closure, args),
+            CallableBinding::Function(index) => self.compile_function_call(index, args),
+        }
     }
 
     fn compile_match_pattern_condition(

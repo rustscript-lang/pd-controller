@@ -19,15 +19,20 @@ pub(crate) enum BuiltinFunction {
     IoClose = 15,
     IoExists = 16,
     Count = 17,
-    ToString = 18,
-    TypeOf = 19,
-    Assert = 20,
+    ReIsMatch = 18,
+    ReFind = 19,
+    ReReplace = 20,
+    ReSplit = 21,
+    ReCaptures = 22,
+    ToString = 23,
+    TypeOf = 24,
+    Assert = 25,
 }
 
 pub(crate) const BUILTIN_CALL_BASE: u16 = 0xFFE0;
-/// Number of builtins in the main range (indices 0..17 above BUILTIN_CALL_BASE).
+/// Number of builtins in the main range (indices 0..22 above BUILTIN_CALL_BASE).
 /// ToString, TypeOf, and Assert live at special indices below BUILTIN_CALL_BASE.
-pub(crate) const BUILTIN_CALL_COUNT: u16 = 18;
+pub(crate) const BUILTIN_CALL_COUNT: u16 = 23;
 
 impl BuiltinFunction {
     pub(crate) fn name(self) -> &'static str {
@@ -50,6 +55,11 @@ impl BuiltinFunction {
             BuiltinFunction::IoClose => "io_close",
             BuiltinFunction::IoExists => "io_exists",
             BuiltinFunction::Count => "count",
+            BuiltinFunction::ReIsMatch => "re_is_match",
+            BuiltinFunction::ReFind => "re_find",
+            BuiltinFunction::ReReplace => "re_replace",
+            BuiltinFunction::ReSplit => "re_split",
+            BuiltinFunction::ReCaptures => "re_captures",
             BuiltinFunction::ToString => "__to_string",
             BuiltinFunction::TypeOf => "type_of",
             BuiltinFunction::Assert => "assert",
@@ -76,6 +86,11 @@ impl BuiltinFunction {
             BuiltinFunction::IoClose => 1,
             BuiltinFunction::IoExists => 1,
             BuiltinFunction::Count => 1,
+            BuiltinFunction::ReIsMatch => 2,
+            BuiltinFunction::ReFind => 2,
+            BuiltinFunction::ReReplace => 3,
+            BuiltinFunction::ReSplit => 2,
+            BuiltinFunction::ReCaptures => 2,
             BuiltinFunction::ToString => 1,
             BuiltinFunction::TypeOf => 1,
             BuiltinFunction::Assert => 1,
@@ -124,6 +139,11 @@ impl BuiltinFunction {
             15 => Some(BuiltinFunction::IoClose),
             16 => Some(BuiltinFunction::IoExists),
             17 => Some(BuiltinFunction::Count),
+            18 => Some(BuiltinFunction::ReIsMatch),
+            19 => Some(BuiltinFunction::ReFind),
+            20 => Some(BuiltinFunction::ReReplace),
+            21 => Some(BuiltinFunction::ReSplit),
+            22 => Some(BuiltinFunction::ReCaptures),
             _ => None,
         }
     }

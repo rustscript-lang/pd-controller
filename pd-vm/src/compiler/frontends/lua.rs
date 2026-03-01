@@ -1446,12 +1446,6 @@ fn rewrite_lua_inline_function_literal(line: &str, line_no: usize) -> Result<Str
         message: "lua function literal missing ')'".to_string(),
     })?;
     let params = after_keyword[1..close_index].trim();
-    if params.is_empty() {
-        return Err(ParseError {
-            line: line_no,
-            message: "lua function literal parameters cannot be empty".to_string(),
-        });
-    }
 
     let body_and_end = after_keyword[close_index + 1..].trim();
     let body_raw = body_and_end.strip_suffix("end").ok_or(ParseError {
@@ -1485,7 +1479,11 @@ fn rewrite_lua_inline_function_literal(line: &str, line_no: usize) -> Result<Str
         });
     }
 
-    Ok(format!("{prefix}|{params}| {body}"))
+    if params.is_empty() {
+        Ok(format!("{prefix}| | {body}"))
+    } else {
+        Ok(format!("{prefix}|{params}| {body}"))
+    }
 }
 
 fn rewrite_lua_expr(

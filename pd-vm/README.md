@@ -308,16 +308,14 @@ At runtime, `call` is bridged through `Vm::execute_host_call`:
 
 Core compiler/IR:
 
-- no first-class function values in IR/runtime call path
-- calls are lowered as static call indices, not callable values
-- closures are not general values in this subset
-- higher-order patterns like storing/returning arbitrary callable values are not generally supported
+- callable locals can be passed and called, but callables are not runtime `Value`s
+- callable values cannot currently be stored in arrays/maps or returned from functions
 - recursive RustScript function declarations are not supported by current inlining-based lowering
 - nested function declarations are not supported
 - RustScript function declarations cannot capture outer locals
-- `match` patterns are limited to int/string literals and `_`
+- `match` patterns are limited to int/string/null literals, `_`, and type constructors (`Some(TypeName)` / `Option::Some(TypeName)`)
 - `break` and `continue` are only valid inside loops
-- host import namespace support in parser is limited to `vm` (plus `io::` builtin namespace calls)
+- host import namespace support in parser is limited to `vm` (builtin namespaces are `io::` and `re::`)
 
 Module/source loading:
 
@@ -326,13 +324,12 @@ Module/source loading:
 JavaScript frontend:
 
 - arrow closures with block bodies are not supported (expression-body arrows only)
-- empty arrow parameter lists are not supported
 
 Lua frontend:
 
 - numeric `for` loops with negative step are not supported
 - Lua pattern API string methods (`:match`, `:gsub`, etc.) are not supported
-- function literals require non-empty parameter list and non-empty return expression
+- function literals require a non-empty return expression (`function(...) return <expr> end`)
 
 Scheme frontend:
 

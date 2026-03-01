@@ -32,9 +32,12 @@ pub enum MatchTypePattern {
 pub enum Expr {
     Null,
     Int(i64),
+    Float(f64),
     Bool(bool),
     String(String),
+    FunctionRef(u16),
     Call(u16, Vec<Expr>),
+    LocalCall(u8, Vec<Expr>),
     Closure(ClosureExpr),
     ClosureCall(ClosureExpr, Vec<Expr>),
     Add(Box<Expr>, Box<Expr>),

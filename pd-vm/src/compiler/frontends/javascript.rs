@@ -211,6 +211,11 @@ fn is_forbidden_js_builtin_name(name: &str) -> bool {
             | "io_flush"
             | "io_close"
             | "io_exists"
+            | "re_is_match"
+            | "re_find"
+            | "re_replace"
+            | "re_split"
+            | "re_captures"
     )
 }
 
@@ -224,6 +229,9 @@ fn js_builtin_syntax_hint(name: &str) -> &'static str {
         "slice" => "use slice index syntax ('value[start:end]')",
         "io_open" | "io_popen" | "io_read_all" | "io_read_line" | "io_write" | "io_flush"
         | "io_close" | "io_exists" => "use io namespace syntax (for example 'io::open(...)')",
+        "re_is_match" | "re_find" | "re_replace" | "re_split" | "re_captures" => {
+            "use re namespace syntax (for example 're::is_match(...)')"
+        }
         _ => "use frontend language syntax instead of VM builtin helpers",
     }
 }
@@ -990,11 +998,8 @@ fn rewrite_js_arrow_line(line: &str, line_no: usize) -> Result<String, ParseErro
 
     let params = params_text.trim();
     if params.is_empty() {
-        return Err(ParseError {
-            line: line_no,
-            message: "arrow closure parameters cannot be empty".to_string(),
-        });
+        Ok(format!("{prefix}| | {right}"))
+    } else {
+        Ok(format!("{prefix}|{params}| {right}"))
     }
-
-    Ok(format!("{}|{}| {}", prefix, params, right))
 }

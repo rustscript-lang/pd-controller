@@ -247,7 +247,18 @@ fn remap_expr_indices(
     function_map: &HashMap<u16, u16>,
 ) -> Result<(), SourcePathError> {
     match expr {
-        Expr::Null | Expr::Int(_) | Expr::Bool(_) | Expr::String(_) => {}
+        Expr::Null | Expr::Int(_) | Expr::Float(_) | Expr::Bool(_) | Expr::String(_) => {}
+        Expr::FunctionRef(index) => {
+            if let Some(remapped_index) = function_map.get(index).copied() {
+                *index = remapped_index;
+            } else if BuiltinFunction::from_call_index(*index).is_none() {
+                return Err(SourcePathError::Source(SourceError::Parse(ParseError {
+                    line: 1,
+                    message: "function index remap failed while merging imported modules"
+                        .to_string(),
+                })));
+            }
+        }
         Expr::Call(index, args) => {
             if let Some(remapped_index) = function_map.get(index).copied() {
                 *index = remapped_index;
@@ -258,6 +269,12 @@ fn remap_expr_indices(
                         .to_string(),
                 })));
             }
+            for arg in args {
+                remap_expr_indices(arg, local_base, function_map)?;
+            }
+        }
+        Expr::LocalCall(index, args) => {
+            *index = remap_local_index(*index, local_base)?;
             for arg in args {
                 remap_expr_indices(arg, local_base, function_map)?;
             }

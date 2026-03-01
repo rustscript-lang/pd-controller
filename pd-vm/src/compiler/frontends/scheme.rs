@@ -2433,6 +2433,11 @@ fn is_forbidden_scheme_builtin_name(name: &str) -> bool {
             | "io_flush"
             | "io_close"
             | "io_exists"
+            | "re_is_match"
+            | "re_find"
+            | "re_replace"
+            | "re_split"
+            | "re_captures"
     )
 }
 
@@ -2446,6 +2451,9 @@ fn scheme_builtin_syntax_hint(name: &str) -> &'static str {
         "slice" => "use (slice-range ...), (slice-to ...), or (slice-from ...)",
         "io_open" | "io_popen" | "io_read_all" | "io_read_line" | "io_write" | "io_flush"
         | "io_close" | "io_exists" => "use io namespace syntax (for example io::open)",
+        "re_is_match" | "re_find" | "re_replace" | "re_split" | "re_captures" => {
+            "use re namespace syntax (for example re::is_match)"
+        }
         _ => "use Scheme frontend forms instead of VM builtin helpers",
     }
 }

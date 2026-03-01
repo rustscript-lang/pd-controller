@@ -17,6 +17,7 @@ path = "src/bin/pd-vm-run.rs"
 required-features = ["cli"]
 
 [dependencies]
+regex = "1"
 rustyline = { version = "14", optional = true }
 
 [target.'cfg(windows)'.dependencies]

@@ -11,6 +11,7 @@ use super::{
 enum TokenKind {
     Ident(String),
     Int(i64),
+    Float(f64),
     String(String),
     True,
     False,
@@ -60,6 +61,11 @@ enum TokenKind {
 struct Token {
     kind: TokenKind,
     line: usize,
+}
+
+enum NumberLiteral {
+    Int(i64),
+    Float(f64),
 }
 
 struct Lexer<'a> {
@@ -209,8 +215,10 @@ impl<'a> Lexer<'a> {
                 TokenKind::String(value)
             }
             c if c.is_ascii_digit() => {
-                let value = self.consume_number()?;
-                TokenKind::Int(value)
+                match self.consume_number()? {
+                    NumberLiteral::Int(value) => TokenKind::Int(value),
+                    NumberLiteral::Float(value) => TokenKind::Float(value),
+                }
             }
             c if is_ident_start(c) => {
                 let ident = self.consume_ident();
@@ -296,7 +304,7 @@ impl<'a> Lexer<'a> {
         Ok(())
     }
 
-    fn consume_number(&mut self) -> Result<i64, ParseError> {
+    fn consume_number(&mut self) -> Result<NumberLiteral, ParseError> {
         let line = self.line;
         let mut text = String::new();
         while let Some(ch) = self.current {
@@ -307,10 +315,40 @@ impl<'a> Lexer<'a> {
                 break;
             }
         }
-        text.parse::<i64>().map_err(|_| ParseError {
-            line,
-            message: format!("invalid number '{text}'"),
-        })
+        let mut is_float = false;
+        if self.current == Some('.') {
+            let mut peek = self.chars.clone();
+            if peek.next().is_some_and(|ch| ch.is_ascii_digit()) {
+                is_float = true;
+                text.push('.');
+                self.advance();
+                while let Some(ch) = self.current {
+                    if ch.is_ascii_digit() {
+                        text.push(ch);
+                        self.advance();
+                    } else {
+                        break;
+                    }
+                }
+            }
+        }
+
+        if is_float {
+            return text
+                .parse::<f64>()
+                .map(NumberLiteral::Float)
+                .map_err(|_| ParseError {
+                    line,
+                    message: format!("invalid number '{text}'"),
+                });
+        }
+
+        text.parse::<i64>()
+            .map(NumberLiteral::Int)
+            .map_err(|_| ParseError {
+                line,
+                message: format!("invalid number '{text}'"),
+            })
     }
 
     fn consume_string(&mut self) -> Result<String, ParseError> {
@@ -403,7 +441,6 @@ pub(super) struct Parser {
     function_list: Vec<FunctionDecl>,
     function_impls: HashMap<u16, FunctionImpl>,
     next_function: u16,
-    closure_bindings: HashMap<String, ClosureExpr>,
     closure_scopes: Vec<HashMap<String, u8>>,
     closure_capture_contexts: Vec<ClosureCaptureContext>,
     allow_implicit_externs: bool,
@@ -444,7 +481,6 @@ impl Parser {
             function_list: Vec::new(),
             function_impls: HashMap::new(),
             next_function: 0,
-            closure_bindings: HashMap::new(),
             closure_scopes: Vec::new(),
             closure_capture_contexts: Vec::new(),
             allow_implicit_externs,
@@ -639,7 +675,7 @@ impl Parser {
                 message: format!("duplicate function '{name}'"),
             });
         }
-        if self.locals.contains_key(&name) || self.closure_bindings.contains_key(&name) {
+        if self.locals.contains_key(&name) {
             return Err(ParseError {
                 line: self.current_line(),
                 message: format!("name '{name}' already used by a local binding"),
@@ -792,29 +828,6 @@ impl Parser {
             self.consume_stmt_terminator("expected ';' after let")?;
         }
 
-        if let Expr::Closure(closure) = expr {
-            if self.locals.contains_key(&name)
-                || self.functions.contains_key(&name)
-                || self.closure_bindings.contains_key(&name)
-            {
-                return Err(ParseError {
-                    line: self.current_line(),
-                    message: format!("name '{name}' already used"),
-                });
-            }
-            self.closure_bindings.insert(name, closure.clone());
-            return Ok(Stmt::ClosureLet { line, closure });
-        }
-
-        if self.closure_bindings.contains_key(&name) {
-            return Err(ParseError {
-                line: self.current_line(),
-                message: format!(
-                    "cannot rebind closure '{name}' as a value variable in this compiler subset"
-                ),
-            });
-        }
-
         if !self.closure_scopes.is_empty() {
             if let Some(index) = self
                 .closure_scopes
@@ -845,13 +858,6 @@ impl Parser {
         let expr = self.parse_expr()?;
         if expect_terminator {
             self.consume_stmt_terminator("expected ';' after assignment")?;
-        }
-
-        if self.closure_bindings.contains_key(&name) {
-            return Err(ParseError {
-                line: self.current_line(),
-                message: format!("cannot assign to closure '{name}'"),
-            });
         }
 
         let index = self.get_local(&name)?;
@@ -1062,6 +1068,9 @@ impl Parser {
         if let Some(value) = self.match_int() {
             return Ok(Expr::Int(value));
         }
+        if let Some(value) = self.match_float() {
+            return Ok(Expr::Float(value));
+        }
         if let Some(value) = self.match_string() {
             return Ok(Expr::String(value));
         }
@@ -1102,7 +1111,7 @@ impl Parser {
                     .ok_or_else(|| ParseError {
                         line: self.current_line(),
                         message: format!(
-                            "unknown namespace call '{}::{}'; supported namespaces are io:: (builtins) and vm:: (host imports via 'use vm;', 'use vm::*;', or 'use vm as <alias>;')",
+                            "unknown namespace call '{}::{}'; supported namespaces are io:: and re:: (builtins), and vm:: (host imports via 'use vm;', 'use vm::*;', or 'use vm as <alias>;')",
                             name,
                             path_segments.join("::")
                         ),
@@ -1113,17 +1122,9 @@ impl Parser {
 
             let mut expr = if self.match_kind(&TokenKind::LParen) {
                 let args = self.parse_call_args()?;
-                if let Some(closure) = self.closure_bindings.get(&name).cloned() {
-                    if closure.param_slots.len() != args.len() {
-                        return Err(ParseError {
-                            line: self.current_line(),
-                            message: format!(
-                                "closure '{name}' expects {} arguments",
-                                closure.param_slots.len()
-                            ),
-                        });
-                    }
-                    Expr::ClosureCall(closure, args)
+                if self.has_local_binding(&name) {
+                    let local = self.get_local(&name)?;
+                    Expr::LocalCall(local, args)
                 } else if self.functions.contains_key(&name) {
                     let decl = self.resolve_function_for_call(&name, args.len())?;
                     Expr::Call(decl.index, args)
@@ -1137,14 +1138,17 @@ impl Parser {
                     Expr::Call(decl.index, args)
                 }
             } else {
-                if self.closure_bindings.contains_key(&name) {
+                if self.has_local_binding(&name) {
+                    let index = self.get_local(&name)?;
+                    Expr::Var(index)
+                } else if let Some(decl) = self.functions.get(&name) {
+                    Expr::FunctionRef(decl.index)
+                } else {
                     return Err(ParseError {
                         line: self.current_line(),
-                        message: format!("closure '{name}' must be called with '(...)'"),
+                        message: format!("unknown local '{name}'"),
                     });
                 }
-                let index = self.get_local(&name)?;
-                Expr::Var(index)
             };
             expr = self.parse_postfix_access(expr)?;
             return Ok(expr);
@@ -1744,6 +1748,9 @@ impl Parser {
         if let Some(value) = self.match_int() {
             return Ok(Expr::Int(value));
         }
+        if let Some(value) = self.match_float() {
+            return Ok(Expr::Float(value));
+        }
         if self.match_kind(&TokenKind::True) {
             return Ok(Expr::Bool(true));
         }
@@ -1755,7 +1762,8 @@ impl Parser {
         }
         Err(ParseError {
             line: self.current_line(),
-            message: "map keys must be identifier/string/int/bool/null literals".to_string(),
+            message: "map keys must be identifier/string/int/float/bool/null literals"
+                .to_string(),
         })
     }
 
@@ -1796,6 +1804,7 @@ impl Parser {
             TokenKind::Ident(_)
                 | TokenKind::String(_)
                 | TokenKind::Int(_)
+                | TokenKind::Float(_)
                 | TokenKind::True
                 | TokenKind::False
                 | TokenKind::Null
@@ -1912,6 +1921,14 @@ impl Parser {
                 "flush" => Some(BuiltinFunction::IoFlush),
                 "close" => Some(BuiltinFunction::IoClose),
                 "exists" => Some(BuiltinFunction::IoExists),
+                _ => None,
+            },
+            "re" => match member {
+                "is_match" => Some(BuiltinFunction::ReIsMatch),
+                "find" => Some(BuiltinFunction::ReFind),
+                "replace" => Some(BuiltinFunction::ReReplace),
+                "split" => Some(BuiltinFunction::ReSplit),
+                "captures" => Some(BuiltinFunction::ReCaptures),
                 _ => None,
             },
             _ => None,
@@ -2129,6 +2146,15 @@ impl Parser {
         })
     }
 
+    fn has_local_binding(&self, name: &str) -> bool {
+        for scope in self.closure_scopes.iter().rev() {
+            if scope.contains_key(name) {
+                return true;
+            }
+        }
+        self.locals.contains_key(name)
+    }
+
     fn resolve_function_for_call(
         &mut self,
         name: &str,
@@ -2181,7 +2207,7 @@ impl Parser {
         if let Some(existing) = self.functions.get(name) {
             return Ok(existing.clone());
         }
-        if self.locals.contains_key(name) || self.closure_bindings.contains_key(name) {
+        if self.locals.contains_key(name) {
             return Err(ParseError {
                 line: self.current_line(),
                 message: format!("name '{name}' already used by a local binding"),
@@ -2218,7 +2244,7 @@ impl Parser {
             }
             return Ok(existing.clone());
         }
-        if self.locals.contains_key(name) || self.closure_bindings.contains_key(name) {
+        if self.locals.contains_key(name) {
             return Err(ParseError {
                 line: self.current_line(),
                 message: format!("name '{name}' already used by a local binding"),
@@ -2256,7 +2282,7 @@ impl Parser {
             }
             return Ok(existing.clone());
         }
-        if self.locals.contains_key(name) || self.closure_bindings.contains_key(name) {
+        if self.locals.contains_key(name) {
             return Err(ParseError {
                 line: self.current_line(),
                 message: format!("name '{name}' already used by a local binding"),
@@ -2336,6 +2362,20 @@ impl Parser {
         match self.tokens.get(self.pos) {
             Some(Token {
                 kind: TokenKind::Int(value),
+                ..
+            }) => {
+                let value = *value;
+                self.pos += 1;
+                Some(value)
+            }
+            _ => None,
+        }
+    }
+
+    fn match_float(&mut self) -> Option<f64> {
+        match self.tokens.get(self.pos) {
+            Some(Token {
+                kind: TokenKind::Float(value),
                 ..
             }) => {
                 let value = *value;

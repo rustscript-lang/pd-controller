@@ -90,6 +90,54 @@ fn javascript_assignment_updates_existing_local_without_new_slot() {
 }
 
 #[test]
+fn javascript_float_literal_binding_is_supported() {
+    let source = r#"
+        let a=1.1;
+        a;
+    "#;
+    let compiled = compile_source_with_flavor(source, SourceFlavor::JavaScript)
+        .expect("compile should succeed");
+    let mut vm = Vm::with_locals(compiled.program, compiled.locals);
+
+    let status = vm.run().expect("vm should run");
+    assert_eq!(status, VmStatus::Halted);
+    assert_eq!(vm.stack(), &[Value::Float(1.1)]);
+}
+
+#[test]
+fn javascript_empty_param_arrow_closure_is_supported() {
+    let source = r#"
+        let make = () => 42;
+        make();
+    "#;
+    let compiled = compile_source_with_flavor(source, SourceFlavor::JavaScript)
+        .expect("compile should succeed");
+    let mut vm = Vm::with_locals(compiled.program, compiled.locals);
+
+    let status = vm.run().expect("vm should run");
+    assert_eq!(status, VmStatus::Halted);
+    assert_eq!(vm.stack(), &[Value::Int(42)]);
+}
+
+#[test]
+fn javascript_block_body_arrow_closure_is_rejected() {
+    let source = r#"
+        let inc = (value) => { value + 1; };
+        inc(41);
+    "#;
+    let err = match compile_source_with_flavor(source, SourceFlavor::JavaScript) {
+        Ok(_) => panic!("block-body arrow closure should fail in this subset"),
+        Err(err) => err,
+    };
+    match err {
+        vm::SourceError::Parse(parse) => {
+            assert!(parse.message.contains("block bodies are not supported"));
+        }
+        other => panic!("unexpected error: {other}"),
+    }
+}
+
+#[test]
 fn javascript_allows_omitted_semicolons_at_line_end() {
     let source = r#"
         let out = 40

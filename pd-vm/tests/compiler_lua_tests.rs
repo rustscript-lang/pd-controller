@@ -89,6 +89,55 @@ fn lua_assignment_updates_existing_local_without_new_slot() {
 }
 
 #[test]
+fn lua_float_literal_binding_is_supported() {
+    let source = r#"
+        local a = 1.1
+        a
+    "#;
+    let compiled =
+        compile_source_with_flavor(source, SourceFlavor::Lua).expect("compile should succeed");
+    let mut vm = Vm::with_locals(compiled.program, compiled.locals);
+
+    let status = vm.run().expect("vm should run");
+    assert_eq!(status, VmStatus::Halted);
+    assert_eq!(vm.stack(), &[Value::Float(1.1)]);
+}
+
+#[test]
+fn lua_function_literal_with_empty_parameter_list_is_supported() {
+    let source = r#"
+        local answer = function() return 42 end
+        answer()
+    "#;
+    let compiled =
+        compile_source_with_flavor(source, SourceFlavor::Lua).expect("compile should succeed");
+    let mut vm = Vm::with_locals(compiled.program, compiled.locals);
+
+    let status = vm.run().expect("vm should run");
+    assert_eq!(status, VmStatus::Halted);
+    assert_eq!(vm.stack(), &[Value::Int(42)]);
+}
+
+#[test]
+fn lua_numeric_for_loop_with_negative_step_is_rejected() {
+    let source = r#"
+        for i = 5, 1, -1 do
+            i
+        end
+    "#;
+    let err = match compile_source_with_flavor(source, SourceFlavor::Lua) {
+        Ok(_) => panic!("negative numeric for-step should fail in this subset"),
+        Err(err) => err,
+    };
+    match err {
+        vm::SourceError::Parse(parse) => {
+            assert!(parse.message.contains("negative lua for steps are not supported"));
+        }
+        other => panic!("unexpected error: {other}"),
+    }
+}
+
+#[test]
 fn lua_print_works_without_decl() {
     let source = r#"
         print(40 + 2)

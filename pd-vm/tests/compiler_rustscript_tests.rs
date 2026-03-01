@@ -61,6 +61,20 @@ fn rustscript_io_namespace_builtin_calls_are_supported() {
 }
 
 #[test]
+fn rustscript_float_literal_binding_is_supported() {
+    let source = r#"
+        let a=1.1;
+        a;
+    "#;
+    let compiled = compile_source(source).expect("compile should succeed");
+    let mut vm = Vm::with_locals(compiled.program, compiled.locals);
+
+    let status = vm.run().expect("vm should run");
+    assert_eq!(status, VmStatus::Halted);
+    assert_eq!(vm.stack(), &[Value::Float(1.1)]);
+}
+
+#[test]
 fn rustscript_array_primitives_are_supported_without_namespace() {
     let source = r#"
         let values = [];
@@ -162,6 +176,91 @@ fn closure_captures_outer_value_at_definition_time() {
     let status = vm.run().expect("vm should run");
     assert_eq!(status, VmStatus::Halted);
     assert_eq!(vm.stack(), &[Value::Int(12)]);
+}
+
+#[test]
+fn closure_values_are_first_class_and_can_be_passed_to_functions() {
+    let source = r#"
+        fn apply_twice(func, value) {
+            let once = func(value);
+            func(once);
+        }
+
+        let inc = |x| x + 1;
+        apply_twice(inc, 40);
+    "#;
+    let compiled = compile_source(source).expect("compile should succeed");
+    let mut vm = Vm::with_locals(compiled.program, compiled.locals);
+
+    let status = vm.run().expect("vm should run");
+    assert_eq!(status, VmStatus::Halted);
+    assert_eq!(vm.stack(), &[Value::Int(42)]);
+}
+
+#[test]
+fn named_functions_are_first_class_and_can_be_passed_to_functions() {
+    let source = r#"
+        fn add_one(value) {
+            value + 1;
+        }
+        fn apply_twice(func, value) {
+            let once = func(value);
+            func(once);
+        }
+
+        apply_twice(add_one, 40);
+    "#;
+    let compiled = compile_source(source).expect("compile should succeed");
+    let mut vm = Vm::with_locals(compiled.program, compiled.locals);
+
+    let status = vm.run().expect("vm should run");
+    assert_eq!(status, VmStatus::Halted);
+    assert_eq!(vm.stack(), &[Value::Int(42)]);
+}
+
+#[test]
+fn rustscript_callable_values_cannot_be_stored_in_arrays() {
+    let source = r#"
+        fn add_one(value) {
+            value + 1;
+        }
+        let func = add_one;
+        let values = [func];
+        values.length;
+    "#;
+
+    let err = match compile_source(source) {
+        Ok(_) => panic!("storing callable in array should fail in current subset"),
+        Err(err) => err,
+    };
+    match err {
+        vm::SourceError::Compile(vm::CompileError::CallableUsedAsValue) => {}
+        other => panic!("unexpected error: {other}"),
+    }
+}
+
+#[test]
+fn rustscript_callable_values_cannot_be_returned_from_functions() {
+    let source = r#"
+        fn add_one(value) {
+            value + 1;
+        }
+        fn get_adder() {
+            add_one;
+        }
+
+        let func = get_adder();
+        func(41);
+    "#;
+
+    let err = match compile_source(source) {
+        Ok(_) => panic!("returning callable should fail in current subset"),
+        Err(err) => err,
+    };
+    match err {
+        vm::SourceError::Compile(vm::CompileError::CallableUsedAsValue) => {}
+        other => panic!("unexpected error: {other}"),
+    }
 }
 
 #[test]

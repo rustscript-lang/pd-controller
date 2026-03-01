@@ -90,6 +90,21 @@ fn scheme_assignment_updates_existing_local_without_new_slot() {
 }
 
 #[test]
+fn scheme_float_literal_binding_is_supported() {
+    let source = r#"
+        (define a 1.1)
+        a
+    "#;
+    let compiled =
+        compile_source_with_flavor(source, SourceFlavor::Scheme).expect("compile should succeed");
+
+    let mut vm = Vm::with_locals(compiled.program, compiled.locals);
+    let status = vm.run().expect("vm should run");
+    assert_eq!(status, VmStatus::Halted);
+    assert_eq!(vm.stack(), &[Value::Float(1.1)]);
+}
+
+#[test]
 fn scheme_do_loop_syntax_is_supported() {
     let source = r#"
         (do ((i 1 (+ i 1))
