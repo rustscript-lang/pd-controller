@@ -203,6 +203,8 @@ pub(crate) enum TcpSocketPhase {
     Configured,
     Connected,
     UpgradedTls,
+    #[cfg(feature = "mqtt")]
+    AttachedMqtt,
     AttachedHttp,
     AttachedProxy,
     Closed,
@@ -217,6 +219,8 @@ impl TcpSocketPhase {
             Self::Configured => "configured",
             Self::Connected => "connected",
             Self::UpgradedTls => "upgraded-tls",
+            #[cfg(feature = "mqtt")]
+            Self::AttachedMqtt => "attached-mqtt",
             Self::AttachedHttp => "attached-http",
             Self::AttachedProxy => "attached-proxy",
             Self::Closed => "closed",
@@ -350,6 +354,14 @@ impl TcpSocketState {
         self.core.mark_present();
         self.core.clear_failure();
         self.phase = TcpSocketPhase::UpgradedTls;
+        self.read_eof = false;
+    }
+
+    #[cfg(feature = "mqtt")]
+    pub(crate) fn mark_mqtt_attached(&mut self) {
+        self.core.mark_present();
+        self.core.clear_failure();
+        self.phase = TcpSocketPhase::AttachedMqtt;
         self.read_eof = false;
     }
 

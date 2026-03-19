@@ -83,6 +83,7 @@ enum EdgeHostScopeAttr {
     HttpExtension,
     Io,
     Transport,
+    Mqtt,
     WebSocket,
     WebRtc,
     Proxy,
@@ -148,13 +149,13 @@ fn parse_edge_scope(value: &Expr) -> Result<EdgeHostScopeAttr, Error> {
             let Some(segment) = path.path.segments.last() else {
                 return Err(Error::new_spanned(
                     value,
-                    "scope must be one of runtime, http, http_extension, io, transport, websocket, webrtc, proxy, or console",
+                    "scope must be one of runtime, http, http_extension, io, transport, mqtt, websocket, webrtc, proxy, or console",
                 ));
             };
             if path.path.segments.len() != 1 {
                 return Err(Error::new_spanned(
                     value,
-                    "scope must be one of runtime, http, http_extension, io, transport, websocket, webrtc, proxy, or console",
+                    "scope must be one of runtime, http, http_extension, io, transport, mqtt, websocket, webrtc, proxy, or console",
                 ));
             }
             segment.ident.to_string()
@@ -164,14 +165,14 @@ fn parse_edge_scope(value: &Expr) -> Result<EdgeHostScopeAttr, Error> {
             _ => {
                 return Err(Error::new_spanned(
                     value,
-                    "scope must be one of runtime, http, http_extension, io, transport, websocket, webrtc, proxy, or console",
+                    "scope must be one of runtime, http, http_extension, io, transport, mqtt, websocket, webrtc, proxy, or console",
                 ));
             }
         },
         _ => {
             return Err(Error::new_spanned(
                 value,
-                "scope must be one of runtime, http, http_extension, io, transport, websocket, webrtc, proxy, or console",
+                "scope must be one of runtime, http, http_extension, io, transport, mqtt, websocket, webrtc, proxy, or console",
             ));
         }
     };
@@ -182,13 +183,14 @@ fn parse_edge_scope(value: &Expr) -> Result<EdgeHostScopeAttr, Error> {
         "http_extension" | "http_extensions" => Ok(EdgeHostScopeAttr::HttpExtension),
         "io" | "io_override" | "io_overrides" => Ok(EdgeHostScopeAttr::Io),
         "transport" => Ok(EdgeHostScopeAttr::Transport),
+        "mqtt" => Ok(EdgeHostScopeAttr::Mqtt),
         "websocket" => Ok(EdgeHostScopeAttr::WebSocket),
         "webrtc" => Ok(EdgeHostScopeAttr::WebRtc),
         "proxy" => Ok(EdgeHostScopeAttr::Proxy),
         "console" => Ok(EdgeHostScopeAttr::Console),
         _ => Err(Error::new_spanned(
             value,
-            "scope must be one of runtime, http, http_extension, io, transport, websocket, webrtc, proxy, or console",
+            "scope must be one of runtime, http, http_extension, io, transport, mqtt, websocket, webrtc, proxy, or console",
         )),
     }
 }
@@ -206,6 +208,7 @@ fn edge_scope_tokens(scope: EdgeHostScopeAttr) -> proc_macro2::TokenStream {
         EdgeHostScopeAttr::Transport => {
             quote!(crate::abi_impl::registry::EdgeHostScope::Transport)
         }
+        EdgeHostScopeAttr::Mqtt => quote!(crate::abi_impl::registry::EdgeHostScope::Mqtt),
         EdgeHostScopeAttr::WebSocket => {
             quote!(crate::abi_impl::registry::EdgeHostScope::WebSocket)
         }

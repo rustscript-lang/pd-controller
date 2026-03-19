@@ -68,6 +68,8 @@ use super::outbound_http1::{
     serialize_request_head_parts_into,
 };
 use super::version::HttpVersionPreference;
+#[cfg(feature = "mqtt")]
+use crate::abi_impl::mqtt::MqttConnectionState;
 #[cfg(feature = "tls")]
 use crate::abi_impl::transport::{
     DownstreamTlsServerStart, SharedServerTlsStreamIo, SharedTlsStreamIo,
@@ -137,7 +139,7 @@ use upstream::{
 use upstream_body::{SharedHttpHeaders, SharedUpstreamResponseBody};
 use upstream_body::{StreamingUpstreamResponseBodyState, UpstreamResponseBodyState};
 
-#[cfg(feature = "webrtc")]
+#[cfg(any(feature = "webrtc", feature = "mqtt"))]
 use std::sync::MutexGuard;
 
 #[derive(Clone)]
@@ -752,6 +754,10 @@ pub(crate) const DEFAULT_UPSTREAM_EXCHANGE_HANDLE: i64 = 1;
 const FIRST_DYNAMIC_EXCHANGE_HANDLE: i64 = 2;
 pub(crate) const DEFAULT_UPSTREAM_UDP_SOCKET_HANDLE: i64 = 1;
 const FIRST_DYNAMIC_UDP_SOCKET_HANDLE: i64 = 2;
+#[cfg(feature = "mqtt")]
+pub(crate) const DEFAULT_UPSTREAM_MQTT_CONNECTION_HANDLE: i64 = 1;
+#[cfg(feature = "mqtt")]
+const FIRST_DYNAMIC_MQTT_CONNECTION_HANDLE: i64 = 2;
 #[cfg(feature = "webrtc")]
 pub(crate) const DEFAULT_UPSTREAM_WEBRTC_CONNECTION_HANDLE: i64 = 1;
 #[cfg(feature = "webrtc")]
@@ -1219,6 +1225,25 @@ impl TransportState {
     }
 }
 
+#[cfg(feature = "mqtt")]
+#[derive(Debug)]
+pub(crate) struct MqttRegistry {
+    pub(crate) default_upstream_mqtt: MqttConnectionState,
+    pub(crate) next_mqtt_connection_handle: i64,
+    pub(crate) mqtt_connections: HashMap<i64, MqttConnectionState>,
+}
+
+#[cfg(feature = "mqtt")]
+impl Default for MqttRegistry {
+    fn default() -> Self {
+        Self {
+            default_upstream_mqtt: MqttConnectionState::default(),
+            next_mqtt_connection_handle: FIRST_DYNAMIC_MQTT_CONNECTION_HANDLE,
+            mqtt_connections: HashMap::new(),
+        }
+    }
+}
+
 #[cfg(feature = "webrtc")]
 #[derive(Debug)]
 pub(crate) struct WebRtcRegistry {
@@ -1276,6 +1301,8 @@ pub struct ProxyVmContext {
     downstream: Mutex<DownstreamState>,
     exchanges: Mutex<ExchangeRegistry>,
     transport: Mutex<TransportState>,
+    #[cfg(feature = "mqtt")]
+    mqtt: Mutex<MqttRegistry>,
     #[cfg(feature = "webrtc")]
     webrtc: Mutex<WebRtcRegistry>,
     proxy: Mutex<ProxyStreamRegistry>,
@@ -1323,6 +1350,8 @@ impl ProxyVmContext {
             transport: Mutex::new(TransportState::from_http_request(&request_head)),
             request_head: Mutex::new(request_head),
             services,
+            #[cfg(feature = "mqtt")]
+            mqtt: Mutex::new(MqttRegistry::default()),
             #[cfg(feature = "webrtc")]
             webrtc: Mutex::new(WebRtcRegistry::default()),
             proxy: Mutex::new(ProxyStreamRegistry::default()),
@@ -1409,6 +1438,8 @@ impl ProxyVmContext {
             )),
             request_head: Mutex::new(request_head),
             services,
+            #[cfg(feature = "mqtt")]
+            mqtt: Mutex::new(MqttRegistry::default()),
             #[cfg(feature = "webrtc")]
             webrtc: Mutex::new(WebRtcRegistry::default()),
             proxy: Mutex::new(ProxyStreamRegistry::default()),
@@ -1898,6 +1929,11 @@ impl ProxyVmContext {
         guard
     }
 
+    #[cfg(feature = "mqtt")]
+    pub(crate) fn lock_mqtt(&self) -> MutexGuard<'_, MqttRegistry> {
+        self.mqtt.lock().expect("vm mqtt registry lock poisoned")
+    }
+
     #[cfg(feature = "webrtc")]
     pub(crate) fn lock_webrtc(&self) -> MutexGuard<'_, WebRtcRegistry> {
         self.webrtc
@@ -1930,6 +1966,11 @@ pub(crate) fn default_upstream_exchange_handle() -> i64 {
 
 pub(crate) fn default_upstream_udp_socket_handle() -> i64 {
     DEFAULT_UPSTREAM_UDP_SOCKET_HANDLE
+}
+
+#[cfg(feature = "mqtt")]
+pub(crate) fn default_upstream_mqtt_connection_handle() -> i64 {
+    DEFAULT_UPSTREAM_MQTT_CONNECTION_HANDLE
 }
 
 #[cfg(feature = "webrtc")]
@@ -1995,6 +2036,33 @@ pub(crate) fn udp_socket_exists(context: &SharedProxyVmContext, handle: i64) -> 
     }
     let guard = context.lock_transport();
     guard.udp_sockets.contains_key(&handle)
+}
+
+#[cfg(feature = "mqtt")]
+pub(crate) fn allocate_mqtt_connection_handle(
+    context: &SharedProxyVmContext,
+) -> Result<i64, VmError> {
+    let mut guard = context.lock_mqtt();
+    let handle = guard.next_mqtt_connection_handle;
+    if handle == i64::MAX {
+        return Err(VmError::HostError(
+            "mqtt connection handle space exhausted".to_string(),
+        ));
+    }
+    guard.next_mqtt_connection_handle += 1;
+    guard
+        .mqtt_connections
+        .insert(handle, MqttConnectionState::default());
+    Ok(handle)
+}
+
+#[cfg(feature = "mqtt")]
+pub(crate) fn mqtt_connection_exists(context: &SharedProxyVmContext, handle: i64) -> bool {
+    if handle == DEFAULT_UPSTREAM_MQTT_CONNECTION_HANDLE {
+        return true;
+    }
+    let guard = context.lock_mqtt();
+    guard.mqtt_connections.contains_key(&handle)
 }
 
 fn exchange_target_snapshot(guard: &ExchangeRegistry, handle: i64) -> Result<String, VmError> {

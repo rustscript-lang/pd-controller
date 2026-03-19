@@ -11,7 +11,7 @@ Notes:
 - `exchange n` represents additional outbound exchanges allocated with `http::exchange::new()`.
 - `udp socket 1` is the reserved default upstream UDP handle; `udp socket n` represents additional outbound sockets allocated with `udp::socket::new()`.
 - `webrtc connection 1` is the reserved default upstream WebRTC handle; `webrtc connection n` represents additional outbound connections allocated with `webrtc::connection::new()`.
-- These graphs show the union of currently supported DAG families. `http`, `http2`, `tls`, `websocket`, and `webrtc` are feature-gated; the default build enables `http`, `tls`, and `websocket`.
+- These graphs show the union of currently supported DAG families. `http`, `http2`, `tls`, `websocket`, `mqtt`, and `webrtc` are feature-gated; the default build enables `http`, `tls`, and `websocket`.
 - Current HTTP/2 support lives under the generic HTTP exchange layer. The VM still uses `http::exchange::*`; feature `http2` owns upstream `h2` session reuse explicitly and tracks downstream HTTP/2 sessions in the data-plane server.
 - HTTP/2 now has declared internal `session` and `stream` goals, explicit stream carrier refs attached to exchanges, and GOAWAY/reset frontier tracking. It is still an internal carrier DAG rather than a separate VM-visible `http2::*` ABI.
 - Internally, carrier-specific policy is now split into `src/abi_impl/http1/` and `src/abi_impl/http2/`, while the generic exchange state remains under `src/abi_impl/http/`.
@@ -20,6 +20,7 @@ Notes:
 - An untouched downstream HTTPS listener may auto-advance through `tcp -> tls -> http` on first HTTP-scoped host-call entry or during finalization. Once VM code uses raw downstream transport or TLS prelude state, that automatic edge is blocked and `http::downstream::attach_transport()` becomes the explicit bridge into HTTP.
 - There is no symmetric upstream listener-goal layer. Upstream DAGs still begin from VM-selected handles, explicit targets, and connect/send/handshake demand. The adjacent upstream refinement is that TLS sessions now observe the logical target as part of the TLS session DAG, even when the underlying transport was attached first.
 - UDP datagrams and WebRTC data-channel messages do not currently flow through `proxy::pipe` or `proxy::forward`; they remain sibling message-oriented DAGs.
+- MQTT delivery queues are session-level events above TCP/TLS today; they are not adapted into `proxy::pipe` or `proxy::forward`.
 - These graphs are intentionally conceptual. They show ingress and egress connections between DAGs, not every internal transition implemented by each subsystem.
 
 ## Downstream Graph
@@ -200,6 +201,26 @@ flowchart LR
         W4 --> W5
     end
 
+    subgraph MQTT["Outbound MQTT Child DAG"]
+        M0["mqtt carrier attached"]
+        M1["mqtt connect sent"]
+        M2["mqtt connack received"]
+        M3["mqtt session open"]
+        M4["mqtt event queue"]
+        M5["mqtt keepalive pingreq"]
+        M6["mqtt keepalive pingresp"]
+        M7["mqtt closed or failed"]
+        M0 --> M1
+        M1 --> M2
+        M2 --> M3
+        M3 --> M4
+        M3 --> M5
+        M5 --> M6
+        M6 --> M3
+        M4 --> M3
+        M3 --> M7
+    end
+
     subgraph WRTC["Outbound WebRTC Data-Channel DAG"]
         R0["webrtc configured"]
         R1["remote description set"]
@@ -229,9 +250,11 @@ flowchart LR
     UT1 --> UTL0
     UT1 --> U1A
     UT1 --> UN1
+    UT1 --> M0
     UTL3 --> U1A
     UTL3 --> UN1
     UTL3 --> UH20
+    UTL3 --> M0
     UH22 --> U1A
     UH22 --> UN1
 
@@ -244,5 +267,6 @@ flowchart LR
 
 - Downstream may begin from runtime listener policy: plain HTTP enters directly at HTTP ingress, while HTTPS begins as transport plus goal `https` and may auto-advance into TLS and HTTP.
 - Upstream has no symmetric listener policy. The VM creates demand by selecting handles, setting targets, and forcing connect, handshake, or send progression.
+- MQTT currently exists only on the upstream side. The child DAG attaches to `tcp.connected` or `tls.plaintext ready`; downstream broker-facing listener admission is still a later milestone.
 - Downstream auto-promotion is revoked once the VM touches raw downstream transport or TLS prelude state; upstream progression remains explicit and per-handle.
 - Downstream DAG instances are tied to the already-admitted client-facing connection. Upstream DAG instances are created or reused on demand and may share carrier state such as upstream TLS or HTTP/2 sessions across exchanges.

@@ -13,6 +13,8 @@ include!("tcp.rs");
 include!("udp.rs");
 #[cfg(feature = "tls")]
 include!("tls.rs");
+#[cfg(feature = "mqtt")]
+include!("mqtt.rs");
 #[cfg(feature = "websocket")]
 include!("websocket.rs");
 #[cfg(feature = "webrtc")]

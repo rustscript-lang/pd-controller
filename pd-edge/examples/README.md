@@ -4,6 +4,7 @@
 - `http/proxy/`: HTTP proxy programs that read or shape downstream/upstream HTTP traffic
 - `http/downstream/`: downstream protocol detection and listener-facing HTTP examples
 - `http/upstream/`: outbound HTTP exchange and session reuse examples
+- `mqtt/upstream/`: outbound MQTT publish, subscribe, and event-read examples
 - `proxy/forward/`: CONNECT and forward-proxy flows
 - `proxy/tunnel/`: raw downstream to upstream tunnel flows
 - `transport/io/`: explicit IO handle and mixed transport/http examples

@@ -89,6 +89,8 @@ pub struct SampleEchoServerConfig {
     pub http3_addr: SocketAddr,
     pub websocket_addr: SocketAddr,
     pub websocket_tls_addr: SocketAddr,
+    pub mqtt_addr: SocketAddr,
+    pub mqtts_addr: SocketAddr,
     pub webrtc_addr: SocketAddr,
     pub forward_proxy_addr: SocketAddr,
 }
@@ -106,6 +108,8 @@ impl Default for SampleEchoServerConfig {
             websocket_tls_addr: "127.0.0.1:7007"
                 .parse()
                 .expect("valid secure websocket addr"),
+            mqtt_addr: "127.0.0.1:7010".parse().expect("valid mqtt addr"),
+            mqtts_addr: "127.0.0.1:7011".parse().expect("valid mqtts addr"),
             webrtc_addr: "127.0.0.1:7008".parse().expect("valid webrtc addr"),
             forward_proxy_addr: "127.0.0.1:7009".parse().expect("valid forward proxy addr"),
         }
@@ -122,6 +126,8 @@ pub struct SampleEchoAddresses {
     pub http3: Option<SocketAddr>,
     pub websocket: Option<SocketAddr>,
     pub websocket_tls: Option<SocketAddr>,
+    pub mqtt: Option<SocketAddr>,
+    pub mqtts: Option<SocketAddr>,
     pub webrtc: Option<SocketAddr>,
     pub forward_proxy: SocketAddr,
 }
@@ -200,6 +206,21 @@ pub async fn spawn_sample_echo_server(
     #[cfg(all(feature = "websocket", feature = "tls"))]
     tasks.push(websocket_tls_task);
 
+    #[cfg(feature = "mqtt")]
+    let (mqtt, mqtt_task) = spawn_mqtt_echo_broker_server(config.mqtt_addr).await?;
+    #[cfg(feature = "mqtt")]
+    tasks.push(mqtt_task);
+
+    #[cfg(feature = "mqtt")]
+    let shared_mqtt_tls_config =
+        generate_sample_mqtt_tls_server_config_from_identity(&shared_identity)?;
+    #[cfg(feature = "mqtt")]
+    let (mqtts, mqtts_task) =
+        spawn_secure_mqtt_echo_broker_server_with_config(config.mqtts_addr, shared_mqtt_tls_config)
+            .await?;
+    #[cfg(feature = "mqtt")]
+    tasks.push(mqtts_task);
+
     #[cfg(feature = "webrtc")]
     let (webrtc, webrtc_task) = spawn_webrtc_echo_server(config.webrtc_addr).await?;
     #[cfg(feature = "webrtc")]
@@ -237,6 +258,14 @@ pub async fn spawn_sample_echo_server(
             websocket_tls: Some(websocket_tls),
             #[cfg(not(all(feature = "websocket", feature = "tls")))]
             websocket_tls: None,
+            #[cfg(feature = "mqtt")]
+            mqtt: Some(mqtt),
+            #[cfg(not(feature = "mqtt"))]
+            mqtt: None,
+            #[cfg(feature = "mqtt")]
+            mqtts: Some(mqtts),
+            #[cfg(not(feature = "mqtt"))]
+            mqtts: None,
             #[cfg(feature = "webrtc")]
             webrtc: Some(webrtc),
             #[cfg(not(feature = "webrtc"))]
@@ -390,6 +419,550 @@ pub async fn spawn_connect_forward_proxy(
         }
     });
     Ok((local_addr, handle))
+}
+
+#[cfg(feature = "mqtt")]
+#[derive(Debug)]
+enum SampleMqttIncomingPacket {
+    Connect,
+    Publish {
+        topic: String,
+        payload: Vec<u8>,
+        qos: u8,
+        retain: bool,
+        packet_id: Option<u16>,
+    },
+    Subscribe {
+        packet_id: u16,
+        filters: Vec<(String, u8)>,
+    },
+    Unsubscribe {
+        packet_id: u16,
+        filters: Vec<String>,
+    },
+    PingReq,
+    Disconnect,
+}
+
+#[cfg(feature = "mqtt")]
+pub async fn spawn_mqtt_echo_broker_server(
+    addr: SocketAddr,
+) -> io::Result<(SocketAddr, JoinHandle<()>)> {
+    let listener = TcpListener::bind(addr).await?;
+    let local_addr = listener.local_addr()?;
+    let handle = tokio::spawn(async move {
+        loop {
+            match listener.accept().await {
+                Ok((stream, _)) => {
+                    tokio::spawn(async move {
+                        if let Err(err) = run_mqtt_echo_broker_session(stream).await {
+                            warn!("sample mqtt broker session failed: {err}");
+                        }
+                    });
+                }
+                Err(err) => {
+                    warn!("sample mqtt broker accept failed: {err}");
+                    break;
+                }
+            }
+        }
+    });
+    Ok((local_addr, handle))
+}
+
+#[cfg(feature = "mqtt")]
+pub async fn spawn_secure_mqtt_echo_broker_server(
+    addr: SocketAddr,
+) -> io::Result<(SocketAddr, JoinHandle<()>)> {
+    let tls_config = generate_sample_mqtt_tls_server_config()?;
+    spawn_secure_mqtt_echo_broker_server_with_config(addr, tls_config).await
+}
+
+#[cfg(feature = "mqtt")]
+async fn spawn_secure_mqtt_echo_broker_server_with_config(
+    addr: SocketAddr,
+    tls_config: Arc<ServerConfig>,
+) -> io::Result<(SocketAddr, JoinHandle<()>)> {
+    let listener = TcpListener::bind(addr).await?;
+    let local_addr = listener.local_addr()?;
+    let acceptor = TlsAcceptor::from(tls_config);
+    let handle = tokio::spawn(async move {
+        loop {
+            match listener.accept().await {
+                Ok((stream, _)) => {
+                    let acceptor = acceptor.clone();
+                    tokio::spawn(async move {
+                        match acceptor.accept(stream).await {
+                            Ok(stream) => {
+                                if let Err(err) = run_mqtt_echo_broker_session(stream).await {
+                                    warn!("sample mqtts broker session failed: {err}");
+                                }
+                            }
+                            Err(err) => {
+                                warn!("sample mqtts broker handshake failed: {err}");
+                            }
+                        }
+                    });
+                }
+                Err(err) => {
+                    warn!("sample mqtts broker accept failed: {err}");
+                    break;
+                }
+            }
+        }
+    });
+    Ok((local_addr, handle))
+}
+
+#[cfg(feature = "mqtt")]
+async fn run_mqtt_echo_broker_session<S>(mut stream: S) -> io::Result<()>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    match read_sample_mqtt_packet(&mut stream).await? {
+        Some(SampleMqttIncomingPacket::Connect) => {
+            write_sample_mqtt_connack(&mut stream).await?;
+        }
+        Some(other) => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("mqtt session must begin with CONNECT, got {other:?}"),
+            ));
+        }
+        None => return Ok(()),
+    }
+
+    let mut subscriptions: Vec<String> = Vec::new();
+
+    loop {
+        let Some(packet) = read_sample_mqtt_packet(&mut stream).await? else {
+            return Ok(());
+        };
+        match packet {
+            SampleMqttIncomingPacket::Connect => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "unexpected second CONNECT packet",
+                ));
+            }
+            SampleMqttIncomingPacket::Publish {
+                topic,
+                payload,
+                qos,
+                retain,
+                packet_id,
+            } => {
+                if let (1, Some(packet_id)) = (qos, packet_id) {
+                    write_sample_mqtt_puback(&mut stream, packet_id).await?;
+                }
+                if subscriptions
+                    .iter()
+                    .any(|filter| sample_mqtt_topic_matches(filter, &topic))
+                {
+                    write_sample_mqtt_publish(&mut stream, &topic, &payload, retain).await?;
+                }
+            }
+            SampleMqttIncomingPacket::Subscribe { packet_id, filters } => {
+                let mut granted = Vec::with_capacity(filters.len());
+                for (filter, qos) in filters {
+                    subscriptions.push(filter);
+                    granted.push(qos.min(1));
+                }
+                write_sample_mqtt_suback(&mut stream, packet_id, &granted).await?;
+            }
+            SampleMqttIncomingPacket::Unsubscribe { packet_id, filters } => {
+                subscriptions.retain(|existing| !filters.iter().any(|filter| filter == existing));
+                write_sample_mqtt_unsuback(&mut stream, packet_id, filters.len()).await?;
+            }
+            SampleMqttIncomingPacket::PingReq => {
+                stream.write_all(&[0xD0, 0x00]).await?;
+            }
+            SampleMqttIncomingPacket::Disconnect => return Ok(()),
+        }
+    }
+}
+
+#[cfg(feature = "mqtt")]
+async fn read_sample_mqtt_packet<S>(stream: &mut S) -> io::Result<Option<SampleMqttIncomingPacket>>
+where
+    S: tokio::io::AsyncRead + Unpin,
+{
+    let mut first = [0u8; 1];
+    match stream.read_exact(&mut first).await {
+        Ok(_) => {}
+        Err(err) if err.kind() == io::ErrorKind::UnexpectedEof => return Ok(None),
+        Err(err) => return Err(err),
+    }
+
+    let mut encoded_len = Vec::new();
+    loop {
+        let mut byte = [0u8; 1];
+        stream.read_exact(&mut byte).await?;
+        encoded_len.push(byte[0]);
+        if byte[0] & 0x80 == 0 {
+            break;
+        }
+        if encoded_len.len() >= 4 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "mqtt remaining length exceeds four bytes",
+            ));
+        }
+    }
+
+    let (remaining_len, _) = decode_sample_mqtt_variable_int(&encoded_len).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "mqtt remaining length is invalid",
+        )
+    })?;
+    let mut body = vec![0u8; remaining_len];
+    stream.read_exact(&mut body).await?;
+    parse_sample_mqtt_packet(first[0], &body)
+}
+
+#[cfg(feature = "mqtt")]
+fn parse_sample_mqtt_packet(
+    header: u8,
+    body: &[u8],
+) -> io::Result<Option<SampleMqttIncomingPacket>> {
+    let packet_type = header >> 4;
+    let flags = header & 0x0f;
+    let packet = match packet_type {
+        1 => {
+            let mut offset = 0usize;
+            let protocol = decode_sample_mqtt_utf8(body, &mut offset, "protocol")?;
+            if protocol != "MQTT" {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("unsupported mqtt protocol {protocol}"),
+                ));
+            }
+            if body.get(offset).copied() != Some(0x05) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "sample broker expects MQTT 5 clients",
+                ));
+            }
+            offset += 1;
+            if body.get(offset).is_none() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "missing connect flags",
+                ));
+            }
+            offset += 1;
+            if offset + 2 > body.len() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "connect keepalive is truncated",
+                ));
+            }
+            offset += 2;
+            let (properties_len, properties_len_size) =
+                decode_sample_mqtt_variable_int(&body[offset..]).ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "connect properties length is invalid",
+                    )
+                })?;
+            offset += properties_len_size + properties_len;
+            let _ = decode_sample_mqtt_utf8(body, &mut offset, "client id")?;
+            SampleMqttIncomingPacket::Connect
+        }
+        3 => {
+            let retain = flags & 0x01 != 0;
+            let qos = (flags >> 1) & 0x03;
+            if qos > 1 {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "sample broker does not support mqtt qos 2",
+                ));
+            }
+            let mut offset = 0usize;
+            let topic = decode_sample_mqtt_utf8(body, &mut offset, "publish topic")?;
+            let packet_id = if qos > 0 {
+                if offset + 2 > body.len() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "publish packet id is truncated",
+                    ));
+                }
+                let packet_id = u16::from_be_bytes([body[offset], body[offset + 1]]);
+                offset += 2;
+                Some(packet_id)
+            } else {
+                None
+            };
+            let (properties_len, properties_len_size) =
+                decode_sample_mqtt_variable_int(&body[offset..]).ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "publish properties length is invalid",
+                    )
+                })?;
+            offset += properties_len_size + properties_len;
+            if offset > body.len() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "publish properties are truncated",
+                ));
+            }
+            SampleMqttIncomingPacket::Publish {
+                topic,
+                payload: body[offset..].to_vec(),
+                qos,
+                retain,
+                packet_id,
+            }
+        }
+        8 => {
+            let mut offset = 0usize;
+            if offset + 2 > body.len() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "subscribe packet id is truncated",
+                ));
+            }
+            let packet_id = u16::from_be_bytes([body[offset], body[offset + 1]]);
+            offset += 2;
+            let (properties_len, properties_len_size) =
+                decode_sample_mqtt_variable_int(&body[offset..]).ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "subscribe properties length is invalid",
+                    )
+                })?;
+            offset += properties_len_size + properties_len;
+            let mut filters = Vec::new();
+            while offset < body.len() {
+                let filter = decode_sample_mqtt_utf8(body, &mut offset, "subscribe filter")?;
+                let qos = body.get(offset).copied().ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "subscribe options are truncated",
+                    )
+                })? & 0x03;
+                offset += 1;
+                filters.push((filter, qos));
+            }
+            SampleMqttIncomingPacket::Subscribe { packet_id, filters }
+        }
+        10 => {
+            let mut offset = 0usize;
+            if offset + 2 > body.len() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "unsubscribe packet id is truncated",
+                ));
+            }
+            let packet_id = u16::from_be_bytes([body[offset], body[offset + 1]]);
+            offset += 2;
+            let (properties_len, properties_len_size) =
+                decode_sample_mqtt_variable_int(&body[offset..]).ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "unsubscribe properties length is invalid",
+                    )
+                })?;
+            offset += properties_len_size + properties_len;
+            let mut filters = Vec::new();
+            while offset < body.len() {
+                filters.push(decode_sample_mqtt_utf8(
+                    body,
+                    &mut offset,
+                    "unsubscribe filter",
+                )?);
+            }
+            SampleMqttIncomingPacket::Unsubscribe { packet_id, filters }
+        }
+        12 => SampleMqttIncomingPacket::PingReq,
+        14 => SampleMqttIncomingPacket::Disconnect,
+        _ => return Ok(None),
+    };
+    Ok(Some(packet))
+}
+
+#[cfg(feature = "mqtt")]
+fn decode_sample_mqtt_variable_int(bytes: &[u8]) -> Option<(usize, usize)> {
+    let mut multiplier = 1usize;
+    let mut value = 0usize;
+    for (index, byte) in bytes.iter().copied().enumerate().take(4) {
+        value += usize::from(byte & 0x7f) * multiplier;
+        if byte & 0x80 == 0 {
+            return Some((value, index + 1));
+        }
+        multiplier *= 128;
+    }
+    None
+}
+
+#[cfg(feature = "mqtt")]
+fn encode_sample_mqtt_variable_int(mut value: usize) -> Vec<u8> {
+    let mut encoded = Vec::new();
+    loop {
+        let mut byte = (value % 128) as u8;
+        value /= 128;
+        if value > 0 {
+            byte |= 0x80;
+        }
+        encoded.push(byte);
+        if value == 0 {
+            return encoded;
+        }
+    }
+}
+
+#[cfg(feature = "mqtt")]
+fn encode_sample_mqtt_utf8(value: &str) -> Vec<u8> {
+    let bytes = value.as_bytes();
+    let len = u16::try_from(bytes.len()).expect("sample mqtt utf8 field should fit u16");
+    let mut encoded = Vec::with_capacity(bytes.len() + 2);
+    encoded.extend_from_slice(&len.to_be_bytes());
+    encoded.extend_from_slice(bytes);
+    encoded
+}
+
+#[cfg(feature = "mqtt")]
+fn decode_sample_mqtt_utf8(bytes: &[u8], offset: &mut usize, field: &str) -> io::Result<String> {
+    if *offset + 2 > bytes.len() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("mqtt {field} is truncated"),
+        ));
+    }
+    let len = u16::from_be_bytes([bytes[*offset], bytes[*offset + 1]]) as usize;
+    *offset += 2;
+    if *offset + len > bytes.len() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("mqtt {field} is truncated"),
+        ));
+    }
+    let value = std::str::from_utf8(&bytes[*offset..*offset + len]).map_err(|err| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("mqtt {field} must be valid utf-8: {err}"),
+        )
+    })?;
+    *offset += len;
+    Ok(value.to_string())
+}
+
+#[cfg(feature = "mqtt")]
+async fn write_sample_mqtt_connack<S>(stream: &mut S) -> io::Result<()>
+where
+    S: tokio::io::AsyncWrite + Unpin,
+{
+    stream.write_all(&[0x20, 0x03, 0x00, 0x00, 0x00]).await
+}
+
+#[cfg(feature = "mqtt")]
+async fn write_sample_mqtt_puback<S>(stream: &mut S, packet_id: u16) -> io::Result<()>
+where
+    S: tokio::io::AsyncWrite + Unpin,
+{
+    stream
+        .write_all(&[
+            0x40,
+            0x04,
+            (packet_id >> 8) as u8,
+            packet_id as u8,
+            0x00,
+            0x00,
+        ])
+        .await
+}
+
+#[cfg(feature = "mqtt")]
+async fn write_sample_mqtt_suback<S>(
+    stream: &mut S,
+    packet_id: u16,
+    reason_codes: &[u8],
+) -> io::Result<()>
+where
+    S: tokio::io::AsyncWrite + Unpin,
+{
+    let mut body = Vec::with_capacity(3 + reason_codes.len());
+    body.extend_from_slice(&packet_id.to_be_bytes());
+    body.push(0x00);
+    body.extend_from_slice(reason_codes);
+    let mut packet = vec![0x90];
+    packet.extend_from_slice(&encode_sample_mqtt_variable_int(body.len()));
+    packet.extend_from_slice(&body);
+    stream.write_all(&packet).await
+}
+
+#[cfg(feature = "mqtt")]
+async fn write_sample_mqtt_unsuback<S>(
+    stream: &mut S,
+    packet_id: u16,
+    count: usize,
+) -> io::Result<()>
+where
+    S: tokio::io::AsyncWrite + Unpin,
+{
+    let mut body = Vec::with_capacity(3 + count);
+    body.extend_from_slice(&packet_id.to_be_bytes());
+    body.push(0x00);
+    body.extend(std::iter::repeat(0x00).take(count));
+    let mut packet = vec![0xB0];
+    packet.extend_from_slice(&encode_sample_mqtt_variable_int(body.len()));
+    packet.extend_from_slice(&body);
+    stream.write_all(&packet).await
+}
+
+#[cfg(feature = "mqtt")]
+async fn write_sample_mqtt_publish<S>(
+    stream: &mut S,
+    topic: &str,
+    payload: &[u8],
+    retain: bool,
+) -> io::Result<()>
+where
+    S: tokio::io::AsyncWrite + Unpin,
+{
+    let mut body = Vec::new();
+    body.extend_from_slice(&encode_sample_mqtt_utf8(topic));
+    body.push(0x00);
+    body.extend_from_slice(payload);
+    let mut packet = vec![0x30];
+    if retain {
+        packet[0] |= 0x01;
+    }
+    packet.extend_from_slice(&encode_sample_mqtt_variable_int(body.len()));
+    packet.extend_from_slice(&body);
+    stream.write_all(&packet).await
+}
+
+#[cfg(feature = "mqtt")]
+fn sample_mqtt_topic_matches(filter: &str, topic: &str) -> bool {
+    let filter_segments: Vec<&str> = filter.split('/').collect();
+    let topic_segments: Vec<&str> = topic.split('/').collect();
+    let mut filter_index = 0usize;
+    let mut topic_index = 0usize;
+
+    while filter_index < filter_segments.len() {
+        match filter_segments[filter_index] {
+            "#" => return filter_index + 1 == filter_segments.len(),
+            "+" => {
+                if topic_index >= topic_segments.len() {
+                    return false;
+                }
+                filter_index += 1;
+                topic_index += 1;
+            }
+            segment => {
+                if topic_index >= topic_segments.len() || segment != topic_segments[topic_index] {
+                    return false;
+                }
+                filter_index += 1;
+                topic_index += 1;
+            }
+        }
+    }
+
+    topic_index == topic_segments.len()
 }
 
 #[cfg(feature = "http")]
@@ -957,6 +1530,19 @@ fn generate_sample_https_tls_server_config_from_identity(
     {
         generate_tls_server_config_from_identity(identity, http1_alpn_protocols())
     }
+}
+
+#[cfg(feature = "mqtt")]
+fn generate_sample_mqtt_tls_server_config() -> io::Result<Arc<ServerConfig>> {
+    let identity = generate_self_signed_tls_identity()?;
+    generate_sample_mqtt_tls_server_config_from_identity(&identity)
+}
+
+#[cfg(feature = "mqtt")]
+fn generate_sample_mqtt_tls_server_config_from_identity(
+    identity: &SelfSignedTlsIdentity,
+) -> io::Result<Arc<ServerConfig>> {
+    generate_tls_server_config_from_identity(identity, Vec::new())
 }
 
 #[cfg(feature = "http3")]

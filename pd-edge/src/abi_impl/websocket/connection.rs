@@ -26,6 +26,7 @@ use super::state::{
     OutboundWebSocketIoState, SharedWebSocketIo, WebSocketConnectionState, WebSocketUpstreamScheme,
 };
 use crate::abi_impl::transport::{DownstreamReplayTcpStream, ReplayPrefixedIo};
+use crate::abi_impl::value_bytes::{bytes_to_value, value_to_bytes};
 
 const DOWNSTREAM_CONNECTION_HANDLE: i64 = 0;
 
@@ -1174,6 +1175,22 @@ async fn connection_send_binary_base64(
     Ok(CallOutcome::Return(vec![Value::Int(sent as i64)]))
 }
 
+/// Sends a binary message over the WebSocket connection.
+#[pd_edge_host_function(name = websocket::connection::SEND_BINARY.name, scope = websocket)]
+async fn connection_send_binary(
+    _vm: &mut Vm,
+    context: SharedProxyVmContext,
+    connection: i64,
+    payload: Value,
+) -> Result<CallOutcome, VmError> {
+    let bytes = value_to_bytes(&payload, "websocket::connection::send_binary payload")?;
+    ensure_outbound_websocket_connection_open(&context, connection).await?;
+    let io = websocket_io(&context, connection)?;
+    let mut io = io.lock().await;
+    let sent = io.send_binary_bytes(&bytes).await?;
+    Ok(CallOutcome::Return(vec![Value::Int(sent as i64)]))
+}
+
 /// Reads a base64-encoded binary message from the WebSocket connection.
 #[pd_edge_host_function(
     name = websocket::connection::READ_BINARY_BASE64.name,
@@ -1191,6 +1208,22 @@ async fn connection_read_binary_base64(
     drop(io);
     refresh_connection_close_state(&context, connection);
     Ok(CallOutcome::Return(vec![Value::string(payload)]))
+}
+
+/// Reads a binary message from the WebSocket connection.
+#[pd_edge_host_function(name = websocket::connection::READ_BINARY.name, scope = websocket)]
+async fn connection_read_binary(
+    _vm: &mut Vm,
+    context: SharedProxyVmContext,
+    connection: i64,
+) -> Result<CallOutcome, VmError> {
+    ensure_outbound_websocket_connection_open(&context, connection).await?;
+    let io = websocket_io(&context, connection)?;
+    let mut io = io.lock().await;
+    let payload = io.read_binary_bytes().await?.unwrap_or_default();
+    drop(io);
+    refresh_connection_close_state(&context, connection);
+    Ok(CallOutcome::Return(vec![bytes_to_value(&payload)]))
 }
 
 /// Returns whether the WebSocket connection has reached EOF.

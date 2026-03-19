@@ -86,6 +86,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
+    if let Some(addr) = server.addresses.mqtt {
+        info!("mqtt echo broker listening on mqtt://{}", addr);
+    } else {
+        warn!("mqtt echo broker disabled in this build; enable the `mqtt` feature");
+    }
+
+    if let Some(addr) = server.addresses.mqtts {
+        info!("secure mqtt echo broker listening on mqtts://{}", addr);
+    } else {
+        warn!("secure mqtt echo broker disabled in this build; enable the `mqtt` feature");
+    }
+
     if let Some(addr) = server.addresses.webrtc {
         info!("webrtc signaling echo listening on http://{}/offer", addr);
     } else {
@@ -114,6 +126,8 @@ struct CliArgs {
     http3_addr: SocketAddr,
     websocket_addr: SocketAddr,
     websocket_tls_addr: SocketAddr,
+    mqtt_addr: SocketAddr,
+    mqtts_addr: SocketAddr,
     webrtc_addr: SocketAddr,
     forward_proxy_addr: SocketAddr,
 }
@@ -131,6 +145,8 @@ impl Default for CliArgs {
             http3_addr: config.http3_addr,
             websocket_addr: config.websocket_addr,
             websocket_tls_addr: config.websocket_tls_addr,
+            mqtt_addr: config.mqtt_addr,
+            mqtts_addr: config.mqtts_addr,
             webrtc_addr: config.webrtc_addr,
             forward_proxy_addr: config.forward_proxy_addr,
         }
@@ -148,6 +164,8 @@ impl CliArgs {
             http3_addr: self.http3_addr,
             websocket_addr: self.websocket_addr,
             websocket_tls_addr: self.websocket_tls_addr,
+            mqtt_addr: self.mqtt_addr,
+            mqtts_addr: self.mqtts_addr,
             webrtc_addr: self.webrtc_addr,
             forward_proxy_addr: self.forward_proxy_addr,
         }
@@ -220,6 +238,14 @@ where
                 cli.websocket_tls_addr =
                     parse_socket_addr(flag, &next_arg_value(flag, &mut args)?)?;
             }
+            "--mqtt-addr" => {
+                cli.mqtt_addr =
+                    parse_socket_addr("--mqtt-addr", &next_arg_value("--mqtt-addr", &mut args)?)?;
+            }
+            "--mqtts-addr" => {
+                cli.mqtts_addr =
+                    parse_socket_addr("--mqtts-addr", &next_arg_value("--mqtts-addr", &mut args)?)?;
+            }
             "--webrtc-addr" => {
                 cli.webrtc_addr = parse_socket_addr(
                     "--webrtc-addr",
@@ -271,6 +297,8 @@ fn print_cli_help() {
         "  --http3-addr <ADDR>                      HTTP/3 echo listen address (default: 127.0.0.1:7005)\n",
         "  --websocket-addr, --ws-addr <ADDR>       WebSocket echo listen address (default: 127.0.0.1:7006)\n",
         "  --websocket-tls-addr, --wss-addr <ADDR>  Secure WebSocket echo listen address (default: 127.0.0.1:7007)\n",
+        "  --mqtt-addr <ADDR>                       MQTT echo broker listen address (default: 127.0.0.1:7010)\n",
+        "  --mqtts-addr <ADDR>                      Secure MQTT echo broker listen address (default: 127.0.0.1:7011)\n",
         "  --webrtc-addr <ADDR>                     WebRTC signaling listen address (default: 127.0.0.1:7008)\n",
         "  --forward-proxy-addr <ADDR>              CONNECT forward proxy listen address (default: 127.0.0.1:7009)\n",
         "  -V, --version                            Show version, git metadata, and enabled features\n",
@@ -281,6 +309,7 @@ fn print_cli_help() {
         "  With feature `http2`, the HTTPS listener negotiates h2 or HTTP/1.1 via ALPN.\n",
         "  With feature `http3`, the HTTP/3 listener speaks QUIC with ALPN `h3` on UDP.\n",
         "  Without feature `http2`, the HTTP and HTTPS listeners serve HTTP/1.1 only.\n",
+        "  With feature `mqtt`, the MQTT listeners accept CONNECT, SUBSCRIBE, PUBLISH, PINGREQ, and DISCONNECT for local echo-broker testing.\n",
         "  The forward proxy listener accepts CONNECT and then tunnels raw TCP bytes.\n",
         "  The WebRTC listener serves signaling over HTTP POST /offer and echoes data-channel messages.\n",
         "  Feature-gated listeners are only enabled when the corresponding crate feature is compiled in.\n",
@@ -323,6 +352,10 @@ mod tests {
             "127.0.0.1:9106".to_string(),
             "--wss-addr".to_string(),
             "127.0.0.1:9107".to_string(),
+            "--mqtt-addr".to_string(),
+            "127.0.0.1:9110".to_string(),
+            "--mqtts-addr".to_string(),
+            "127.0.0.1:9111".to_string(),
             "--webrtc-addr".to_string(),
             "127.0.0.1:9108".to_string(),
             "--forward-proxy-addr".to_string(),
@@ -365,6 +398,14 @@ mod tests {
         assert_eq!(
             cli.websocket_tls_addr,
             "127.0.0.1:9107".parse::<SocketAddr>().expect("valid addr")
+        );
+        assert_eq!(
+            cli.mqtt_addr,
+            "127.0.0.1:9110".parse::<SocketAddr>().expect("valid addr")
+        );
+        assert_eq!(
+            cli.mqtts_addr,
+            "127.0.0.1:9111".parse::<SocketAddr>().expect("valid addr")
         );
         assert_eq!(
             cli.webrtc_addr,

@@ -55,7 +55,7 @@ Default listeners:
 
 ### `pd-edge-sample-echo-server`
 
-- Starts separate listeners for TCP, UDP, TLS, HTTP, HTTPS, WebSocket, secure WebSocket, WebRTC signaling, and a CONNECT forward proxy
+- Starts separate listeners for TCP, UDP, TLS, HTTP, HTTPS, WebSocket, secure WebSocket, MQTT, MQTTS, WebRTC signaling, and a CONNECT forward proxy
 - Echoes request bytes, datagrams, HTTP bodies, WebSocket frames, and WebRTC data-channel messages
 - Uses a generated self-signed certificate for TLS, HTTPS, and `wss://`
 - Enables manual end-to-end testing of the feature-gated transport surfaces without uploading a VM program
@@ -111,7 +111,7 @@ Interactive commands:
 Start the multi-protocol sample server with all current listeners enabled:
 
 ```powershell
-cargo run -p pd-edge --bin pd-edge-sample-echo-server --features "webrtc http2"
+cargo run -p pd-edge --bin pd-edge-sample-echo-server --features "webrtc http2 mqtt"
 ```
 
 Default listeners:
@@ -123,6 +123,8 @@ Default listeners:
 - HTTPS: `127.0.0.1:7005`
 - WebSocket: `127.0.0.1:7006`
 - WSS: `127.0.0.1:7007`
+- MQTT echo broker: `127.0.0.1:7010`
+- MQTTS echo broker: `127.0.0.1:7011`
 - WebRTC signaling: `http://127.0.0.1:7008/offer`
 - CONNECT forward proxy: `127.0.0.1:7009`
 
@@ -131,6 +133,7 @@ Notes:
 - With feature `http2`, the HTTP listener also accepts cleartext h2c prior-knowledge requests on the same port.
 - With feature `http2`, the HTTPS listener negotiates `h2` or `http/1.1` via ALPN on the same port.
 - Without feature `http2`, the HTTP and HTTPS listeners remain HTTP/1.1 only.
+- With feature `mqtt`, the sample server also exposes local `mqtt://` and `mqtts://` echo brokers for outbound MQTT sample programs.
 - The forward proxy listener accepts `CONNECT` and then tunnels raw TCP bytes, which makes it usable with `examples/proxy/forward/sample_forward_proxy_program.rss`.
 
 ## HTTP Proxy Admin API
@@ -213,8 +216,11 @@ Usage: pd-edge-sample-echo-server [options]
 --tls-addr <ADDR>                        TLS echo listen address (default: 127.0.0.1:7003)
 --http-addr <ADDR>                       HTTP echo listen address (default: 127.0.0.1:7004)
 --https-addr <ADDR>                      HTTPS echo listen address (default: 127.0.0.1:7005)
+--http3-addr <ADDR>                      HTTP/3 echo listen address (default: 127.0.0.1:7005)
 --websocket-addr, --ws-addr <ADDR>       WebSocket echo listen address (default: 127.0.0.1:7006)
 --websocket-tls-addr, --wss-addr <ADDR>  Secure WebSocket echo listen address (default: 127.0.0.1:7007)
+--mqtt-addr <ADDR>                       MQTT echo broker listen address (default: 127.0.0.1:7010)
+--mqtts-addr <ADDR>                      Secure MQTT echo broker listen address (default: 127.0.0.1:7011)
 --webrtc-addr <ADDR>                     WebRTC signaling listen address (default: 127.0.0.1:7008)
 --forward-proxy-addr <ADDR>              CONNECT forward proxy listen address (default: 127.0.0.1:7009)
 -V, --version
@@ -226,7 +232,9 @@ Notes:
 - TLS, HTTPS, and WSS listeners use a generated self-signed certificate.
 - With feature `http2`, the HTTP listener also accepts cleartext h2c prior knowledge.
 - With feature `http2`, the HTTPS listener negotiates h2 or HTTP/1.1 via ALPN.
+- With feature `http3`, the HTTP/3 listener speaks QUIC with ALPN `h3` on UDP.
 - Without feature `http2`, the HTTP and HTTPS listeners serve HTTP/1.1 only.
+- With feature `mqtt`, the MQTT listeners accept CONNECT, SUBSCRIBE, PUBLISH, PINGREQ, and DISCONNECT for local echo-broker testing.
 - The forward proxy listener accepts `CONNECT` and then tunnels raw TCP bytes.
 - The WebRTC listener accepts `POST /offer` and returns an SDP answer for a data-channel echo peer.
 - Feature-gated listeners are only enabled when their crate feature is compiled in.
@@ -352,11 +360,12 @@ Current state:
 - HTTP/2 support now has explicit runtime-owned carrier state under the generic HTTP exchange DAG. When feature `http2` is enabled, outbound exchanges can negotiate `h2` through a shared upstream session pool, and the data-plane server also tracks downstream HTTP/2 sessions outside per-request VM contexts while VM code stays on `http::exchange::*`.
 - TCP, TLS, and UDP transport state live in [`pd-edge/src/abi_impl/transport/state.rs`](src/abi_impl/transport/state.rs), with UDP host ABI in [`pd-edge/src/abi_impl/transport/udp.rs`](src/abi_impl/transport/udp.rs).
 - WebSocket is implemented today as an explicit child DAG over outbound HTTP-upgrade handles in [`pd-edge/src/abi_impl/websocket/state.rs`](src/abi_impl/websocket/state.rs).
+- MQTT is implemented today as an explicit session DAG over outbound TCP and TLS carriers in [`pd-edge/src/abi_impl/mqtt/`](src/abi_impl/mqtt/). MQTT-over-WebSocket is planned as the next carrier attachment, not fused into the current TCP/TLS path.
 - WebRTC is implemented today as a request-scoped peer-connection/data-channel DAG in [`pd-edge/src/abi_impl/webrtc/mod.rs`](src/abi_impl/webrtc/mod.rs).
 - Full cross-protocol graph: [`pd-edge/docs/full-dag.md`](docs/full-dag.md).
-- `http`, `http2`, `tls`, `websocket`, and `webrtc` are feature-gated DAG families. The default build enables `http`, `tls`, and `websocket`.
+- `http`, `http2`, `tls`, `websocket`, `mqtt`, and `webrtc` are feature-gated DAG families. The default build enables `http`, `tls`, and `websocket`.
 - `SharedState` now carries both a shared upstream HTTP session pool and a downstream HTTP/2 session store so carrier-specific state is not owned solely by per-request `ProxyVmContext`.
-- TCP, UDP, TLS, outbound HTTP exchanges, WebSocket connections, and WebRTC connections are exposed to programs through handle-based host calls:
+- TCP, UDP, TLS, outbound HTTP exchanges, WebSocket connections, MQTT connections, and WebRTC connections are exposed to programs through handle-based host calls:
   - `tcp::stream::downstream()` returns reserved socket handle `0`
   - `tcp::stream::default_upstream()` returns reserved socket handle `1`
   - `tcp::stream::{read, write, eof}` operate on those socket handles
@@ -374,6 +383,9 @@ Current state:
   - `websocket::connection::default_upstream()` returns reserved websocket handle `1`
   - `websocket::connection::new()` allocates independent outbound websocket handles starting at `2`
   - `websocket::connection::{set_target, set_header, set_subprotocols, connect, send_text, read_text, send_binary_base64, read_binary_base64, eof, close, get_phase, get_subprotocol}` operate on any outbound websocket handle
+  - `mqtt::connection::default_upstream()` returns reserved mqtt handle `1`
+  - `mqtt::connection::new()` allocates independent outbound mqtt handles starting at `2`
+  - `mqtt::connection::{set_scheme, set_target, set_client_id, set_username, set_password, set_keep_alive_secs, set_clean_start, connect, disconnect, publish_text, publish_binary_base64, subscribe, unsubscribe, read_event, get_phase, is_present}` operate on any outbound mqtt handle
   - `webrtc::connection::downstream()` returns reserved webrtc handle `0`
   - `webrtc::connection::default_upstream()` returns reserved webrtc handle `1`
   - `webrtc::connection::new()` allocates independent outbound webrtc handles starting at `2`
@@ -389,10 +401,12 @@ Current state:
   - downstream UDP handle `0` is reserved but inactive in the current one-shot HTTP runtime
   - outbound WebSocket connections are executable today
   - downstream handle `0` currently exposes upgrade-candidate detection and phase inspection, but not a post-`101` frame loop yet
+  - outbound MQTT sessions are executable today over direct `mqtt://` TCP carriers and `mqtts://` TLS-upgraded carriers, with explicit transport attach recorded on the underlying TCP DAG
+  - MQTT keepalive is currently driven inside the session read/wait loops with `PINGREQ/PINGRESP`; long-lived background hosting in the transport runtime and WebSocket-carried MQTT are still follow-on milestones
   - outbound WebRTC peer connections and data channels are executable today
   - downstream WebRTC handle `0` is reserved but inactive in the current one-shot HTTP runtime
   - `wss://` currently uses the default verifier/client configuration only; custom TLS-session overrides are rejected for websocket connects until the manual websocket TLS connector reaches parity with the HTTP client path
-  - `proxy::pipe` and `proxy::forward` remain byte-stream only; UDP datagrams and WebRTC message queues are not adapted into that layer today
+  - `proxy::pipe` and `proxy::forward` remain byte-stream only; UDP datagrams, MQTT delivery queues, and WebRTC message queues are not adapted into that layer today
 
 Core model:
 
@@ -584,6 +598,38 @@ flowchart TD
     J --> K
 ```
 
+### MQTT DAG
+
+MQTT is a child session DAG over an already-connected byte-stream carrier. Today that carrier may be direct TCP or TLS plaintext over TCP. MQTT-over-WebSocket is planned as a later child attachment from `websocket.open`, not as part of the current milestone.
+
+Rules:
+
+- The mqtt DAG is entered only after a carrier has exported an attachable byte stream such as `tcp.connected` or `tls.plaintext ready`.
+- An mqtt handle is handle-based: `1` is the reserved default upstream session and `2+` are dynamically allocated outbound sessions.
+- `mqtt::connection::connect(handle)` is an explicit request to advance through carrier attach, CONNECT, CONNACK, and `mqtt.open`. `publish_*`, `subscribe`, `unsubscribe`, and `read_event` can also force that progression implicitly because they require an open session.
+- `publish_*` and `subscribe` advance the MQTT session frontiers, not the raw TCP or TLS byte DAGs, even though the packets travel on those carriers.
+- `read_event` drains the MQTT delivery queue and may drive keepalive progression through `PINGREQ/PINGRESP` while waiting for session activity.
+- Leaving MQTT happens through `mqtt.closed` or `mqtt.failed`; the outer carrier history remains owned by TCP/TLS and is not rewritten by the MQTT DAG.
+
+```mermaid
+flowchart TD
+    A["tcp.connected or tls.plaintext ready"] --> B["mqtt carrier attached"]
+    B --> C["mqtt connect sent"]
+    C --> D["mqtt connack received"]
+    D --> E["mqtt session open"]
+    E --> F["mqtt publish or subscribe flow"]
+    E --> G["mqtt read event queue"]
+    E --> H["mqtt keepalive pingreq sent"]
+    H --> I["mqtt pingresp received"]
+    I --> E
+    F --> E
+    G --> E
+    E --> J["mqtt disconnect sent"]
+    J --> K["mqtt closed"]
+    E --> L["mqtt failed"]
+    L --> K
+```
+
 ### WebRTC DAG
 
 WebRTC is a request-scoped peer-connection DAG that owns ICE configuration, SDP signaling state, data-channel readiness, and message I/O. Unlike WebSocket, it is not entered through an HTTP upgrade; the VM allocates or selects a WebRTC handle directly and drives signaling through host calls.
@@ -623,6 +669,7 @@ Examples:
 - TCP exports `tcp.connected` plus the TCP byte stream. TLS can attach there.
 - TLS exports `tls.plaintext stream`. HTTP can attach there.
 - HTTP exports `http upgrade ready`. WebSocket can attach there.
+- TCP and TLS export attachable byte streams. MQTT can attach there.
 - The VM may allocate a UDP socket directly. That starts a sibling transport DAG rather than descending through HTTP.
 - The VM may allocate a WebRTC connection directly. Signaling and data-channel progression happen on that sibling DAG rather than through an HTTP upgrade.
 - HTTP may export a response body stream that is handed back upward to TLS plaintext framing, then to TCP transmission.
@@ -725,11 +772,11 @@ flowchart LR
 
 This gives the flexibility target:
 
-- you can jump into TCP, UDP, TLS, HTTP, WebSocket, or WebRTC as long as the target node is reachable from the current frontier and that DAG family is compiled in
-- you can jump back out from WebSocket to HTTP, then to TLS or TCP, when the inner DAG has exported a forward egress node; UDP and WebRTC exit through their own terminal nodes instead of rejoining the byte-stream stack
+- you can jump into TCP, UDP, TLS, HTTP, WebSocket, MQTT, or WebRTC as long as the target node is reachable from the current frontier and that DAG family is compiled in
+- you can jump back out from WebSocket to HTTP, then to TLS or TCP, and from MQTT back to its attached TLS or TCP carrier when the inner DAG has exported a forward egress node; UDP and WebRTC exit through their own terminal nodes instead of rejoining the byte-stream stack
 - you can materialize only the parts you need, late, including sibling DAGs that have no parent byte stream
 - you do not need a custom driver for every feature such as TLS session reuse, early response generation, UDP datagram I/O, or WebRTC signaling and open-state transitions
-- directional convenience APIs may remain as aliases, but the stable abstraction is the handle-based `tcp::stream::*` / `udp::socket::*` / `tls::session::*` / `http::exchange::*` / `websocket::connection::*` / `webrtc::connection::*` surface
+- directional convenience APIs may remain as aliases, but the stable abstraction is the handle-based `tcp::stream::*` / `udp::socket::*` / `tls::session::*` / `http::exchange::*` / `websocket::connection::*` / `mqtt::connection::*` / `webrtc::connection::*` surface
 
 Current downstream versus upstream difference:
 
@@ -744,6 +791,7 @@ Node ownership in current code:
 - HTTP validation and map conversion helpers: [`pd-edge/src/abi_impl/http/helpers.rs`](src/abi_impl/http/helpers.rs)
 - HTTP host-call entrypoints that mutate or read nodes: [`pd-edge/src/abi_impl/http/`](src/abi_impl/http/)
 - WebSocket nodes and frame IO: [`pd-edge/src/abi_impl/websocket/`](src/abi_impl/websocket/)
+- MQTT nodes, packet codec, and session IO: [`pd-edge/src/abi_impl/mqtt/`](src/abi_impl/mqtt/)
 - WebRTC nodes, signaling state, and data-channel IO: [`pd-edge/src/abi_impl/webrtc/`](src/abi_impl/webrtc/)
 - data-plane orchestration and exchange resolution: [`pd-edge/src/runtime/http_plane/proxy_path.rs`](src/runtime/http_plane/proxy_path.rs)
 
@@ -788,7 +836,7 @@ docker run --rm -p 8080:8080 -p 8081:8081 fffonion/pd-edge:latest
 
 ## Codebase Layout
 
-- `pd-edge/examples/README.md`: categorized sample program index for console, HTTP, transport, proxy, WebSocket, and WebRTC examples
+- `pd-edge/examples/README.md`: categorized sample program index for console, HTTP, MQTT, transport, proxy, WebSocket, and WebRTC examples
 - `pd-edge/src/bin/pd-edge-http-proxy.rs`: HTTP proxy binary entrypoint and CLI
 - `pd-edge/src/bin/pd-edge-console.rs`: console binary entrypoint and CLI
 - `pd-edge/src/bin/pd-edge-sample-echo-server.rs`: multi-protocol sample echo server binary and CLI
@@ -799,6 +847,7 @@ docker run --rm -p 8080:8080 -p 8081:8081 fffonion/pd-edge:latest
 - `pd-edge/src/abi_impl/transport/`: TCP/TLS/UDP transport DAG state and host ABI
 - `pd-edge/src/abi_impl/http/`: HTTP-specific host ABI
 - `pd-edge/src/abi_impl/websocket/`: WebSocket DAG state and host ABI
+- `pd-edge/src/abi_impl/mqtt/`: MQTT session DAG state, codec, and host ABI
 - `pd-edge/src/abi_impl/webrtc/`: WebRTC DAG state and host ABI
 - `pd-edge/src/active_control_plane.rs`: active control-plane poll/report loop
 - `pd-edge/src/debug_session.rs`: on-demand debug session lifecycle

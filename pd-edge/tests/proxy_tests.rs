@@ -16,6 +16,9 @@ mod http;
 mod http3_support;
 #[path = "proxy_tests/io.rs"]
 mod io;
+#[cfg(feature = "mqtt")]
+#[path = "proxy_tests/mqtt.rs"]
+mod mqtt;
 #[path = "proxy_tests/support.rs"]
 mod support;
 #[cfg(feature = "tls")]

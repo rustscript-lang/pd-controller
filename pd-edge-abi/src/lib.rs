@@ -71,13 +71,16 @@ pub struct HostNamespaceSpec {
     pub docs: &'static str,
 }
 
-pub const ABI_VERSION: u16 = 22;
+pub const ABI_VERSION: u16 = 23;
 
 #[allow(dead_code, unused_variables)]
 mod callable_specs {
     mod marker {
         #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
         pub struct Any;
+
+        #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+        pub struct Array;
 
         #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
         pub struct Map;
@@ -87,7 +90,7 @@ mod callable_specs {
     }
 
     #[allow(unused_imports)]
-    use self::marker::{Any, Map, Value};
+    use self::marker::{Any, Array, Map, Value};
     use pd_host_function::pd_host_function;
 
     include!("abi_spec/functions.rs");
@@ -139,7 +142,7 @@ mod tests {
     #[test]
     fn abi_json_contains_declared_functions() {
         let manifest = abi_json();
-        assert!(manifest.contains("\"abi_version\": 22"));
+        assert!(manifest.contains("\"abi_version\": 23"));
         for function in FUNCTIONS {
             assert!(manifest.contains(function.name));
             assert!(manifest.contains(function.return_type.as_str()));

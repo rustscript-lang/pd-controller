@@ -12,6 +12,7 @@ use super::super::http::state::{
     allocate_udp_socket_handle, default_upstream_udp_socket_handle, udp_socket_exists,
 };
 use super::state::{SharedUdpSocketIo, UdpSocketRef, UdpSocketState, decode_udp_socket_handle};
+use crate::abi_impl::value_bytes::{bytes_to_value, value_to_bytes};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum UdpSocketHandle {
@@ -471,6 +472,25 @@ async fn socket_send_binary_base64(
     Ok(CallOutcome::Return(vec![Value::Int(sent as i64)]))
 }
 
+/// Sends a binary message over the UDP socket.
+#[pd_edge_host_function(name = udp::socket::SEND_BINARY.name, scope = transport)]
+async fn socket_send_binary(
+    _vm: &mut Vm,
+    context: SharedProxyVmContext,
+    socket: i64,
+    payload: Value,
+) -> Result<CallOutcome, VmError> {
+    let bytes = value_to_bytes(&payload, "udp::socket::send_binary payload")?;
+    let io = ensure_udp_socket_connected(&context, socket).await?;
+    let sent = {
+        let io = io.lock().await;
+        io.send(&bytes)
+            .await
+            .map_err(|err| VmError::HostError(format!("failed to send udp datagram: {err}")))?
+    };
+    Ok(CallOutcome::Return(vec![Value::Int(sent as i64)]))
+}
+
 /// Receives a base64-encoded binary datagram from the UDP socket.
 #[pd_edge_host_function(name = udp::socket::RECV_BINARY_BASE64.name, scope = transport)]
 async fn socket_recv_binary_base64(
@@ -492,6 +512,27 @@ async fn socket_recv_binary_base64(
     Ok(CallOutcome::Return(vec![Value::string(
         STANDARD.encode(buffer),
     )]))
+}
+
+/// Receives a binary datagram from the UDP socket.
+#[pd_edge_host_function(name = udp::socket::RECV_BINARY.name, scope = transport)]
+async fn socket_recv_binary(
+    _vm: &mut Vm,
+    context: SharedProxyVmContext,
+    socket: i64,
+    max_bytes: i64,
+) -> Result<CallOutcome, VmError> {
+    let max_bytes = parse_positive_chunk_size(max_bytes)?;
+    let io = ensure_udp_socket_connected(&context, socket).await?;
+    let mut buffer = vec![0u8; max_bytes];
+    let received = {
+        let io = io.lock().await;
+        io.recv(&mut buffer)
+            .await
+            .map_err(|err| VmError::HostError(format!("failed to receive udp datagram: {err}")))?
+    };
+    buffer.truncate(received);
+    Ok(CallOutcome::Return(vec![bytes_to_value(&buffer)]))
 }
 
 /// Closes the UDP socket.

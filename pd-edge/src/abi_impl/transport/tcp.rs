@@ -12,16 +12,17 @@ use vm::{CallOutcome, Value, Vm, VmError};
 use super::super::SharedProxyVmContext;
 use super::super::http::state::{
     AttachedHttpTransport, allocate_tcp_stream_handle, append_outbound_exchange_body,
-    append_response_output_body_bytes, default_upstream_exchange_handle, outbound_exchange_exists,
-    outbound_exchange_response_eof, read_outbound_exchange_response_next_chunk,
-    read_request_body_next_chunk, read_upstream_response_next_chunk, request_body_eof,
-    tcp_stream_exists, upstream_response_eof,
+    append_outbound_exchange_body_bytes, append_response_output_body_bytes,
+    default_upstream_exchange_handle, outbound_exchange_exists, outbound_exchange_response_eof,
+    read_outbound_exchange_response_next_chunk, read_request_body_next_chunk,
+    read_upstream_response_next_chunk, request_body_eof, tcp_stream_exists, upstream_response_eof,
 };
 use super::state::{
     SharedTcpStreamIo, TcpSocketPhase, TcpSocketState, TcpStreamRef, decode_tcp_stream_handle,
 };
 #[cfg(feature = "tls")]
 use crate::abi_impl::transport::SharedServerTlsStreamIo;
+use crate::abi_impl::value_bytes::{bytes_to_value, value_to_bytes};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TcpStreamHandle {
@@ -389,6 +390,82 @@ async fn write_attached_downstream_tcp(io: SharedTcpStreamIo, bytes: &[u8]) -> R
     Ok(())
 }
 
+async fn read_stream_binary_chunk(
+    context: &SharedProxyVmContext,
+    stream: TcpStreamHandle,
+    max_bytes: usize,
+) -> Result<Vec<u8>, VmError> {
+    let chunk = match stream {
+        TcpStreamHandle::Reserved(TcpStreamRef::Downstream) => {
+            #[cfg(feature = "tls")]
+            if let Some(io) = active_downstream_tls_io(context) {
+                match read_attached_downstream_tls_with_preread(context, io, max_bytes).await {
+                    Ok(chunk) => chunk,
+                    Err(err) => {
+                        mark_attached_downstream_failed(context, err.to_string());
+                        return Err(err);
+                    }
+                }
+            } else if let Some(io) = active_downstream_tcp_io(context) {
+                match read_attached_downstream_tcp_with_preread(context, io, max_bytes).await {
+                    Ok(chunk) => chunk,
+                    Err(err) => {
+                        mark_attached_downstream_failed(context, err.to_string());
+                        return Err(err);
+                    }
+                }
+            } else if downstream_tls_handshake_pending(context) {
+                return Err(VmError::HostError(
+                    "downstream tcp stream is pending tls handshake; call tls::session::handshake or close the stream".to_string(),
+                ));
+            } else {
+                read_request_body_next_chunk(context, max_bytes).await?
+            }
+            #[cfg(not(feature = "tls"))]
+            if let Some(io) = active_downstream_tcp_io(context) {
+                match read_attached_downstream_tcp_with_preread(context, io, max_bytes).await {
+                    Ok(chunk) => chunk,
+                    Err(err) => {
+                        mark_attached_downstream_failed(context, err.to_string());
+                        return Err(err);
+                    }
+                }
+            } else {
+                read_request_body_next_chunk(context, max_bytes).await?
+            }
+        }
+        TcpStreamHandle::Reserved(TcpStreamRef::DefaultUpstream) => {
+            read_upstream_response_next_chunk(context, max_bytes).await?
+        }
+        TcpStreamHandle::OutboundExchange(handle) => {
+            read_outbound_exchange_response_next_chunk(context, handle, max_bytes).await?
+        }
+        TcpStreamHandle::Dynamic(handle) => {
+            let io = ensure_dynamic_tcp_stream_connected(context, handle).await?;
+            let mut guard = io.lock().await;
+            let stream_io = guard.as_mut().ok_or_else(|| {
+                VmError::HostError(format!(
+                    "dynamic tcp stream handle {handle} has no active transport",
+                ))
+            })?;
+            let mut buffer = vec![0u8; max_bytes];
+            let read = stream_io
+                .read(&mut buffer)
+                .await
+                .map_err(|err| VmError::HostError(format!("tcp read failed: {err}")))?;
+            if read == 0 {
+                mark_dynamic_tcp_stream_eof(context, handle);
+                Vec::new()
+            } else {
+                clear_dynamic_tcp_stream_eof(context, handle);
+                buffer.truncate(read);
+                buffer
+            }
+        }
+    };
+    Ok(chunk)
+}
+
 #[cfg(feature = "tls")]
 async fn write_attached_downstream_tls(
     io: SharedServerTlsStreamIo,
@@ -510,6 +587,12 @@ async fn ensure_dynamic_tcp_stream_connected(
         TcpSocketPhase::UpgradedTls => {
             return Err(VmError::HostError(format!(
                 "dynamic tcp stream handle {handle} is already owned by the tls DAG",
+            )));
+        }
+        #[cfg(feature = "mqtt")]
+        TcpSocketPhase::AttachedMqtt => {
+            return Err(VmError::HostError(format!(
+                "dynamic tcp stream handle {handle} is already attached to an mqtt session",
             )));
         }
         TcpSocketPhase::AttachedHttp => {
@@ -870,6 +953,58 @@ async fn stream_read(
     )]))
 }
 
+/// Reads binary bytes from the TCP stream as an integer array.
+#[pd_edge_host_function(name = tcp::stream::READ_BINARY.name, scope = transport)]
+async fn stream_read_binary(
+    _vm: &mut Vm,
+    context: SharedProxyVmContext,
+    stream: i64,
+    max_bytes: i64,
+) -> Result<CallOutcome, VmError> {
+    let stream = decode_stream(&context, stream)?;
+    let max_bytes = decode_chunk_size(max_bytes)?;
+    note_stream_read(&context, stream);
+    let chunk = read_stream_binary_chunk(&context, stream, max_bytes).await?;
+    Ok(CallOutcome::Return(vec![bytes_to_value(&chunk)]))
+}
+
+/// Reads exactly the requested number of binary bytes from the TCP stream.
+#[pd_edge_host_function(name = tcp::stream::READ_EXACT_BINARY.name, scope = transport)]
+async fn stream_read_exact_binary(
+    _vm: &mut Vm,
+    context: SharedProxyVmContext,
+    stream: i64,
+    byte_count: i64,
+) -> Result<CallOutcome, VmError> {
+    if byte_count < 0 {
+        return Err(VmError::HostError(format!(
+            "tcp::stream::read_exact_binary byte_count must be non-negative, got {byte_count}",
+        )));
+    }
+    let want = usize::try_from(byte_count).map_err(|_| {
+        VmError::HostError(format!(
+            "tcp::stream::read_exact_binary byte_count is too large for this runtime: {byte_count}",
+        ))
+    })?;
+    let stream = decode_stream(&context, stream)?;
+    note_stream_read(&context, stream);
+
+    let mut out = Vec::with_capacity(want);
+    while out.len() < want {
+        let chunk = read_stream_binary_chunk(&context, stream, want - out.len()).await?;
+        if chunk.is_empty() {
+            return Err(VmError::HostError(format!(
+                "tcp::stream::read_exact_binary reached eof after {} of {} bytes",
+                out.len(),
+                want
+            )));
+        }
+        out.extend_from_slice(&chunk);
+    }
+
+    Ok(CallOutcome::Return(vec![bytes_to_value(&out)]))
+}
+
 /// Peeks text from the TCP stream without advancing the VM-visible read cursor.
 #[pd_edge_host_function(name = tcp::stream::PEEK.name, scope = transport)]
 async fn stream_peek(
@@ -942,6 +1077,77 @@ async fn stream_peek(
     )]))
 }
 
+/// Peeks binary bytes from the TCP stream without advancing the VM-visible read cursor.
+#[pd_edge_host_function(name = tcp::stream::PEEK_BINARY.name, scope = transport)]
+async fn stream_peek_binary(
+    _vm: &mut Vm,
+    context: SharedProxyVmContext,
+    stream: i64,
+    max_bytes: i64,
+) -> Result<CallOutcome, VmError> {
+    let stream = decode_stream(&context, stream)?;
+    let max_bytes = decode_chunk_size(max_bytes)?;
+
+    let chunk = match stream {
+        TcpStreamHandle::Reserved(TcpStreamRef::Downstream) => {
+            #[cfg(feature = "tls")]
+            if let Some(io) = active_downstream_tls_io(&context) {
+                match peek_attached_downstream_tls(&context, io, max_bytes).await {
+                    Ok(chunk) => chunk,
+                    Err(err) => {
+                        mark_attached_downstream_failed(&context, err.to_string());
+                        return Err(err);
+                    }
+                }
+            } else if let Some(io) = active_downstream_tcp_io(&context) {
+                match peek_attached_downstream_tcp(&context, io, max_bytes).await {
+                    Ok(chunk) => chunk,
+                    Err(err) => {
+                        mark_attached_downstream_failed(&context, err.to_string());
+                        return Err(err);
+                    }
+                }
+            } else if downstream_tls_handshake_pending(&context) {
+                return Err(VmError::HostError(
+                    "downstream tcp stream is pending tls handshake; call tls::session::handshake or close the stream".to_string(),
+                ));
+            } else {
+                return Err(VmError::HostError(
+                    "tcp::stream::peek_binary on downstream requires an attached raw downstream tcp or tls plaintext transport".to_string(),
+                ));
+            }
+            #[cfg(not(feature = "tls"))]
+            if let Some(io) = active_downstream_tcp_io(&context) {
+                match peek_attached_downstream_tcp(&context, io, max_bytes).await {
+                    Ok(chunk) => chunk,
+                    Err(err) => {
+                        mark_attached_downstream_failed(&context, err.to_string());
+                        return Err(err);
+                    }
+                }
+            } else {
+                return Err(VmError::HostError(
+                    "tcp::stream::peek_binary on downstream requires an attached raw downstream tcp transport".to_string(),
+                ));
+            }
+        }
+        TcpStreamHandle::Dynamic(_) => {
+            return Err(VmError::HostError(
+                "tcp::stream::peek_binary currently supports only the reserved downstream handle"
+                    .to_string(),
+            ));
+        }
+        TcpStreamHandle::Reserved(TcpStreamRef::DefaultUpstream)
+        | TcpStreamHandle::OutboundExchange(_) => {
+            return Err(VmError::HostError(
+                "tcp::stream::peek_binary is unavailable for buffered HTTP stream handles"
+                    .to_string(),
+            ));
+        }
+    };
+    Ok(CallOutcome::Return(vec![bytes_to_value(&chunk)]))
+}
+
 /// Writes text to the TCP stream.
 #[pd_edge_host_function(name = tcp::stream::WRITE.name, scope = transport)]
 async fn stream_write(
@@ -1008,6 +1214,79 @@ async fn stream_write(
         }
     }
     Ok(CallOutcome::Return(vec![Value::Int(text.len() as i64)]))
+}
+
+/// Writes binary bytes to the TCP stream.
+#[pd_edge_host_function(name = tcp::stream::WRITE_BINARY.name, scope = transport)]
+async fn stream_write_binary(
+    _vm: &mut Vm,
+    context: SharedProxyVmContext,
+    stream: i64,
+    payload: Value,
+) -> Result<CallOutcome, VmError> {
+    let bytes = value_to_bytes(&payload, "tcp::stream::write_binary payload")?;
+    let stream_handle = decode_stream(&context, stream)?;
+    note_stream_write(&context, stream_handle);
+    match stream_handle {
+        TcpStreamHandle::Reserved(TcpStreamRef::Downstream) => {
+            #[cfg(feature = "tls")]
+            if let Some(io) = active_downstream_tls_io(&context) {
+                if let Err(err) = write_attached_downstream_tls(io, &bytes).await {
+                    mark_attached_downstream_failed(&context, err.to_string());
+                    return Err(err);
+                }
+            } else if let Some(io) = active_downstream_tcp_io(&context) {
+                if let Err(err) = write_attached_downstream_tcp(io, &bytes).await {
+                    mark_attached_downstream_failed(&context, err.to_string());
+                    return Err(err);
+                }
+            } else if downstream_tls_handshake_pending(&context) {
+                return Err(VmError::HostError(
+                    "downstream tcp stream is pending tls handshake; call tls::session::handshake before writing plaintext".to_string(),
+                ));
+            } else {
+                append_response_output_body_bytes(&context, &bytes)?;
+            }
+            #[cfg(not(feature = "tls"))]
+            if let Some(io) = active_downstream_tcp_io(&context) {
+                if let Err(err) = write_attached_downstream_tcp(io, &bytes).await {
+                    mark_attached_downstream_failed(&context, err.to_string());
+                    return Err(err);
+                }
+            } else {
+                append_response_output_body_bytes(&context, &bytes)?;
+            }
+        }
+        TcpStreamHandle::Reserved(TcpStreamRef::DefaultUpstream) => {
+            append_outbound_exchange_body_bytes(
+                &context,
+                TcpStreamRef::DefaultUpstream.handle(),
+                &bytes,
+            )?
+        }
+        TcpStreamHandle::OutboundExchange(handle) => {
+            append_outbound_exchange_body_bytes(&context, handle, &bytes)?
+        }
+        TcpStreamHandle::Dynamic(handle) => {
+            let io = ensure_dynamic_tcp_stream_connected(&context, handle).await?;
+            let mut guard = io.lock().await;
+            let stream_io = guard.as_mut().ok_or_else(|| {
+                VmError::HostError(format!(
+                    "dynamic tcp stream handle {handle} has no active transport",
+                ))
+            })?;
+            stream_io
+                .write_all(&bytes)
+                .await
+                .map_err(|err| VmError::HostError(format!("tcp write failed: {err}")))?;
+            stream_io
+                .flush()
+                .await
+                .map_err(|err| VmError::HostError(format!("tcp flush failed: {err}")))?;
+            clear_dynamic_tcp_stream_eof(&context, handle);
+        }
+    }
+    Ok(CallOutcome::Return(vec![Value::Int(bytes.len() as i64)]))
 }
 
 /// Returns whether the TCP stream has reached EOF.

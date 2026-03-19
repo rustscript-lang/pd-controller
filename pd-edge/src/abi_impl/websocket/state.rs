@@ -249,7 +249,7 @@ impl OutboundWebSocketIoState {
         match self.read_next_frame().await? {
             Some(OutboundWebSocketFrame::Text(text)) => Ok(Some(text)),
             Some(OutboundWebSocketFrame::Binary(_)) => Err(VmError::HostError(
-                "next websocket frame is binary; call websocket::connection::read_binary_base64"
+                "next websocket frame is binary; call websocket::connection::read_binary"
                     .to_string(),
             )),
             None => Ok(None),

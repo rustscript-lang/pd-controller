@@ -2,7 +2,7 @@
 #[path = "support/http3_support.rs"]
 mod http3_support;
 
-#[cfg(any(feature = "http2", feature = "http3"))]
+#[cfg(any(feature = "http2", feature = "http3", feature = "mqtt"))]
 use edge::sample_echo::{SampleEchoServerConfig, spawn_sample_echo_server};
 use edge::sample_echo::{spawn_connect_forward_proxy, spawn_tcp_echo_server};
 #[cfg(feature = "http2")]
@@ -232,7 +232,64 @@ async fn sample_echo_server_http3_listener_serves_http3_requests() {
     drop(server);
 }
 
-#[cfg(any(feature = "http2", feature = "http3"))]
+#[cfg(feature = "mqtt")]
+#[tokio::test]
+async fn sample_echo_server_mqtt_listener_echoes_subscribed_publish() {
+    let server = spawn_sample_echo_server(zero_addr_sample_echo_config())
+        .await
+        .expect("sample echo server should start");
+    let addr = server
+        .addresses
+        .mqtt
+        .expect("mqtt listener should be present");
+
+    let mut stream = timeout(Duration::from_secs(2), tokio::net::TcpStream::connect(addr))
+        .await
+        .expect("mqtt connect timed out")
+        .expect("mqtt listener should accept connections");
+
+    stream
+        .write_all(&encode_connect_packet("sample-echo-mqtt-test"))
+        .await
+        .expect("connect should write");
+    let connack = read_packet(&mut stream).await.expect("connack should read");
+    assert_eq!(connack, vec![0x20, 0x03, 0x00, 0x00, 0x00]);
+
+    stream
+        .write_all(&encode_subscribe_packet("sensor/#", 0, 1))
+        .await
+        .expect("subscribe should write");
+    let suback = read_packet(&mut stream).await.expect("suback should read");
+    assert_eq!(suback, vec![0x90, 0x04, 0x00, 0x01, 0x00, 0x00]);
+
+    stream
+        .write_all(&encode_publish_packet(
+            "sensor/temp",
+            b"21.5",
+            1,
+            false,
+            Some(7),
+        ))
+        .await
+        .expect("publish should write");
+    let puback = read_packet(&mut stream).await.expect("puback should read");
+    assert_eq!(puback, vec![0x40, 0x04, 0x00, 0x07, 0x00, 0x00]);
+    let publish = read_packet(&mut stream)
+        .await
+        .expect("echo publish should read");
+    let (topic, payload) = decode_publish_packet(&publish);
+    assert_eq!(topic, "sensor/temp");
+    assert_eq!(payload, b"21.5");
+
+    stream
+        .write_all(&[0xE0, 0x00])
+        .await
+        .expect("disconnect should write");
+
+    drop(server);
+}
+
+#[cfg(any(feature = "http2", feature = "http3", feature = "mqtt"))]
 fn zero_addr_sample_echo_config() -> SampleEchoServerConfig {
     let any = "127.0.0.1:0".parse().expect("valid wildcard addr");
     SampleEchoServerConfig {
@@ -244,7 +301,142 @@ fn zero_addr_sample_echo_config() -> SampleEchoServerConfig {
         http3_addr: any,
         websocket_addr: any,
         websocket_tls_addr: any,
+        mqtt_addr: any,
+        mqtts_addr: any,
         webrtc_addr: any,
         forward_proxy_addr: any,
     }
+}
+
+#[cfg(feature = "mqtt")]
+async fn read_packet(stream: &mut tokio::net::TcpStream) -> std::io::Result<Vec<u8>> {
+    let mut first = [0u8; 1];
+    stream.read_exact(&mut first).await?;
+    let mut encoded_len = Vec::new();
+    loop {
+        let mut byte = [0u8; 1];
+        stream.read_exact(&mut byte).await?;
+        encoded_len.push(byte[0]);
+        if byte[0] & 0x80 == 0 {
+            break;
+        }
+    }
+    let (remaining_len, _) = decode_variable_int(&encoded_len).expect("remaining length");
+    let mut body = vec![0u8; remaining_len];
+    stream.read_exact(&mut body).await?;
+    let mut packet = vec![first[0]];
+    packet.extend_from_slice(&encoded_len);
+    packet.extend_from_slice(&body);
+    Ok(packet)
+}
+
+#[cfg(feature = "mqtt")]
+fn decode_variable_int(bytes: &[u8]) -> Option<(usize, usize)> {
+    let mut multiplier = 1usize;
+    let mut value = 0usize;
+    for (index, byte) in bytes.iter().copied().enumerate().take(4) {
+        value += usize::from(byte & 0x7f) * multiplier;
+        if byte & 0x80 == 0 {
+            return Some((value, index + 1));
+        }
+        multiplier *= 128;
+    }
+    None
+}
+
+#[cfg(feature = "mqtt")]
+fn encode_variable_int(mut value: usize) -> Vec<u8> {
+    let mut encoded = Vec::new();
+    loop {
+        let mut byte = (value % 128) as u8;
+        value /= 128;
+        if value > 0 {
+            byte |= 0x80;
+        }
+        encoded.push(byte);
+        if value == 0 {
+            return encoded;
+        }
+    }
+}
+
+#[cfg(feature = "mqtt")]
+fn encode_utf8_field(value: &str) -> Vec<u8> {
+    let bytes = value.as_bytes();
+    let len = u16::try_from(bytes.len()).expect("mqtt field should fit u16");
+    let mut encoded = Vec::with_capacity(bytes.len() + 2);
+    encoded.extend_from_slice(&len.to_be_bytes());
+    encoded.extend_from_slice(bytes);
+    encoded
+}
+
+#[cfg(feature = "mqtt")]
+fn encode_connect_packet(client_id: &str) -> Vec<u8> {
+    let mut body = Vec::new();
+    body.extend_from_slice(&encode_utf8_field("MQTT"));
+    body.push(0x05);
+    body.push(0x02);
+    body.extend_from_slice(&30u16.to_be_bytes());
+    body.push(0x00);
+    body.extend_from_slice(&encode_utf8_field(client_id));
+    let mut packet = vec![0x10];
+    packet.extend_from_slice(&encode_variable_int(body.len()));
+    packet.extend_from_slice(&body);
+    packet
+}
+
+#[cfg(feature = "mqtt")]
+fn encode_subscribe_packet(filter: &str, qos: u8, packet_id: u16) -> Vec<u8> {
+    let mut body = Vec::new();
+    body.extend_from_slice(&packet_id.to_be_bytes());
+    body.push(0x00);
+    body.extend_from_slice(&encode_utf8_field(filter));
+    body.push(qos & 0x03);
+    let mut packet = vec![0x82];
+    packet.extend_from_slice(&encode_variable_int(body.len()));
+    packet.extend_from_slice(&body);
+    packet
+}
+
+#[cfg(feature = "mqtt")]
+fn encode_publish_packet(
+    topic: &str,
+    payload: &[u8],
+    qos: u8,
+    retain: bool,
+    packet_id: Option<u16>,
+) -> Vec<u8> {
+    let mut body = Vec::new();
+    body.extend_from_slice(&encode_utf8_field(topic));
+    if let Some(packet_id) = packet_id {
+        body.extend_from_slice(&packet_id.to_be_bytes());
+    }
+    body.push(0x00);
+    body.extend_from_slice(payload);
+    let mut packet = vec![0x30 | ((qos & 0x03) << 1)];
+    if retain {
+        packet[0] |= 0x01;
+    }
+    packet.extend_from_slice(&encode_variable_int(body.len()));
+    packet.extend_from_slice(&body);
+    packet
+}
+
+#[cfg(feature = "mqtt")]
+fn decode_publish_packet(packet: &[u8]) -> (String, Vec<u8>) {
+    let (_, encoded_len) =
+        decode_variable_int(&packet[1..]).expect("remaining length should decode");
+    let body = &packet[1 + encoded_len..];
+    let mut offset = 0usize;
+    let topic_len = u16::from_be_bytes([body[offset], body[offset + 1]]) as usize;
+    offset += 2;
+    let topic = std::str::from_utf8(&body[offset..offset + topic_len])
+        .expect("topic should be utf8")
+        .to_string();
+    offset += topic_len;
+    if ((packet[0] >> 1) & 0x03) > 0 {
+        offset += 2;
+    }
+    offset += 1;
+    (topic, body[offset..].to_vec())
 }

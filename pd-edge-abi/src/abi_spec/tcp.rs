@@ -53,13 +53,28 @@ fn tcp_stream_read(stream: i64, max_bytes: i64) -> String {
     unreachable!("abi declaration only")
 }
 
+#[pd_host_function(name = "tcp::stream::read_binary")]
+fn tcp_stream_read_binary(stream: i64, max_bytes: i64) -> Array {
+    unreachable!("abi declaration only")
+}
+
 #[pd_host_function(name = "tcp::stream::peek")]
 fn tcp_stream_peek(stream: i64, max_bytes: i64) -> String {
     unreachable!("abi declaration only")
 }
 
+#[pd_host_function(name = "tcp::stream::peek_binary")]
+fn tcp_stream_peek_binary(stream: i64, max_bytes: i64) -> Array {
+    unreachable!("abi declaration only")
+}
+
 #[pd_host_function(name = "tcp::stream::write")]
 fn tcp_stream_write(stream: i64, text: &str) -> i64 {
+    unreachable!("abi declaration only")
+}
+
+#[pd_host_function(name = "tcp::stream::write_binary")]
+fn tcp_stream_write_binary(stream: i64, payload: Array) -> i64 {
     unreachable!("abi declaration only")
 }
 

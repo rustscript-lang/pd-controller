@@ -11,6 +11,8 @@ pub(crate) enum EdgeHostScope {
     HttpExtension,
     Io,
     Transport,
+    #[cfg(feature = "mqtt")]
+    Mqtt,
     WebSocket,
     #[cfg(feature = "webrtc")]
     WebRtc,
@@ -38,19 +40,35 @@ pub(crate) struct EdgeHostRegistration {
 #[::linkme::distributed_slice]
 pub(crate) static PD_EDGE_HOST_FUNCTIONS: [EdgeHostRegistration];
 
+pub(crate) const EDGE_HOST_SCOPE_MASK_RUNTIME: u16 = 1 << 0;
+pub(crate) const EDGE_HOST_SCOPE_MASK_HTTP: u16 = 1 << 1;
+pub(crate) const EDGE_HOST_SCOPE_MASK_HTTP_EXTENSION: u16 = 1 << 2;
+pub(crate) const EDGE_HOST_SCOPE_MASK_IO: u16 = 1 << 3;
+pub(crate) const EDGE_HOST_SCOPE_MASK_TRANSPORT: u16 = 1 << 4;
+#[cfg(feature = "mqtt")]
+pub(crate) const EDGE_HOST_SCOPE_MASK_MQTT: u16 = 1 << 5;
+pub(crate) const EDGE_HOST_SCOPE_MASK_WEBSOCKET: u16 = 1 << 6;
+#[cfg(feature = "webrtc")]
+pub(crate) const EDGE_HOST_SCOPE_MASK_WEBRTC: u16 = 1 << 7;
+pub(crate) const EDGE_HOST_SCOPE_MASK_PROXY: u16 = 1 << 8;
+#[cfg(feature = "console")]
+pub(crate) const EDGE_HOST_SCOPE_MASK_CONSOLE: u16 = 1 << 9;
+
 fn scope_mask(scope: EdgeHostScope) -> u16 {
     match scope {
-        EdgeHostScope::Runtime => 1 << 0,
-        EdgeHostScope::Http => 1 << 1,
-        EdgeHostScope::HttpExtension => 1 << 2,
-        EdgeHostScope::Io => 1 << 3,
-        EdgeHostScope::Transport => 1 << 4,
-        EdgeHostScope::WebSocket => 1 << 5,
+        EdgeHostScope::Runtime => EDGE_HOST_SCOPE_MASK_RUNTIME,
+        EdgeHostScope::Http => EDGE_HOST_SCOPE_MASK_HTTP,
+        EdgeHostScope::HttpExtension => EDGE_HOST_SCOPE_MASK_HTTP_EXTENSION,
+        EdgeHostScope::Io => EDGE_HOST_SCOPE_MASK_IO,
+        EdgeHostScope::Transport => EDGE_HOST_SCOPE_MASK_TRANSPORT,
+        #[cfg(feature = "mqtt")]
+        EdgeHostScope::Mqtt => EDGE_HOST_SCOPE_MASK_MQTT,
+        EdgeHostScope::WebSocket => EDGE_HOST_SCOPE_MASK_WEBSOCKET,
         #[cfg(feature = "webrtc")]
-        EdgeHostScope::WebRtc => 1 << 6,
-        EdgeHostScope::Proxy => 1 << 7,
+        EdgeHostScope::WebRtc => EDGE_HOST_SCOPE_MASK_WEBRTC,
+        EdgeHostScope::Proxy => EDGE_HOST_SCOPE_MASK_PROXY,
         #[cfg(feature = "console")]
-        EdgeHostScope::Console => 1 << 8,
+        EdgeHostScope::Console => EDGE_HOST_SCOPE_MASK_CONSOLE,
     }
 }
 

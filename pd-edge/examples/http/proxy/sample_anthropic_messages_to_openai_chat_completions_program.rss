@@ -123,7 +123,7 @@ fn starts_with(value, prefix) {
         false
     } else => {
         value[0:prefix_len] == prefix
-    };
+    }
 }
 
 fn openai_chat_id(message_id) {
@@ -131,7 +131,7 @@ fn openai_chat_id(message_id) {
         "chatcmpl-anthropic"
     } else => {
         "chatcmpl-" + message_id
-    };
+    }
 }
 
 fn openai_finish_reason(stop_reason) {

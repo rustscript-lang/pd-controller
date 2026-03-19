@@ -29,6 +29,7 @@ use pd_edge_host_function::pd_edge_host_function;
 use vm::{CallOutcome, Value, Vm, VmError};
 
 use super::{SharedProxyVmContext, http};
+use crate::abi_impl::value_bytes::{bytes_to_value, value_to_bytes};
 
 const DOWNSTREAM_CONNECTION_HANDLE: i64 = 0;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -854,8 +855,7 @@ async fn connection_read_text(
         Some(WebRtcMessage::Text(text)) => text,
         Some(WebRtcMessage::Binary(_)) => {
             return Err(VmError::HostError(
-                "next webrtc message is binary; call webrtc::connection::read_binary_base64"
-                    .to_string(),
+                "next webrtc message is binary; call webrtc::connection::read_binary".to_string(),
             ));
         }
         None => String::new(),
@@ -894,6 +894,30 @@ async fn connection_send_binary_base64(
     Ok(CallOutcome::Return(vec![Value::Int(sent as i64)]))
 }
 
+/// Sends a binary message over the WebRTC connection.
+#[pd_edge_host_function(name = webrtc::connection::SEND_BINARY.name, scope = webrtc)]
+async fn connection_send_binary(
+    _vm: &mut Vm,
+    context: SharedProxyVmContext,
+    connection: i64,
+    payload: Value,
+) -> Result<CallOutcome, VmError> {
+    let bytes = value_to_bytes(&payload, "webrtc::connection::send_binary payload")?;
+    let io = ensure_connection_open(&context, connection).await?;
+    let data_channel = io.current_data_channel().ok_or_else(|| {
+        VmError::HostError(
+            "webrtc data channel is unavailable before the connection opens".to_string(),
+        )
+    })?;
+    let sent = data_channel
+        .send(&Bytes::from(bytes))
+        .await
+        .map_err(|err| {
+            VmError::HostError(format!("failed to send webrtc binary message: {err}"))
+        })?;
+    Ok(CallOutcome::Return(vec![Value::Int(sent as i64)]))
+}
+
 /// Reads a base64-encoded binary message from the WebRTC connection.
 #[pd_edge_host_function(
     name = webrtc::connection::READ_BINARY_BASE64.name,
@@ -916,6 +940,27 @@ async fn connection_read_binary_base64(
         None => String::new(),
     };
     Ok(CallOutcome::Return(vec![Value::string(payload)]))
+}
+
+/// Reads a binary message from the WebRTC connection.
+#[pd_edge_host_function(name = webrtc::connection::READ_BINARY.name, scope = webrtc)]
+async fn connection_read_binary(
+    _vm: &mut Vm,
+    context: SharedProxyVmContext,
+    connection: i64,
+) -> Result<CallOutcome, VmError> {
+    let io = ensure_connection_open(&context, connection).await?;
+    let message = pop_next_message(&io).await?;
+    let payload = match message {
+        Some(WebRtcMessage::Binary(bytes)) => bytes_to_value(&bytes),
+        Some(WebRtcMessage::Text(_)) => {
+            return Err(VmError::HostError(
+                "next webrtc message is text; call webrtc::connection::read_text".to_string(),
+            ));
+        }
+        None => Value::bytes(Vec::new()),
+    };
+    Ok(CallOutcome::Return(vec![payload]))
 }
 
 /// Returns whether the WebRTC connection has reached EOF.

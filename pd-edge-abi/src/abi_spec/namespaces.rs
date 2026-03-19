@@ -8,6 +8,8 @@ edge_host_namespace!("tcp", "TCP stream host namespace.");
 edge_host_namespace!("udp", "UDP datagram socket host namespace.");
 #[cfg(feature = "tls")]
 edge_host_namespace!("tls", "TLS session host namespace.");
+#[cfg(feature = "mqtt")]
+edge_host_namespace!("mqtt", "MQTT session and delivery host namespace.");
 #[cfg(feature = "websocket")]
 edge_host_namespace!("websocket", "WebSocket connection host namespace.");
 #[cfg(feature = "webrtc")]

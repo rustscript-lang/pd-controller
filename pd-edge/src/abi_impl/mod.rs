@@ -20,11 +20,14 @@ pub(crate) mod http;
 mod http2;
 mod http3;
 mod io;
+#[cfg(feature = "mqtt")]
+mod mqtt;
 mod proxy;
 mod quic;
 mod registry;
 mod runtime;
 mod transport;
+mod value_bytes;
 #[cfg(feature = "webrtc")]
 mod webrtc;
 mod websocket;
@@ -491,7 +494,7 @@ impl EdgeProtocolHostModule for RuntimeProtocolHostModule {
     }
 
     fn scope_mask(&self) -> Option<u16> {
-        Some(1 << 0)
+        Some(registry::EDGE_HOST_SCOPE_MASK_RUNTIME)
     }
 }
 
@@ -508,7 +511,27 @@ impl EdgeProtocolHostModule for HttpProtocolHostModule {
     }
 
     fn scope_mask(&self) -> Option<u16> {
-        Some(1 << 1)
+        Some(registry::EDGE_HOST_SCOPE_MASK_HTTP)
+    }
+}
+
+#[cfg(feature = "mqtt")]
+#[allow(dead_code)]
+pub struct MqttProtocolHostModule;
+
+#[cfg(feature = "mqtt")]
+impl EdgeProtocolHostModule for MqttProtocolHostModule {
+    fn register(
+        &self,
+        vm: &mut Vm,
+        context: SharedProxyVmContext,
+        async_ops: SharedVmAsyncOps,
+    ) -> Result<(), VmError> {
+        register_mqtt_host_module(vm, context, async_ops)
+    }
+
+    fn scope_mask(&self) -> Option<u16> {
+        Some(registry::EDGE_HOST_SCOPE_MASK_MQTT)
     }
 }
 
@@ -527,7 +550,7 @@ impl EdgeProtocolHostModule for ConsoleProtocolHostModule {
     }
 
     fn scope_mask(&self) -> Option<u16> {
-        Some(1 << 8)
+        Some(registry::EDGE_HOST_SCOPE_MASK_CONSOLE)
     }
 }
 
@@ -555,33 +578,37 @@ fn initialize_edge_abi_host_slots(vm: &mut Vm) -> Result<(), VmError> {
 
 fn protocol_scopes_from_mask(scope_mask_bits: u16) -> Vec<registry::EdgeHostScope> {
     let mut scopes = Vec::new();
-    if scope_mask_bits & (1 << 0) != 0 {
+    if scope_mask_bits & registry::EDGE_HOST_SCOPE_MASK_RUNTIME != 0 {
         scopes.push(registry::EdgeHostScope::Runtime);
     }
-    if scope_mask_bits & (1 << 1) != 0 {
+    if scope_mask_bits & registry::EDGE_HOST_SCOPE_MASK_HTTP != 0 {
         scopes.push(registry::EdgeHostScope::Http);
     }
-    if scope_mask_bits & (1 << 2) != 0 {
+    if scope_mask_bits & registry::EDGE_HOST_SCOPE_MASK_HTTP_EXTENSION != 0 {
         scopes.push(registry::EdgeHostScope::HttpExtension);
     }
-    if scope_mask_bits & (1 << 3) != 0 {
+    if scope_mask_bits & registry::EDGE_HOST_SCOPE_MASK_IO != 0 {
         scopes.push(registry::EdgeHostScope::Io);
     }
-    if scope_mask_bits & (1 << 4) != 0 {
+    if scope_mask_bits & registry::EDGE_HOST_SCOPE_MASK_TRANSPORT != 0 {
         scopes.push(registry::EdgeHostScope::Transport);
     }
-    if scope_mask_bits & (1 << 5) != 0 {
+    #[cfg(feature = "mqtt")]
+    if scope_mask_bits & registry::EDGE_HOST_SCOPE_MASK_MQTT != 0 {
+        scopes.push(registry::EdgeHostScope::Mqtt);
+    }
+    if scope_mask_bits & registry::EDGE_HOST_SCOPE_MASK_WEBSOCKET != 0 {
         scopes.push(registry::EdgeHostScope::WebSocket);
     }
     #[cfg(feature = "webrtc")]
-    if scope_mask_bits & (1 << 6) != 0 {
+    if scope_mask_bits & registry::EDGE_HOST_SCOPE_MASK_WEBRTC != 0 {
         scopes.push(registry::EdgeHostScope::WebRtc);
     }
-    if scope_mask_bits & (1 << 7) != 0 {
+    if scope_mask_bits & registry::EDGE_HOST_SCOPE_MASK_PROXY != 0 {
         scopes.push(registry::EdgeHostScope::Proxy);
     }
     #[cfg(feature = "console")]
-    if scope_mask_bits & (1 << 8) != 0 {
+    if scope_mask_bits & registry::EDGE_HOST_SCOPE_MASK_CONSOLE != 0 {
         scopes.push(registry::EdgeHostScope::Console);
     }
     scopes
@@ -683,6 +710,8 @@ fn http_plane_scopes() -> &'static [registry::EdgeHostScope] {
         registry::EdgeHostScope::HttpExtension,
         registry::EdgeHostScope::Io,
         registry::EdgeHostScope::Transport,
+        #[cfg(feature = "mqtt")]
+        registry::EdgeHostScope::Mqtt,
         registry::EdgeHostScope::WebSocket,
         #[cfg(feature = "webrtc")]
         registry::EdgeHostScope::WebRtc,
@@ -748,6 +777,16 @@ pub fn register_http_host_module(
     _async_ops: SharedVmAsyncOps,
 ) -> Result<(), VmError> {
     registry::bind_host_scopes(vm, &[registry::EdgeHostScope::Http])
+}
+
+#[cfg(feature = "mqtt")]
+#[allow(dead_code)]
+pub fn register_mqtt_host_module(
+    vm: &mut Vm,
+    _context: SharedProxyVmContext,
+    _async_ops: SharedVmAsyncOps,
+) -> Result<(), VmError> {
+    registry::bind_host_scopes(vm, &[registry::EdgeHostScope::Mqtt])
 }
 
 fn schedule_future_call<F>(async_ops: &SharedVmAsyncOps, future: F) -> Result<CallOutcome, VmError>
