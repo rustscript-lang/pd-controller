@@ -336,7 +336,8 @@ pub(super) fn emit_inline_or_helper_step(
     pointer_type: cranelift_codegen::ir::Type,
     layout: NativeStackLayout,
     offsets: ResolvedOffsets,
-    sconcat_helper_addr: usize,
+    typed_step_ref: FuncRef,
+    typed_step_helper_addr: usize,
     root_ip: usize,
     step_ip: usize,
     step: &TraceStep,
@@ -545,22 +546,171 @@ pub(super) fn emit_inline_or_helper_step(
             )?;
             Ok(true)
         }
-        TraceStep::SConcat => {
-            emit_inline_sconcat(
+        TraceStep::Concat(TraceConcatKind::String) => {
+            emit_typed_string_bytes_step(
                 b,
                 vm_ptr,
-                helper_ref,
-                vm_status_helper_ref,
+                typed_step_ref,
                 exit_block,
                 pointer_type,
-                layout,
                 offsets,
-                sconcat_helper_addr,
-                root_ip,
+                typed_step_helper_addr,
+                OP_TRACE_CONCAT_STRING,
                 step_ip,
             )?;
             Ok(true)
         }
+        TraceStep::Concat(TraceConcatKind::Bytes) => {
+            emit_typed_string_bytes_step(
+                b,
+                vm_ptr,
+                typed_step_ref,
+                exit_block,
+                pointer_type,
+                offsets,
+                typed_step_helper_addr,
+                OP_TRACE_CONCAT_BYTES,
+                step_ip,
+            )?;
+            Ok(true)
+        }
+        TraceStep::Len(TraceTextBytesKind::String) => {
+            emit_typed_string_bytes_step(
+                b,
+                vm_ptr,
+                typed_step_ref,
+                exit_block,
+                pointer_type,
+                offsets,
+                typed_step_helper_addr,
+                OP_TRACE_LEN_STRING,
+                step_ip,
+            )?;
+            Ok(true)
+        }
+        TraceStep::Len(TraceTextBytesKind::Bytes) => {
+            emit_typed_string_bytes_step(
+                b,
+                vm_ptr,
+                typed_step_ref,
+                exit_block,
+                pointer_type,
+                offsets,
+                typed_step_helper_addr,
+                OP_TRACE_LEN_BYTES,
+                step_ip,
+            )?;
+            Ok(true)
+        }
+        TraceStep::Slice(TraceTextBytesKind::String) => {
+            emit_typed_string_bytes_step(
+                b,
+                vm_ptr,
+                typed_step_ref,
+                exit_block,
+                pointer_type,
+                offsets,
+                typed_step_helper_addr,
+                OP_TRACE_SLICE_STRING,
+                step_ip,
+            )?;
+            Ok(true)
+        }
+        TraceStep::Slice(TraceTextBytesKind::Bytes) => {
+            emit_typed_string_bytes_step(
+                b,
+                vm_ptr,
+                typed_step_ref,
+                exit_block,
+                pointer_type,
+                offsets,
+                typed_step_helper_addr,
+                OP_TRACE_SLICE_BYTES,
+                step_ip,
+            )?;
+            Ok(true)
+        }
+        TraceStep::Get(TraceTextBytesKind::String) => {
+            emit_typed_string_bytes_step(
+                b,
+                vm_ptr,
+                typed_step_ref,
+                exit_block,
+                pointer_type,
+                offsets,
+                typed_step_helper_addr,
+                OP_TRACE_GET_STRING,
+                step_ip,
+            )?;
+            Ok(true)
+        }
+        TraceStep::Get(TraceTextBytesKind::Bytes) => {
+            emit_typed_string_bytes_step(
+                b,
+                vm_ptr,
+                typed_step_ref,
+                exit_block,
+                pointer_type,
+                offsets,
+                typed_step_helper_addr,
+                OP_TRACE_GET_BYTES,
+                step_ip,
+            )?;
+            Ok(true)
+        }
+        TraceStep::HasBytes => {
+            emit_typed_string_bytes_step(
+                b,
+                vm_ptr,
+                typed_step_ref,
+                exit_block,
+                pointer_type,
+                offsets,
+                typed_step_helper_addr,
+                OP_TRACE_HAS_BYTES,
+                step_ip,
+            )?;
+            Ok(true)
+        }
+        TraceStep::BytesCodec(TraceBytesCodecKind::FromArrayU8) => {
+            emit_typed_string_bytes_step(
+                b,
+                vm_ptr,
+                typed_step_ref,
+                exit_block,
+                pointer_type,
+                offsets,
+                typed_step_helper_addr,
+                OP_TRACE_BYTES_FROM_ARRAY_U8,
+                step_ip,
+            )?;
+            Ok(true)
+        }
+        TraceStep::BytesCodec(TraceBytesCodecKind::ToArrayU8) => {
+            emit_typed_string_bytes_step(
+                b,
+                vm_ptr,
+                typed_step_ref,
+                exit_block,
+                pointer_type,
+                offsets,
+                typed_step_helper_addr,
+                OP_TRACE_BYTES_TO_ARRAY_U8,
+                step_ip,
+            )?;
+            Ok(true)
+        }
+        TraceStep::BytesCodec(
+            TraceBytesCodecKind::FromUtf8
+            | TraceBytesCodecKind::ToUtf8
+            | TraceBytesCodecKind::ToUtf8Lossy
+            | TraceBytesCodecKind::FromHex
+            | TraceBytesCodecKind::ToHex
+            | TraceBytesCodecKind::FromBase64
+            | TraceBytesCodecKind::ToBase64,
+        ) => Err(VmError::JitNative(
+            "utf8/hex/base64 bytes codecs should stay on the builtin-call path".to_string(),
+        )),
         TraceStep::Sub | TraceStep::ISub => {
             emit_inline_int_binop(
                 b,
@@ -1930,32 +2080,40 @@ fn emit_inline_local_numeric_imm_op(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn emit_inline_sconcat(
+fn emit_typed_string_bytes_step(
     b: &mut FunctionBuilder,
     vm_ptr: cranelift_codegen::ir::Value,
-    helper_ref: FuncRef,
-    vm_status_helper_ref: FuncRef,
+    typed_step_ref: FuncRef,
     exit_block: Block,
     pointer_type: cranelift_codegen::ir::Type,
-    layout: NativeStackLayout,
     offsets: ResolvedOffsets,
     helper_addr: usize,
-    root_ip: usize,
+    op: i64,
     step_ip: usize,
 ) -> VmResult<()> {
-    let _ = (helper_addr, root_ip);
-    emit_shared_inline_trace_step(
-        b,
-        vm_ptr,
-        helper_ref,
-        vm_status_helper_ref,
-        exit_block,
-        pointer_type,
-        layout,
-        offsets,
-        step_ip,
-        SharedNativeInlineStep::SConcat,
-    )
+    let next = b.create_block();
+    let step_ip = i64::try_from(step_ip)
+        .map_err(|_| VmError::JitNative("step ip out of range for i64".to_string()))?;
+    let step_ip_val = b.ins().iconst(pointer_type, step_ip);
+    b.ins()
+        .store(MemFlags::new(), step_ip_val, vm_ptr, offsets.vm_ip);
+
+    let helper_addr = i64::try_from(helper_addr)
+        .map_err(|_| VmError::JitNative("typed step helper address out of range".to_string()))?;
+    let helper_ptr = b.ins().iconst(pointer_type, helper_addr);
+    let op_val = b.ins().iconst(types::I64, op);
+    let call = b
+        .ins()
+        .call_indirect(typed_step_ref, helper_ptr, &[vm_ptr, op_val]);
+    let status = b.inst_results(call)[0];
+    let is_continue = b
+        .ins()
+        .icmp_imm(IntCC::Equal, status, STATUS_CONTINUE as i64);
+    let else_args = [BlockArg::Value(status)];
+    b.ins().brif(is_continue, next, &[], exit_block, &else_args);
+
+    b.switch_to_block(next);
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2710,8 +2868,16 @@ fn step_to_call(step: &TraceStep, root_ip: usize) -> VmResult<(i64, i64, i64, i6
                 "fused immediate trace step must inline natively".to_string(),
             ));
         }
-        TraceStep::Add | TraceStep::IAdd | TraceStep::FAdd | TraceStep::SConcat => {
-            (OP_ADD, 0, 0, 0)
+        TraceStep::Add | TraceStep::IAdd | TraceStep::FAdd => (OP_ADD, 0, 0, 0),
+        TraceStep::Concat(_)
+        | TraceStep::Len(_)
+        | TraceStep::Slice(_)
+        | TraceStep::Get(_)
+        | TraceStep::HasBytes
+        | TraceStep::BytesCodec(_) => {
+            return Err(VmError::JitNative(
+                "typed string/bytes trace step must lower natively".to_string(),
+            ));
         }
         TraceStep::Sub | TraceStep::ISub | TraceStep::FSub => (OP_SUB, 0, 0, 0),
         TraceStep::Mul | TraceStep::IMul | TraceStep::FMul => (OP_MUL, 0, 0, 0),

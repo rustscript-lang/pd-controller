@@ -72,6 +72,31 @@ impl JitNyiReason {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum TraceConcatKind {
+    String,
+    Bytes,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum TraceTextBytesKind {
+    String,
+    Bytes,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum TraceBytesCodecKind {
+    FromUtf8,
+    ToUtf8,
+    ToUtf8Lossy,
+    FromHex,
+    ToHex,
+    FromBase64,
+    ToBase64,
+    FromArrayU8,
+    ToArrayU8,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum TraceStep {
     Nop,
     Ldc(u32),
@@ -88,7 +113,12 @@ pub enum TraceStep {
         local: u8,
         imm_bits: u64,
     },
-    SConcat,
+    Concat(TraceConcatKind),
+    Len(TraceTextBytesKind),
+    Slice(TraceTextBytesKind),
+    Get(TraceTextBytesKind),
+    HasBytes,
+    BytesCodec(TraceBytesCodecKind),
     Sub,
     ISub,
     ISubImm(i64),
@@ -667,15 +697,20 @@ impl TraceJitEngine {
                     read_u16(code, &mut ip).ok_or(JitNyiReason::InvalidImmediate("call index"))?;
                 let argc =
                     read_u8(code, &mut ip).ok_or(JitNyiReason::InvalidImmediate("call argc"))?;
-                if let Some(builtin) = BuiltinFunction::from_call_index(index)
-                    && builtin.accepts_arity(argc)
-                {
+                if let Some(builtin) = BuiltinFunction::from_call_index(index) {
+                    if !builtin.accepts_arity(argc) {
+                        return Err(JitNyiReason::InvalidImmediate("builtin call arity"));
+                    }
                     step_ips.push(instr_ip);
-                    steps.push(TraceStep::BuiltinCall {
-                        index,
-                        argc,
-                        call_ip,
-                    });
+                    steps.push(
+                        typed_builtin_trace_step(program, call_ip, builtin).unwrap_or(
+                            TraceStep::BuiltinCall {
+                                index,
+                                argc,
+                                call_ip,
+                            },
+                        ),
+                    );
                 } else {
                     step_ips.push(instr_ip);
                     steps.push(TraceStep::Call {
@@ -1102,7 +1137,12 @@ fn typed_trace_step(program: &Program, ip: usize, opcode: u8) -> TraceStep {
     match (opcode, operand_types) {
         (x, (ValueType::Int, ValueType::Int)) if x == OpCode::Add as u8 => TraceStep::IAdd,
         (x, (ValueType::Float, ValueType::Float)) if x == OpCode::Add as u8 => TraceStep::FAdd,
-        (x, (ValueType::String, ValueType::String)) if x == OpCode::Add as u8 => TraceStep::SConcat,
+        (x, (ValueType::String, ValueType::String)) if x == OpCode::Add as u8 => {
+            TraceStep::Concat(TraceConcatKind::String)
+        }
+        (x, (ValueType::Bytes, ValueType::Bytes)) if x == OpCode::Add as u8 => {
+            TraceStep::Concat(TraceConcatKind::Bytes)
+        }
         (x, (ValueType::Int, ValueType::Int)) if x == OpCode::Sub as u8 => TraceStep::ISub,
         (x, (ValueType::Float, ValueType::Float)) if x == OpCode::Sub as u8 => TraceStep::FSub,
         (x, (ValueType::Int, ValueType::Int)) if x == OpCode::Mul as u8 => TraceStep::IMul,
@@ -1129,6 +1169,55 @@ fn typed_trace_step(program: &Program, ip: usize, opcode: u8) -> TraceStep {
     }
 }
 
+fn builtin_operand_types(program: &Program, call_ip: usize) -> (ValueType, ValueType) {
+    program
+        .type_map
+        .as_ref()
+        .and_then(|type_map| type_map.operand_types.get(&call_ip))
+        .copied()
+        .unwrap_or((ValueType::Unknown, ValueType::Unknown))
+}
+
+fn typed_builtin_trace_step(
+    program: &Program,
+    call_ip: usize,
+    builtin: BuiltinFunction,
+) -> Option<TraceStep> {
+    let (lhs, rhs) = builtin_operand_types(program, call_ip);
+    match builtin {
+        BuiltinFunction::Len => match lhs {
+            ValueType::String => Some(TraceStep::Len(TraceTextBytesKind::String)),
+            ValueType::Bytes => Some(TraceStep::Len(TraceTextBytesKind::Bytes)),
+            _ => None,
+        },
+        BuiltinFunction::Slice => match lhs {
+            ValueType::String => Some(TraceStep::Slice(TraceTextBytesKind::String)),
+            ValueType::Bytes => Some(TraceStep::Slice(TraceTextBytesKind::Bytes)),
+            _ => None,
+        },
+        BuiltinFunction::Concat => match (lhs, rhs) {
+            (ValueType::String, ValueType::String) => {
+                Some(TraceStep::Concat(TraceConcatKind::String))
+            }
+            (ValueType::Bytes, ValueType::Bytes) => Some(TraceStep::Concat(TraceConcatKind::Bytes)),
+            _ => None,
+        },
+        BuiltinFunction::Get => match lhs {
+            ValueType::String => Some(TraceStep::Get(TraceTextBytesKind::String)),
+            ValueType::Bytes => Some(TraceStep::Get(TraceTextBytesKind::Bytes)),
+            _ => None,
+        },
+        BuiltinFunction::Has if lhs == ValueType::Bytes => Some(TraceStep::HasBytes),
+        BuiltinFunction::BytesFromArrayU8 if lhs == ValueType::Array => {
+            Some(TraceStep::BytesCodec(TraceBytesCodecKind::FromArrayU8))
+        }
+        BuiltinFunction::BytesToArrayU8 if lhs == ValueType::Bytes => {
+            Some(TraceStep::BytesCodec(TraceBytesCodecKind::ToArrayU8))
+        }
+        _ => None,
+    }
+}
+
 fn trace_step_name(step: &TraceStep) -> &'static str {
     match step {
         TraceStep::Nop => "nop",
@@ -1140,7 +1229,24 @@ fn trace_step_name(step: &TraceStep) -> &'static str {
         TraceStep::FAdd => "add",
         TraceStep::FAddImm(_) => "fadd_imm",
         TraceStep::FLocalAddImm { .. } => "ldloc_fadd_imm",
-        TraceStep::SConcat => "add",
+        TraceStep::Concat(TraceConcatKind::String) => "concat_string",
+        TraceStep::Concat(TraceConcatKind::Bytes) => "concat_bytes",
+        TraceStep::Len(TraceTextBytesKind::String) => "len_string",
+        TraceStep::Len(TraceTextBytesKind::Bytes) => "len_bytes",
+        TraceStep::Slice(TraceTextBytesKind::String) => "slice_string",
+        TraceStep::Slice(TraceTextBytesKind::Bytes) => "slice_bytes",
+        TraceStep::Get(TraceTextBytesKind::String) => "get_string",
+        TraceStep::Get(TraceTextBytesKind::Bytes) => "get_bytes",
+        TraceStep::HasBytes => "has_bytes",
+        TraceStep::BytesCodec(TraceBytesCodecKind::FromUtf8) => "bytes_from_utf8",
+        TraceStep::BytesCodec(TraceBytesCodecKind::ToUtf8) => "bytes_to_utf8",
+        TraceStep::BytesCodec(TraceBytesCodecKind::ToUtf8Lossy) => "bytes_to_utf8_lossy",
+        TraceStep::BytesCodec(TraceBytesCodecKind::FromHex) => "bytes_from_hex",
+        TraceStep::BytesCodec(TraceBytesCodecKind::ToHex) => "bytes_to_hex",
+        TraceStep::BytesCodec(TraceBytesCodecKind::FromBase64) => "bytes_from_base64",
+        TraceStep::BytesCodec(TraceBytesCodecKind::ToBase64) => "bytes_to_base64",
+        TraceStep::BytesCodec(TraceBytesCodecKind::FromArrayU8) => "bytes_from_array_u8",
+        TraceStep::BytesCodec(TraceBytesCodecKind::ToArrayU8) => "bytes_to_array_u8",
         TraceStep::Sub => "sub",
         TraceStep::ISub => "sub",
         TraceStep::ISubImm(_) => "sub_imm",

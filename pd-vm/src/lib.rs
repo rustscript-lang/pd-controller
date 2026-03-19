@@ -10,7 +10,7 @@ pub mod debugger;
 pub mod jit {
     pub use crate::vm::jit::{
         JitAttempt, JitConfig, JitNyiDoc, JitNyiReason, JitSnapshot, JitTrace, JitTraceTerminal,
-        TraceJitEngine, TraceStep,
+        TraceBytesCodecKind, TraceConcatKind, TraceJitEngine, TraceStep, TraceTextBytesKind,
     };
 }
 #[cfg(feature = "runtime")]

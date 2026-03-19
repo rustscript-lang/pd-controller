@@ -36,6 +36,17 @@ pub(crate) const OP_JUMP: i64 = 23;
 pub(crate) const OP_BUILTIN_CALL: i64 = 24;
 pub(crate) const OP_GUARD_TRUE: i64 = 25;
 pub(crate) const OP_LOOP_IF_FALSE: i64 = 26;
+pub(crate) const OP_TRACE_CONCAT_STRING: i64 = 101;
+pub(crate) const OP_TRACE_CONCAT_BYTES: i64 = 102;
+pub(crate) const OP_TRACE_LEN_STRING: i64 = 103;
+pub(crate) const OP_TRACE_LEN_BYTES: i64 = 104;
+pub(crate) const OP_TRACE_SLICE_STRING: i64 = 105;
+pub(crate) const OP_TRACE_SLICE_BYTES: i64 = 106;
+pub(crate) const OP_TRACE_GET_STRING: i64 = 107;
+pub(crate) const OP_TRACE_GET_BYTES: i64 = 108;
+pub(crate) const OP_TRACE_HAS_BYTES: i64 = 109;
+pub(crate) const OP_TRACE_BYTES_FROM_ARRAY_U8: i64 = 110;
+pub(crate) const OP_TRACE_BYTES_TO_ARRAY_U8: i64 = 111;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum NativeInterruptMode {
@@ -154,6 +165,10 @@ pub(crate) fn string_concat_helper_entry_address() -> usize {
     pd_vm_native_sconcat as *const () as usize
 }
 
+pub(crate) fn typed_step_helper_entry_address() -> usize {
+    pd_vm_native_typed_step as *const () as usize
+}
+
 pub(crate) fn helper_entry_offset() -> i32 {
     i32::try_from(std::mem::offset_of!(Vm, native_helper_fn))
         .expect("Vm::native_helper_fn offset must fit i32")
@@ -187,6 +202,58 @@ pub(crate) extern "C" fn pd_vm_native_sconcat(vm: *mut Vm) -> i32 {
         vm.record_native_bridge_hit("sconcat");
         vm.string_concat_op()?;
         Ok(STATUS_CONTINUE)
+    })
+}
+
+pub(crate) extern "C" fn pd_vm_native_typed_step(vm: *mut Vm, op: i64) -> i32 {
+    run_step(vm, "typed_step", |vm| match op {
+        OP_TRACE_CONCAT_STRING => {
+            vm.string_concat_op()?;
+            Ok(STATUS_CONTINUE)
+        }
+        OP_TRACE_CONCAT_BYTES => {
+            vm.bytes_concat_op()?;
+            Ok(STATUS_CONTINUE)
+        }
+        OP_TRACE_LEN_STRING => {
+            vm.string_len_op()?;
+            Ok(STATUS_CONTINUE)
+        }
+        OP_TRACE_LEN_BYTES => {
+            vm.bytes_len_op()?;
+            Ok(STATUS_CONTINUE)
+        }
+        OP_TRACE_SLICE_STRING => {
+            vm.string_slice_op()?;
+            Ok(STATUS_CONTINUE)
+        }
+        OP_TRACE_SLICE_BYTES => {
+            vm.bytes_slice_op()?;
+            Ok(STATUS_CONTINUE)
+        }
+        OP_TRACE_GET_STRING => {
+            vm.string_get_op()?;
+            Ok(STATUS_CONTINUE)
+        }
+        OP_TRACE_GET_BYTES => {
+            vm.bytes_get_op()?;
+            Ok(STATUS_CONTINUE)
+        }
+        OP_TRACE_HAS_BYTES => {
+            vm.bytes_has_op()?;
+            Ok(STATUS_CONTINUE)
+        }
+        OP_TRACE_BYTES_FROM_ARRAY_U8 => {
+            vm.bytes_from_array_u8_op()?;
+            Ok(STATUS_CONTINUE)
+        }
+        OP_TRACE_BYTES_TO_ARRAY_U8 => {
+            vm.bytes_to_array_u8_op()?;
+            Ok(STATUS_CONTINUE)
+        }
+        _ => Err(VmError::JitNative(format!(
+            "native typed step helper received unsupported op id {op}"
+        ))),
     })
 }
 

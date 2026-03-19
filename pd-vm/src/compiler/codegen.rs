@@ -1365,6 +1365,7 @@ impl Compiler {
         let argc = u8::try_from(args.len()).map_err(|_| CompileError::CallArityOverflow)?;
         if let Some(builtin) = BuiltinFunction::from_call_index(index) {
             debug_assert!(builtin.accepts_arity(argc));
+            self.record_builtin_call_operand_types(args);
             self.assembler.call(index, argc);
             return Ok(());
         }
@@ -1582,6 +1583,23 @@ impl Compiler {
             self.assembler.position() as usize,
             (operand, ValueType::Unknown),
         );
+    }
+
+    fn record_builtin_call_operand_types(&mut self, args: &[Expr]) {
+        if args.is_empty() {
+            return;
+        }
+        let lhs = self.value_type_of_expr(&args[0]);
+        let rhs = args
+            .get(1)
+            .map(|expr| self.value_type_of_expr(expr))
+            .unwrap_or(ValueType::Unknown);
+        if lhs == ValueType::Unknown && rhs == ValueType::Unknown {
+            return;
+        }
+        self.type_map
+            .operand_types
+            .insert(self.assembler.position() as usize, (lhs, rhs));
     }
 
     fn fresh_label(&mut self, prefix: &str) -> String {

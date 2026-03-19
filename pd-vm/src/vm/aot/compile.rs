@@ -10,16 +10,16 @@ use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::vm::native::ExecutableBuffer;
-use crate::vm::{OpCode, Program, Vm, VmError, VmResult};
 #[cfg(feature = "cranelift-jit")]
 use crate::vm::native::{
-    InlineEmitCtx, NativeInlineStep, OP_GUARD_FALSE, STATUS_CONTINUE, STATUS_ERROR,
+    InlineEmitCtx, NativeInlineStep, OP_ADD, OP_AND, OP_BUILTIN_CALL, OP_CALL, OP_CEQ, OP_CGT,
+    OP_CLT, OP_DIV, OP_DUP, OP_GUARD_FALSE, OP_JUMP, OP_LDC, OP_LDLOC, OP_LSHR, OP_MOD, OP_MUL,
+    OP_NEG, OP_NOT, OP_OR, OP_POP, OP_SHL, OP_SHR, OP_STLOC, OP_SUB, STATUS_CONTINUE, STATUS_ERROR,
     STATUS_TRACE_EXIT, detect_native_stack_layout, emit_native_inline_step, entry_signature,
     helper_entry_offset, helper_signature, interrupt_helper_entry_offset, jump_with_status,
-    resolve_offsets, OP_ADD, OP_AND, OP_BUILTIN_CALL, OP_CALL, OP_CEQ, OP_CGT, OP_CLT, OP_DIV,
-    OP_DUP, OP_JUMP, OP_LDC, OP_LDLOC, OP_LSHR, OP_MOD, OP_MUL, OP_NEG, OP_NOT, OP_OR, OP_POP,
-    OP_SHL, OP_SHR, OP_STLOC, OP_SUB,
+    resolve_offsets,
 };
+use crate::vm::{OpCode, Program, Vm, VmError, VmResult};
 #[cfg(feature = "cranelift-jit")]
 use cranelift_codegen::ir::condcodes::IntCC;
 #[cfg(feature = "cranelift-jit")]
@@ -36,11 +36,11 @@ use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::{Linkage, Module};
 
 use super::cfg::AotBlockTerminal;
-use super::ir::{AotInstruction, AotIrBlock, AotLowerError, AotProgram};
 #[cfg(feature = "cranelift-jit")]
 use super::ir::AotCallDispatch;
 #[cfg(any(feature = "cranelift-jit", test))]
 use super::ir::lower_program;
+use super::ir::{AotInstruction, AotIrBlock, AotLowerError, AotProgram};
 
 #[cfg(any(
     all(

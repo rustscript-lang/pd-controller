@@ -1,4 +1,4 @@
-use vm::jit::TraceStep;
+use vm::jit::{TraceBytesCodecKind, TraceConcatKind, TraceStep, TraceTextBytesKind};
 use vm::{
     BytecodeBuilder, CallOutcome, HostFunction, JitConfig, JitTraceTerminal, OpCode, Program,
     Value, Vm, VmStatus, VmYieldReason, compile_source, disassemble_program,
@@ -1198,9 +1198,115 @@ fn trace_jit_records_typed_float_and_string_add_steps() {
             .traces
             .iter()
             .flat_map(|trace| trace.steps.iter())
-            .any(|step| matches!(step, TraceStep::SConcat)),
+            .any(|step| { matches!(step, TraceStep::Concat(TraceConcatKind::String)) }),
         "expected a typed string concat trace step, dump:\n{}",
         string_vm.dump_jit_info()
+    );
+}
+
+#[test]
+fn trace_jit_records_typed_bytes_concat_and_builtin_steps() {
+    if !native_jit_supported() {
+        return;
+    }
+
+    let source = r#"
+        use bytes;
+        let mut i = 0;
+        let mut payload = bytes::from_hex("");
+        let mut amount = 0;
+        let mut part = bytes::from_hex("");
+        let mut byte = 0;
+        let mut present = false;
+        while i < 4 {
+            payload = payload + bytes::from_hex("ab");
+            amount = payload.length;
+            let view = payload.copy();
+            byte = (&view)[0].copy();
+            present = payload.has(2);
+            part = view[1:3];
+            i = i + 1;
+        }
+        payload;
+        amount;
+        part;
+        byte;
+        present;
+    "#;
+
+    let compiled = compile_source(source).expect("bytes trace compile should succeed");
+    let mut vm = Vm::new(compiled.program);
+    vm.set_jit_config(JitConfig {
+        enabled: true,
+        hot_loop_threshold: 1,
+        max_trace_len: 512,
+    });
+
+    let status = vm.run().expect("bytes trace vm should run");
+    assert_eq!(status, VmStatus::Halted);
+    assert_eq!(
+        vm.stack(),
+        &[
+            Value::bytes(vec![0xAB, 0xAB, 0xAB, 0xAB]),
+            Value::Int(4),
+            Value::bytes(vec![0xAB, 0xAB]),
+            Value::Int(0xAB),
+            Value::Bool(true),
+        ]
+    );
+
+    let snapshot = vm.jit_snapshot();
+    let steps = snapshot
+        .traces
+        .iter()
+        .flat_map(|trace| trace.steps.iter())
+        .collect::<Vec<_>>();
+    assert!(
+        steps
+            .iter()
+            .any(|step| matches!(step, TraceStep::Concat(TraceConcatKind::Bytes))),
+        "expected typed bytes concat trace step, dump:\n{}",
+        vm.dump_jit_info()
+    );
+    assert!(
+        steps
+            .iter()
+            .any(|step| matches!(step, TraceStep::Len(TraceTextBytesKind::Bytes))),
+        "expected typed bytes len trace step, dump:\n{}",
+        vm.dump_jit_info()
+    );
+    assert!(
+        steps
+            .iter()
+            .any(|step| matches!(step, TraceStep::Slice(TraceTextBytesKind::Bytes))),
+        "expected typed bytes slice trace step, dump:\n{}",
+        vm.dump_jit_info()
+    );
+    assert!(
+        steps
+            .iter()
+            .any(|step| matches!(step, TraceStep::Get(TraceTextBytesKind::Bytes))),
+        "expected typed bytes get trace step, dump:\n{}",
+        vm.dump_jit_info()
+    );
+    assert!(
+        steps.iter().any(|step| matches!(step, TraceStep::HasBytes)),
+        "expected typed bytes has trace step, dump:\n{}",
+        vm.dump_jit_info()
+    );
+    assert!(
+        steps
+            .iter()
+            .any(|step| matches!(step, TraceStep::BuiltinCall { .. })),
+        "expected bytes::from_hex to stay on the BuiltinCall path, dump:\n{}",
+        vm.dump_jit_info()
+    );
+    assert!(
+        !steps
+            .iter()
+            .any(|step| matches!(step, TraceStep::BytesCodec(TraceBytesCodecKind::FromHex))),
+        "expected bytes::from_hex to avoid typed bytes codec lowering, dump:\n{}",
+        vm.dump_jit_info()
     );
 }
 
@@ -1410,7 +1516,7 @@ fn trace_jit_executes_typed_string_concat_without_generic_add_bridge() {
             .traces
             .iter()
             .flat_map(|trace| trace.steps.iter())
-            .any(|step| matches!(step, TraceStep::SConcat)),
+            .any(|step| matches!(step, TraceStep::Concat(TraceConcatKind::String))),
         "expected typed string concat trace step, dump:\n{}",
         vm.dump_jit_info()
     );
@@ -1424,12 +1530,311 @@ fn trace_jit_executes_typed_string_concat_without_generic_add_bridge() {
         vm.dump_jit_info()
     );
     assert!(
-        bridge_hits
+        !bridge_hits
             .iter()
             .any(|(name, count)| *name == "sconcat" && *count > 0),
-        "expected dedicated sconcat helper to run, bridge hits: {bridge_hits:?}\n{}",
+        "expected string concat to avoid sconcat helper bridge, bridge hits: {bridge_hits:?}\n{}",
         vm.dump_jit_info()
     );
+}
+
+#[test]
+fn trace_jit_executes_typed_bytes_concat_without_helper_bridge() {
+    if !native_jit_supported() {
+        return;
+    }
+
+    let source = r#"
+        use bytes;
+        let mut i = 0;
+        let mut payload = bytes::from_hex("");
+        while i < 5 {
+            payload = payload + bytes::from_hex("00ff");
+            i = i + 1;
+        }
+        payload;
+    "#;
+
+    let compiled = compile_source(source).expect("bytes concat compile should succeed");
+    let mut vm = Vm::new(compiled.program);
+    vm.set_jit_config(JitConfig {
+        enabled: true,
+        hot_loop_threshold: 1,
+        max_trace_len: 512,
+    });
+    vm.set_jit_native_bridge_stats_enabled(true);
+
+    let status = vm.run().expect("bytes concat vm should run");
+    assert_eq!(status, VmStatus::Halted);
+    assert_eq!(
+        vm.stack(),
+        &[Value::bytes(vec![
+            0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF
+        ])]
+    );
+    assert!(
+        vm.jit_native_exec_count() > 0,
+        "expected native execution, dump:\n{}",
+        vm.dump_jit_info()
+    );
+
+    let bridge_hits = vm.jit_native_bridge_stats_snapshot();
+    assert!(
+        !bridge_hits
+            .iter()
+            .any(|(name, count)| *name == "add" && *count > 0),
+        "expected bytes concat to avoid generic add bridge, bridge hits: {bridge_hits:?}\n{}",
+        vm.dump_jit_info()
+    );
+    assert!(
+        !bridge_hits
+            .iter()
+            .any(|(name, count)| name.contains("concat") && *count > 0),
+        "expected bytes concat to avoid concat helper bridges, bridge hits: {bridge_hits:?}\n{}",
+        vm.dump_jit_info()
+    );
+}
+
+#[test]
+fn trace_jit_executes_typed_bytes_sequence_builtins_without_builtin_bridge() {
+    if !native_jit_supported() {
+        return;
+    }
+
+    let source = r#"
+        use bytes;
+        let mut i = 0;
+        let mut total = 0;
+        let mut part = bytes::from_hex("");
+        let mut byte = 0;
+        let mut present = false;
+        while i < 4 {
+            let payload = bytes::from_hex("00ff10");
+            total = payload.length;
+            byte = (&payload)[1].copy();
+            present = payload.has(2);
+            part = payload[1:3];
+            i = i + 1;
+        }
+        total;
+        part;
+        byte;
+        present;
+    "#;
+
+    let compiled = compile_source(source).expect("bytes builtin compile should succeed");
+    let mut vm = Vm::new(compiled.program);
+    vm.set_jit_config(JitConfig {
+        enabled: true,
+        hot_loop_threshold: 1,
+        max_trace_len: 512,
+    });
+    vm.set_jit_native_bridge_stats_enabled(true);
+
+    let status = vm.run().expect("bytes builtin vm should run");
+    assert_eq!(status, VmStatus::Halted);
+    assert_eq!(
+        vm.stack(),
+        &[
+            Value::Int(3),
+            Value::bytes(vec![0xFF, 0x10]),
+            Value::Int(255),
+            Value::Bool(true),
+        ]
+    );
+
+    let snapshot = vm.jit_snapshot();
+    let steps = snapshot
+        .traces
+        .iter()
+        .flat_map(|trace| trace.steps.iter())
+        .collect::<Vec<_>>();
+    assert!(
+        steps
+            .iter()
+            .any(|step| matches!(step, TraceStep::Len(TraceTextBytesKind::Bytes))),
+        "expected typed bytes len trace step, dump:\n{}",
+        vm.dump_jit_info()
+    );
+    assert!(
+        steps
+            .iter()
+            .any(|step| matches!(step, TraceStep::Slice(TraceTextBytesKind::Bytes))),
+        "expected typed bytes slice trace step, dump:\n{}",
+        vm.dump_jit_info()
+    );
+    assert!(
+        steps
+            .iter()
+            .any(|step| matches!(step, TraceStep::Get(TraceTextBytesKind::Bytes))),
+        "expected typed bytes get trace step, dump:\n{}",
+        vm.dump_jit_info()
+    );
+    assert!(
+        steps.iter().any(|step| matches!(step, TraceStep::HasBytes)),
+        "expected typed bytes has trace step, dump:\n{}",
+        vm.dump_jit_info()
+    );
+
+    let bridge_hits = vm.jit_native_bridge_stats_snapshot();
+    for bridge_name in ["len", "slice", "get", "has"] {
+        assert!(
+            !bridge_hits
+                .iter()
+                .any(|(name, count)| *name == bridge_name && *count > 0),
+            "expected bytes builtin '{bridge_name}' to avoid builtin helper bridge, bridge hits: {bridge_hits:?}\n{}",
+            vm.dump_jit_info()
+        );
+    }
+}
+
+#[test]
+fn trace_jit_executes_typed_string_sequence_builtins_without_builtin_bridge() {
+    if !native_jit_supported() {
+        return;
+    }
+
+    let source = r#"
+        let mut i = 0;
+        let mut total = 0;
+        let mut part = "";
+        let mut ch = "";
+        while i < 4 {
+            let text = "a界🙂";
+            total = text.length;
+            ch = (&text)[1].copy();
+            part = text[1:3];
+            i = i + 1;
+        }
+        total;
+        part;
+        ch;
+    "#;
+
+    let compiled = compile_source(source).expect("string builtin compile should succeed");
+    let mut vm = Vm::new(compiled.program);
+    vm.set_jit_config(JitConfig {
+        enabled: true,
+        hot_loop_threshold: 1,
+        max_trace_len: 512,
+    });
+    vm.set_jit_native_bridge_stats_enabled(true);
+
+    let status = vm.run().expect("string builtin vm should run");
+    assert_eq!(status, VmStatus::Halted);
+    assert_eq!(
+        vm.stack(),
+        &[Value::Int(3), Value::string("界🙂"), Value::string("界"),]
+    );
+
+    let snapshot = vm.jit_snapshot();
+    let steps = snapshot
+        .traces
+        .iter()
+        .flat_map(|trace| trace.steps.iter())
+        .collect::<Vec<_>>();
+    assert!(
+        steps
+            .iter()
+            .any(|step| matches!(step, TraceStep::Len(TraceTextBytesKind::String))),
+        "expected typed string len trace step, dump:\n{}",
+        vm.dump_jit_info()
+    );
+    assert!(
+        steps
+            .iter()
+            .any(|step| matches!(step, TraceStep::Slice(TraceTextBytesKind::String))),
+        "expected typed string slice trace step, dump:\n{}",
+        vm.dump_jit_info()
+    );
+    assert!(
+        steps
+            .iter()
+            .any(|step| matches!(step, TraceStep::Get(TraceTextBytesKind::String))),
+        "expected typed string get trace step, dump:\n{}",
+        vm.dump_jit_info()
+    );
+
+    let bridge_hits = vm.jit_native_bridge_stats_snapshot();
+    for bridge_name in ["len", "slice", "get"] {
+        assert!(
+            !bridge_hits
+                .iter()
+                .any(|(name, count)| *name == bridge_name && *count > 0),
+            "expected string builtin '{bridge_name}' to avoid builtin helper bridge, bridge hits: {bridge_hits:?}\n{}",
+            vm.dump_jit_info()
+        );
+    }
+}
+
+#[test]
+fn trace_jit_executes_typed_bytes_array_codec_builtins_without_builtin_bridge() {
+    if !native_jit_supported() {
+        return;
+    }
+
+    let source = r#"
+        use bytes;
+        let mut i = 0;
+        let mut arr = [0];
+        let mut payload = bytes::from_array_u8([0]);
+        while i < 3 {
+            arr = bytes::to_array_u8(bytes::from_array_u8([1, 2, 255]));
+            payload = bytes::from_array_u8(arr);
+            i = i + 1;
+        }
+        arr;
+        payload;
+    "#;
+
+    let compiled = compile_source(source).expect("bytes array codec compile should succeed");
+    let mut vm = Vm::new(compiled.program);
+    vm.set_jit_config(JitConfig {
+        enabled: true,
+        hot_loop_threshold: 1,
+        max_trace_len: 512,
+    });
+    vm.set_jit_native_bridge_stats_enabled(true);
+
+    let status = vm.run().expect("bytes array codec vm should run");
+    assert_eq!(status, VmStatus::Halted);
+    assert_eq!(
+        vm.stack(),
+        &[
+            Value::array(vec![Value::Int(1), Value::Int(2), Value::Int(255)]),
+            Value::bytes(vec![1, 2, 255]),
+        ]
+    );
+
+    let snapshot = vm.jit_snapshot();
+    let steps = snapshot
+        .traces
+        .iter()
+        .flat_map(|trace| trace.steps.iter())
+        .collect::<Vec<_>>();
+    for kind in [
+        TraceBytesCodecKind::FromArrayU8,
+        TraceBytesCodecKind::ToArrayU8,
+    ] {
+        assert!(
+            steps
+                .iter()
+                .any(|step| matches!(step, TraceStep::BytesCodec(found) if *found == kind)),
+            "expected bytes codec step {kind:?}, dump:\n{}",
+            vm.dump_jit_info()
+        );
+    }
+
+    let bridge_hits = vm.jit_native_bridge_stats_snapshot();
+    for bridge_name in ["bytes_from_array_u8", "bytes_to_array_u8"] {
+        assert!(
+            !bridge_hits
+                .iter()
+                .any(|(name, count)| *name == bridge_name && *count > 0),
+            "expected bytes array codec '{bridge_name}' to avoid builtin helper bridge, bridge hits: {bridge_hits:?}\n{}",
+            vm.dump_jit_info()
+        );
+    }
 }
 
 #[test]

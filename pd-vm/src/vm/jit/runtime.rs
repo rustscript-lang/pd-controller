@@ -7,7 +7,9 @@ use super::super::{ExecOutcome, HostCallExecOutcome, Value, Vm, VmError, VmResul
     all(target_arch = "aarch64", any(target_os = "linux", target_os = "macos"))
 ))]
 use super::JitTrace;
-use super::{JitTraceTerminal, TraceStep, native};
+use super::{
+    JitTraceTerminal, TraceBytesCodecKind, TraceConcatKind, TraceStep, TraceTextBytesKind, native,
+};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 #[cfg(any(
@@ -319,9 +321,36 @@ impl Vm {
                     };
                     self.stack.push(crate::bytecode::Value::Float(*lhs + imm));
                 }
-                TraceStep::SConcat => {
-                    self.string_concat_op()?;
+                TraceStep::Concat(kind) => match kind {
+                    TraceConcatKind::String => self.string_concat_op()?,
+                    TraceConcatKind::Bytes => self.bytes_concat_op()?,
+                },
+                TraceStep::Len(kind) => match kind {
+                    TraceTextBytesKind::String => self.string_len_op()?,
+                    TraceTextBytesKind::Bytes => self.bytes_len_op()?,
+                },
+                TraceStep::Slice(kind) => match kind {
+                    TraceTextBytesKind::String => self.string_slice_op()?,
+                    TraceTextBytesKind::Bytes => self.bytes_slice_op()?,
+                },
+                TraceStep::Get(kind) => match kind {
+                    TraceTextBytesKind::String => self.string_get_op()?,
+                    TraceTextBytesKind::Bytes => self.bytes_get_op()?,
+                },
+                TraceStep::HasBytes => {
+                    self.bytes_has_op()?;
                 }
+                TraceStep::BytesCodec(kind) => match kind {
+                    TraceBytesCodecKind::FromUtf8 => self.bytes_from_utf8_op()?,
+                    TraceBytesCodecKind::ToUtf8 => self.bytes_to_utf8_op()?,
+                    TraceBytesCodecKind::ToUtf8Lossy => self.bytes_to_utf8_lossy_op()?,
+                    TraceBytesCodecKind::FromHex => self.bytes_from_hex_op()?,
+                    TraceBytesCodecKind::ToHex => self.bytes_to_hex_op()?,
+                    TraceBytesCodecKind::FromBase64 => self.bytes_from_base64_op()?,
+                    TraceBytesCodecKind::ToBase64 => self.bytes_to_base64_op()?,
+                    TraceBytesCodecKind::FromArrayU8 => self.bytes_from_array_u8_op()?,
+                    TraceBytesCodecKind::ToArrayU8 => self.bytes_to_array_u8_op()?,
+                },
                 TraceStep::Sub => {
                     self.binary_numeric_op(
                         |lhs, rhs| Ok(lhs.wrapping_sub(rhs)),
