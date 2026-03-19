@@ -263,8 +263,6 @@ fn proxy_roundtrip_program_source(
         .port_or_known_default()
         .expect("upstream origin should include port");
     let workload_source = selected_base_workload_source();
-    let use_specialized_default_forward = env_flag("PD_EDGE_PERF_USE_SPECIALIZED_DEFAULT_FORWARD");
-    let use_combined_default_forward = env_flag("PD_EDGE_PERF_USE_COMBINED_DEFAULT_FORWARD");
     let tls_import = if upstream_protocol.requires_tls() {
         "use tls;\n"
     } else {
@@ -302,12 +300,8 @@ tls::session::set_verify(session, false);
 ]"#
         .to_string(),
     };
-    let upstream_prelude =
-        if use_combined_default_forward && matches!(upstream_protocol, UpstreamProtocol::Http1) {
-            String::new()
-        } else {
-            format!(
-                r#"
+    let upstream_prelude = format!(
+        r#"
 let upstream = http::exchange::prepare_default_upstream(
     "{upstream_host}",
     {upstream_port},
@@ -316,49 +310,27 @@ let upstream = http::exchange::prepare_default_upstream(
 );
 {tls_prelude}
 "#
-            )
-        };
-    let response_header_program =
-        if use_combined_default_forward && matches!(upstream_protocol, UpstreamProtocol::Http1) {
-            format!(
-                r#"
-proxy::prepare_and_forward_default_upstream(
-    "{upstream_host}",
-    {upstream_port},
-    "{version_preference}",
-    {batched_upstream_headers},
-    {batched_response_headers}
-);
-"#
-            )
-        } else if use_specialized_default_forward
-            && matches!(upstream_protocol, UpstreamProtocol::Http1)
-        {
-            format!(
-                r#"
-proxy::forward_default_upstream({batched_response_headers});
-"#
-            )
-        } else if upstream_protocol.requires_tls() {
-            format!(
-                r#"
+    );
+    let response_header_program = if upstream_protocol.requires_tls() {
+        format!(
+            r#"
 let downstream = proxy::stream::downstream();
 let upstream_stream = proxy::stream::exchange(upstream);
-proxy::forward(downstream, upstream_stream);
+proxy::forward_native(downstream, upstream_stream);
 http::response::set_headers({batched_response_headers});
 http::response::set_header("x-upstream-alpn", tls::session::get_alpn(session));
 "#
-            )
-        } else {
-            format!(
-                r#"
+        )
+    } else {
+        format!(
+            r#"
 let downstream = proxy::stream::downstream();
 let upstream_stream = proxy::stream::exchange(upstream);
-proxy::forward(downstream, upstream_stream);
+proxy::forward_native(downstream, upstream_stream);
 http::response::set_headers({batched_response_headers});
 "#
-            )
-        };
+        )
+    };
     format!(
         r#"
 {workload_source}

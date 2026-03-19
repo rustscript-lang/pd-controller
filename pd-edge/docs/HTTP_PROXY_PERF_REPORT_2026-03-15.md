@@ -1,9 +1,9 @@
 # pd-edge Perf Report (2026-03-15)
 
-This report captures the `proxy::forward` experiment on Harness A.
+This report captures the proxy-forwarding experiment on Harness A.
 
-- The benchmark proxy program now uses the generic `proxy::forward(downstream, upstream_stream)` API instead of calling `http::exchange::send(upstream)` directly.
-- `proxy::forward` is a native-only fast path: it uses runtime handoff when available, while `proxy::bridge` remains the buffered fallback.
+- The benchmark proxy program in this run used the runtime proxy-forward host call instead of calling `http::exchange::send(upstream)` directly.
+- At the time of this March 15 run, the proxy-forward benchmark exercised the native-only handoff path rather than the buffered relay path.
 - This rerun only covers the Harness A standard comparison.
 - VM fuel remained disabled.
 - All HTTP/2 coverage uses TLS + ALPN only. No h2c was used.

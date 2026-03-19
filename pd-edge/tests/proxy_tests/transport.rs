@@ -804,7 +804,7 @@ async fn transport_connect_tunnel_upgrades_downstream_into_dynamic_tcp() {
         }} else {{
             let downstream = proxy::stream::downstream();
             let peer = proxy::stream::from_tcp(upstream);
-            let status = proxy::bridge(downstream, peer, 64);
+            let status = proxy::forward(downstream, peer, 64);
             http::response::set_header("x-proxy-status", status);
         }}
     "#,
@@ -1014,7 +1014,7 @@ async fn transport_connect_tunnel_upgrades_downstream_into_dynamic_tls_plaintext
             }} else {{
                 let downstream = proxy::stream::downstream();
                 let peer = proxy::stream::from_tls_plaintext(session);
-                let status = proxy::bridge(downstream, peer, 256);
+                let status = proxy::forward(downstream, peer, 256);
                 http::response::set_header("x-proxy-status", status);
                 http::response::set_header("x-tls-phase", tls::session::get_phase(session));
             }}

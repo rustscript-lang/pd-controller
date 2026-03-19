@@ -392,7 +392,7 @@ Current state:
   - outbound WebRTC peer connections and data channels are executable today
   - downstream WebRTC handle `0` is reserved but inactive in the current one-shot HTTP runtime
   - `wss://` currently uses the default verifier/client configuration only; custom TLS-session overrides are rejected for websocket connects until the manual websocket TLS connector reaches parity with the HTTP client path
-  - `proxy::pipe` and `proxy::bridge` remain byte-stream only; UDP datagrams and WebRTC message queues are not adapted into that layer today
+  - `proxy::pipe` and `proxy::forward` remain byte-stream only; UDP datagrams and WebRTC message queues are not adapted into that layer today
 
 Core model:
 
@@ -441,7 +441,7 @@ Rules:
 - Datagram boundaries are preserved. `recv_text` and `recv_binary_base64` each consume at most one datagram.
 - The program-facing API is handle-based: `0` is the reserved downstream placeholder, `1` is the default upstream socket, and `2+` are dynamically allocated sockets.
 - In the current one-shot HTTP runtime, only outbound UDP handles execute the full DAG.
-- UDP does not currently enter the proxy byte-stream layer because `proxy::pipe` and `proxy::bridge` are stream-oriented.
+- UDP does not currently enter the proxy byte-stream layer because `proxy::pipe` and `proxy::forward` are stream-oriented.
 
 ```mermaid
 flowchart TD
@@ -596,7 +596,7 @@ Rules:
 - `connect` is the explicit request to wait for `webrtc.open`. `send_*` and `read_*` can also force that advancement implicitly because they require an open data channel.
 - `send_text`, `read_text`, `send_binary_base64`, and `read_binary_base64` advance message queues while preserving message boundaries.
 - Today, only outbound handles execute the full DAG. Downstream handle `0` is reserved so the ABI shape is stable, but the current one-shot HTTP runtime does not host a downstream peer connection yet.
-- WebRTC remains outside the proxy byte-stream layer today because data-channel messages are not adapted into `proxy::pipe` or `proxy::bridge`.
+- WebRTC remains outside the proxy byte-stream layer today because data-channel messages are not adapted into `proxy::pipe` or `proxy::forward`.
 
 ```mermaid
 flowchart TD

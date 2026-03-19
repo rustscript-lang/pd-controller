@@ -27,5 +27,5 @@ if http::request::get_header("Chunk-Transform") != "" {
 // Forward the downstream response natively after staging the rewritten upstream request body.
 let downstream = proxy::stream::downstream();
 let upstream_stream = proxy::stream::exchange(exchange);
-let proxy_status = proxy::forward(downstream, upstream_stream);
+let proxy_status = proxy::forward_native(downstream, upstream_stream);
 http::response::set_header("x-proxy-status", proxy_status);

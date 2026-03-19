@@ -12,9 +12,10 @@ use axum::{
     extract::Request,
     http::{Response, StatusCode},
 };
+#[cfg(feature = "http3")]
 use bytes::Buf;
+#[cfg(feature = "http3")]
 use futures_util::stream::try_unfold;
-use http_body_util::BodyExt;
 use hyper::body::Incoming;
 use hyper_util::{
     rt::{TokioExecutor, TokioIo},
@@ -467,7 +468,7 @@ pub(crate) fn program_may_stream_downstream_http_response(program: Option<&Loade
     let mut imports_proxy_downstream = false;
     let mut imports_proxy_exchange = false;
     let mut imports_proxy_forward = false;
-    let mut imports_proxy_bridge = false;
+    let mut imports_proxy_forward_native = false;
     let mut imports_proxy_pipe = false;
     let mut imports_proxy_non_http_streams = false;
 
@@ -484,22 +485,22 @@ pub(crate) fn program_may_stream_downstream_http_response(program: Option<&Loade
             | "proxy::stream::from_tls_plaintext"
             | "proxy::stream::from_websocket_binary" => imports_proxy_non_http_streams = true,
             "proxy::forward" => imports_proxy_forward = true,
-            "proxy::bridge" => imports_proxy_bridge = true,
+            "proxy::forward_native" => imports_proxy_forward_native = true,
             "proxy::pipe" => imports_proxy_pipe = true,
             _ => {}
         }
     }
 
-    let proxy_forward_is_simple_http_exchange = imports_proxy_forward
+    let proxy_forward_native_is_simple_http_exchange = imports_proxy_forward_native
         && imports_proxy_downstream
         && imports_proxy_exchange
-        && !imports_proxy_bridge
+        && !imports_proxy_forward
         && !imports_proxy_pipe
         && !imports_proxy_non_http_streams;
-    let imports_proxy_streaming_flow = imports_proxy_bridge
+    let imports_proxy_streaming_flow = imports_proxy_forward
         || imports_proxy_pipe
         || imports_proxy_non_http_streams
-        || (imports_proxy_forward && !proxy_forward_is_simple_http_exchange);
+        || (imports_proxy_forward_native && !proxy_forward_native_is_simple_http_exchange);
 
     imports_response_stream
         || (imports_downstream_tcp && imports_tcp_write)
@@ -1450,7 +1451,7 @@ mod tests {
     }
 
     #[test]
-    fn simple_http_proxy_forward_does_not_force_streaming_path() {
+    fn simple_http_proxy_forward_native_does_not_force_streaming_path() {
         let loaded = loaded_program_from_source(
             r#"
                 use http;
@@ -1464,12 +1465,36 @@ mod tests {
                 );
                 let downstream = proxy::stream::downstream();
                 let upstream_stream = proxy::stream::exchange(upstream);
-                proxy::forward(downstream, upstream_stream);
+                proxy::forward_native(downstream, upstream_stream);
             "#,
         );
         assert!(
             !program_may_stream_downstream_http_response(Some(&loaded)),
-            "simple downstream->http exchange forward should stay on the fast HTTP/1 path"
+            "simple downstream->http exchange forward_native should stay on the fast HTTP/1 path"
+        );
+    }
+
+    #[test]
+    fn simple_http_proxy_forward_counts_as_streaming_path() {
+        let loaded = loaded_program_from_source(
+            r#"
+                use http;
+                use proxy;
+
+                let upstream = http::exchange::prepare_default_upstream(
+                    "127.0.0.1",
+                    8080,
+                    "1.1",
+                    []
+                );
+                let downstream = proxy::stream::downstream();
+                let upstream_stream = proxy::stream::exchange(upstream);
+                proxy::forward(downstream, upstream_stream, 1024);
+            "#,
+        );
+        assert!(
+            program_may_stream_downstream_http_response(Some(&loaded)),
+            "proxy::forward may fall back to buffered relay and should opt into the streaming path"
         );
     }
 
@@ -1602,7 +1627,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn program_can_forward_default_upstream_via_specialized_proxy_api() {
+    async fn program_can_prepare_default_upstream_and_forward_via_proxy_forward_native() {
         let upstream_listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("upstream listener should bind");
@@ -1662,131 +1687,13 @@ mod tests {
                         "x-bench-program-header", "program-proxy"
                     ]
                 );
-                proxy::forward_default_upstream([
+                let downstream = proxy::stream::downstream();
+                let upstream_stream = proxy::stream::exchange(upstream);
+                proxy::forward_native(downstream, upstream_stream);
+                http::response::set_headers([
                     "x-proxy-test", "ok",
                     "x-downstream-version", downstream_version
                 ]);
-            "#,
-            upstream_host = upstream_addr.ip(),
-            upstream_port = upstream_addr.port(),
-        );
-        let compiled = compile_source(&source).expect("source should compile");
-        let program = encode_program(&compiled.program).expect("program should encode");
-        let report = apply_program_from_bytes(&state, &program).await;
-        assert!(report.applied, "program should apply");
-
-        let listener = TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("listener should bind");
-        let addr = listener.local_addr().expect("listener should have addr");
-        let server = tokio::spawn(serve_http_proxy(listener, state.clone()));
-
-        let client = reqwest::Client::builder()
-            .tcp_nodelay(true)
-            .build()
-            .expect("client should build");
-        let response = client
-            .post(format!("http://{addr}/perf"))
-            .header("x-client-id", "perf-client")
-            .header("x-bench-body-mode", "headers-only")
-            .header("content-type", "text/plain")
-            .body("")
-            .send()
-            .await
-            .expect("request should succeed");
-        let status = response.status();
-        let headers = response.headers().clone();
-        let body = response.text().await.expect("body should read");
-
-        assert_eq!(status, reqwest::StatusCode::OK, "body={body}");
-        assert_eq!(
-            headers
-                .get("x-upstream-test")
-                .and_then(|value| value.to_str().ok()),
-            Some("ok")
-        );
-        assert_eq!(
-            headers
-                .get("x-proxy-test")
-                .and_then(|value| value.to_str().ok()),
-            Some("ok")
-        );
-        assert_eq!(
-            headers
-                .get("x-downstream-version")
-                .and_then(|value| value.to_str().ok()),
-            Some("1.1")
-        );
-
-        server.abort();
-        upstream_server.abort();
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn program_can_prepare_and_forward_default_upstream_via_combined_proxy_api() {
-        let upstream_listener = TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("upstream listener should bind");
-        let upstream_addr = upstream_listener
-            .local_addr()
-            .expect("upstream listener should have addr");
-        let upstream_server = tokio::spawn(async move {
-            axum::serve(
-                upstream_listener,
-                axum::Router::new().fallback(axum::routing::any(|| async move {
-                    let mut response = Response::new(Body::empty());
-                    response.headers_mut().insert(
-                        "x-upstream-test",
-                        "ok".parse().expect("header should parse"),
-                    );
-                    response
-                })),
-            )
-            .await
-            .expect("upstream server should run");
-        });
-
-        let state = SharedState::new(1024 * 1024).with_vm_execution_config(VmExecutionConfig {
-            interrupt: crate::runtime::VmInterruptConfig::None,
-            execution_mode: VmExecutionMode::Threading,
-            jit_enabled: true,
-            drop_contract_events_enabled: false,
-        });
-        let source = format!(
-            r#"
-                use http;
-                use proxy;
-
-                let mut outer = 0;
-                let mut acc = 1;
-                while outer < 12 {{
-                    let mut inner = 0;
-                    while inner < 24 {{
-                        let mixed = (outer * 31 + inner * 17) % 97;
-                        if (mixed % 2) == 0 {{
-                            acc = acc + mixed;
-                        }} else {{
-                            acc = acc - mixed;
-                        }}
-                        inner = inner + 1;
-                    }}
-                    outer = outer + 1;
-                }}
-
-                let downstream_version = http::request::get_http_version();
-                proxy::prepare_and_forward_default_upstream(
-                    "{upstream_host}",
-                    {upstream_port},
-                    "1.1",
-                    [
-                        "x-downstream-version", downstream_version,
-                        "x-bench-program-header", "program-proxy"
-                    ],
-                    [
-                        "x-proxy-test", "ok",
-                        "x-downstream-version", downstream_version
-                    ]
-                );
             "#,
             upstream_host = upstream_addr.ip(),
             upstream_port = upstream_addr.port(),

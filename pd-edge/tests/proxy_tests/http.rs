@@ -699,7 +699,9 @@ async fn http_proxy_reuses_plain_http1_upstream_connection_for_non_empty_forward
 
         let upstream = http::exchange::default_upstream();
         http::exchange::set_target(upstream, "127.0.0.1", {});
-        proxy::forward_default_upstream([]);
+        let downstream = proxy::stream::downstream();
+        let upstream_stream = proxy::stream::exchange(upstream);
+        proxy::forward_native(downstream, upstream_stream);
     "#,
         upstream_addr.port()
     );
@@ -739,7 +741,7 @@ async fn http_proxy_reuses_plain_http1_upstream_connection_for_non_empty_forward
 }
 
 #[tokio::test]
-async fn proxy_forward_default_upstream_overlays_response_headers() {
+async fn proxy_forward_native_overlays_response_headers() {
     let upstream_app = Router::new().fallback(any(|_request: Request<Body>| async move {
         let mut response = Response::new(Body::empty());
         response.headers_mut().insert(
@@ -759,7 +761,10 @@ async fn proxy_forward_default_upstream_overlays_response_headers() {
 
         let upstream = http::exchange::default_upstream();
         http::exchange::set_target(upstream, "127.0.0.1", {});
-        proxy::forward_default_upstream([
+        let downstream = proxy::stream::downstream();
+        let upstream_stream = proxy::stream::exchange(upstream);
+        proxy::forward_native(downstream, upstream_stream);
+        http::response::set_headers([
             "x-bench-response-header", "program-proxy"
         ]);
     "#,
@@ -868,7 +873,9 @@ async fn http_proxy_reuses_plain_http1_upstream_connection_for_chunked_forwarded
 
         let upstream = http::exchange::default_upstream();
         http::exchange::set_target(upstream, "127.0.0.1", {});
-        proxy::forward_default_upstream([]);
+        let downstream = proxy::stream::downstream();
+        let upstream_stream = proxy::stream::exchange(upstream);
+        proxy::forward_native(downstream, upstream_stream);
     "#,
         upstream_addr.port()
     );
@@ -978,7 +985,9 @@ async fn http_proxy_handles_close_delimited_http1_forwarded_bodies_without_reuse
 
         let upstream = http::exchange::default_upstream();
         http::exchange::set_target(upstream, "127.0.0.1", {});
-        proxy::forward_default_upstream([]);
+        let downstream = proxy::stream::downstream();
+        let upstream_stream = proxy::stream::exchange(upstream);
+        proxy::forward_native(downstream, upstream_stream);
     "#,
         upstream_addr.port()
     );
@@ -1103,7 +1112,9 @@ async fn http_proxy_reuses_https_http1_default_upstream_connections() {
         http::exchange::set_scheme(upstream, "https");
         let session = tls::session::from_socket(upstream);
         tls::session::set_verify(session, false);
-        proxy::forward_default_upstream([]);
+        let downstream = proxy::stream::downstream();
+        let upstream_stream = proxy::stream::exchange(upstream);
+        proxy::forward_native(downstream, upstream_stream);
     "#,
         upstream_addr.port()
     );
@@ -1226,7 +1237,9 @@ async fn http_proxy_handles_fixed_length_downstream_http1_requests_on_persistent
 
         let upstream = http::exchange::default_upstream();
         http::exchange::set_target(upstream, "127.0.0.1", {});
-        proxy::forward_default_upstream([]);
+        let downstream = proxy::stream::downstream();
+        let upstream_stream = proxy::stream::exchange(upstream);
+        proxy::forward_native(downstream, upstream_stream);
     "#,
         upstream_addr.port()
     );
@@ -1372,7 +1385,9 @@ async fn http_proxy_rejects_truncated_fixed_length_downstream_http1_requests_bef
 
         let upstream = http::exchange::default_upstream();
         http::exchange::set_target(upstream, "127.0.0.1", {});
-        proxy::forward_default_upstream([]);
+        let downstream = proxy::stream::downstream();
+        let upstream_stream = proxy::stream::exchange(upstream);
+        proxy::forward_native(downstream, upstream_stream);
     "#,
         upstream_addr.port()
     );
@@ -1496,7 +1511,9 @@ async fn http_proxy_handles_chunked_downstream_http1_requests_on_persistent_conn
 
         let upstream = http::exchange::default_upstream();
         http::exchange::set_target(upstream, "127.0.0.1", {});
-        proxy::forward_default_upstream([]);
+        let downstream = proxy::stream::downstream();
+        let upstream_stream = proxy::stream::exchange(upstream);
+        proxy::forward_native(downstream, upstream_stream);
     "#,
         upstream_addr.port()
     );
@@ -3989,7 +4006,9 @@ async fn http_proxy_https_listener_handles_fixed_length_http1_requests_on_persis
 
         let upstream = http::exchange::default_upstream();
         http::exchange::set_target(upstream, "127.0.0.1", {});
-        proxy::forward_default_upstream([]);
+        let downstream = proxy::stream::downstream();
+        let upstream_stream = proxy::stream::exchange(upstream);
+        proxy::forward_native(downstream, upstream_stream);
     "#,
         upstream_addr.port()
     );

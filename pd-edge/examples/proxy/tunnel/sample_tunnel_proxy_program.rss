@@ -28,11 +28,11 @@ let mut status = "";
 if tls::session::is_present(upstream_tls) {
     // Bridge against decrypted TLS plaintext when the outbound side is HTTPS.
     let upstream = proxy::stream::from_tls_plaintext(upstream_tls);
-    status = proxy::bridge(downstream, upstream, 4);
+    status = proxy::forward(downstream, upstream, 4);
 } else {
     // Plain HTTP can bridge directly against the default upstream exchange stream.
     let upstream = proxy::stream::exchange(exchange);
-    status = proxy::bridge(downstream, upstream, 4);
+    status = proxy::forward(downstream, upstream, 4);
 }
 
 http::response::set_header("x-proxy-status", status);

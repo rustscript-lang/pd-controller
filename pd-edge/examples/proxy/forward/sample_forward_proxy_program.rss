@@ -67,7 +67,7 @@ if !tls::session::handshake(session) {
 // Native-forward the downstream HTTP flow into the default upstream exchange.
 let downstream = proxy::stream::downstream();
 let upstream_stream = proxy::stream::exchange(upstream);
-let proxy_status = proxy::forward(downstream, upstream_stream);
+let proxy_status = proxy::forward_native(downstream, upstream_stream);
 
 http::response::set_header("x-proxy-status", proxy_status);
 http::response::set_header("x-forward-proxy-phase", tcp::stream::get_phase(proxy_socket));

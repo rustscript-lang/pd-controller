@@ -12,7 +12,7 @@ use vm::{CallOutcome, Value, Vm, VmError};
 
 use super::{
     SharedProxyVmContext,
-    http::{exchange as http_exchange, response as http_response, state as http_state},
+    http::state as http_state,
     transport::{TcpStreamRef, TlsSessionRef, decode_tcp_stream_handle, decode_tls_session_handle},
     websocket::{
         close_websocket_binary_stream, ensure_outbound_websocket_connection_open,
@@ -445,10 +445,10 @@ async fn proxy_stream_read_step(
             }
         }
         ProxyByteStreamEndpoint::DownstreamConnect => Err(VmError::HostError(
-            "downstream connect tunnels are only available through proxy::bridge".to_string(),
+            "downstream connect tunnels are only available through proxy::forward".to_string(),
         )),
         ProxyByteStreamEndpoint::DownstreamWebSocketBinary => Err(VmError::HostError(
-            "downstream websocket tunnels are only available through proxy::bridge".to_string(),
+            "downstream websocket tunnels are only available through proxy::forward".to_string(),
         )),
         ProxyByteStreamEndpoint::HttpExchange(exchange) => {
             if !http_state::outbound_exchange_response_available(context, exchange)
@@ -541,10 +541,10 @@ async fn proxy_stream_write_bytes(
             Ok(())
         }
         ProxyByteStreamEndpoint::DownstreamConnect => Err(VmError::HostError(
-            "downstream connect tunnels are only available through proxy::bridge".to_string(),
+            "downstream connect tunnels are only available through proxy::forward".to_string(),
         )),
         ProxyByteStreamEndpoint::DownstreamWebSocketBinary => Err(VmError::HostError(
-            "downstream websocket tunnels are only available through proxy::bridge".to_string(),
+            "downstream websocket tunnels are only available through proxy::forward".to_string(),
         )),
         ProxyByteStreamEndpoint::HttpExchange(exchange) => {
             http_state::append_outbound_exchange_body_bytes(context, exchange, bytes)
@@ -840,42 +840,6 @@ async fn schedule_default_upstream_http_forward(
     Ok(Some("forwarded".to_string()))
 }
 
-async fn forward_default_upstream_with_response_headers(
-    context: &SharedProxyVmContext,
-    response_headers: Value,
-) -> Result<String, VmError> {
-    let debug = std::env::var_os("PD_EDGE_DEBUG_FORWARD_DEFAULT").is_some();
-    if debug {
-        eprintln!("forward_default_upstream: enter");
-    }
-    let parsed_headers = http_response::parse_response_header_batch(response_headers)?;
-    if debug {
-        eprintln!(
-            "forward_default_upstream: parsed headers count={}",
-            parsed_headers.len()
-        );
-    }
-    let default_upstream = http_state::default_upstream_exchange_handle();
-    if !http_state::start_native_default_upstream_http_forward_response(context).await? {
-        if debug {
-            eprintln!("forward_default_upstream: native fast path unavailable");
-        }
-        http_state::ensure_outbound_exchange_response_started(context, default_upstream).await?;
-    } else if debug {
-        eprintln!("forward_default_upstream: native fast path ready");
-    }
-    if !parsed_headers.is_empty() {
-        context.insert_downstream_response_headers(parsed_headers)?;
-        if debug {
-            eprintln!("forward_default_upstream: applied response headers");
-        }
-    }
-    if debug {
-        eprintln!("forward_default_upstream: return forwarded");
-    }
-    Ok("forwarded".to_string())
-}
-
 async fn try_native_forward(
     context: &SharedProxyVmContext,
     left: i64,
@@ -932,14 +896,14 @@ async fn drive_pipe(
         && !source_state.write_closed
     {
         return Err(VmError::HostError(format!(
-            "proxy byte-stream handle {source} cannot be piped yet because its read side is waiting for its write side to close; use proxy::bridge or finish writing before piping from it",
+            "proxy byte-stream handle {source} cannot be piped yet because its read side is waiting for its write side to close; use proxy::forward or finish writing before piping from it",
         )));
     }
     drive_pipe_direction(context, source, destination, max_bytes).await?;
     Ok("eof".to_string())
 }
 
-async fn drive_bridge(
+async fn drive_forward(
     context: SharedProxyVmContext,
     left: i64,
     right: i64,
@@ -1041,10 +1005,10 @@ async fn proxy_pipe(
 
 /// Relays bytes in both directions between `left` and `right`.
 ///
-/// `proxy::bridge` first tries native forward/handoff pairs. If no native handoff is available,
+/// `proxy::forward` first tries native forward/handoff pairs. If no native handoff is available,
 /// it falls back to the buffered bidirectional proxy stream loop using `max_bytes` chunks.
-#[pd_edge_host_function(name = proxy_symbols::BRIDGE.name, scope = proxy)]
-async fn proxy_bridge(
+#[pd_edge_host_function(name = proxy_symbols::FORWARD.name, scope = proxy)]
+async fn proxy_forward(
     _vm: &mut Vm,
     context: SharedProxyVmContext,
     left: i64,
@@ -1052,7 +1016,7 @@ async fn proxy_bridge(
     max_bytes: i64,
 ) -> Result<CallOutcome, VmError> {
     let max_bytes = decode_chunk_size(max_bytes)?;
-    let status = drive_bridge(context, left, right, max_bytes).await?;
+    let status = drive_forward(context, left, right, max_bytes).await?;
     Ok(CallOutcome::Return(vec![Value::string(status)]))
 }
 
@@ -1067,9 +1031,9 @@ async fn proxy_bridge(
 ///   `proxy::stream::exchange(http::exchange::default_upstream())`, as long as neither stream
 ///   has already been written through the proxy stream API
 ///
-/// Unsupported pairs return an error. Use `proxy::bridge` when you want buffered fallback.
-#[pd_edge_host_function(name = proxy_symbols::FORWARD.name, scope = proxy)]
-async fn proxy_forward(
+/// Unsupported pairs return an error. Use `proxy::forward` when you want buffered fallback.
+#[pd_edge_host_function(name = proxy_symbols::FORWARD_NATIVE.name, scope = proxy)]
+async fn proxy_forward_native(
     _vm: &mut Vm,
     context: SharedProxyVmContext,
     left: i64,
@@ -1077,60 +1041,9 @@ async fn proxy_forward(
 ) -> Result<CallOutcome, VmError> {
     let status = try_native_forward(&context, left, right).await?.ok_or_else(|| {
         VmError::HostError(
-            "proxy::forward supports only downstream CONNECT<->dynamic tcp/tls, downstream websocket<->websocket, or downstream HTTP<->default upstream exchange native pairs; use proxy::bridge for the buffered fallback path".to_string(),
+            "proxy::forward_native supports only downstream CONNECT<->dynamic tcp/tls, downstream websocket<->websocket, or downstream HTTP<->default upstream exchange native pairs; use proxy::forward for the buffered fallback path".to_string(),
         )
     })?;
-    Ok(CallOutcome::Return(vec![Value::string(status)]))
-}
-
-/// Performs a native forward from the current downstream HTTP request to the prepared default
-/// upstream exchange and overlays downstream response headers.
-#[pd_edge_host_function(name = proxy_symbols::FORWARD_DEFAULT_UPSTREAM.name, scope = proxy)]
-async fn proxy_forward_default_upstream(
-    _vm: &mut Vm,
-    context: SharedProxyVmContext,
-    response_headers: Value,
-) -> Result<CallOutcome, VmError> {
-    let status = forward_default_upstream_with_response_headers(&context, response_headers).await?;
-    Ok(CallOutcome::Return(vec![Value::string(status)]))
-}
-
-#[pd_edge_host_function(
-    name = proxy_symbols::PREPARE_AND_FORWARD_DEFAULT_UPSTREAM.name,
-    scope = proxy
-)]
-/// Prepares the default upstream request target/header batch and forwards it in one call.
-async fn proxy_prepare_and_forward_default_upstream(
-    _vm: &mut Vm,
-    context: SharedProxyVmContext,
-    host: String,
-    port: i64,
-    version: String,
-    request_headers: Value,
-    response_headers: Value,
-) -> Result<CallOutcome, VmError> {
-    let parsed_response_headers = http_response::parse_response_header_batch(response_headers)?;
-    http_exchange::prepare_default_upstream_request(
-        &context,
-        host,
-        port,
-        version,
-        request_headers,
-    )?;
-    let status =
-        if !http_state::start_native_default_upstream_http_forward_response(&context).await? {
-            http_state::ensure_outbound_exchange_response_started(
-                &context,
-                http_state::default_upstream_exchange_handle(),
-            )
-            .await?;
-            "forwarded".to_string()
-        } else {
-            "forwarded".to_string()
-        };
-    if !parsed_response_headers.is_empty() {
-        context.insert_downstream_response_headers(parsed_response_headers)?;
-    }
     Ok(CallOutcome::Return(vec![Value::string(status)]))
 }
 
