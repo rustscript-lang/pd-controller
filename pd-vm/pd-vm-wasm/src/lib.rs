@@ -783,7 +783,7 @@ mod lint_tests {
     use std::path::Path;
 
     use super::{parse_flavor, parse_module_overrides};
-    use crate::analyzer::{lint_source_with_flavor, lint_source_with_flavor_at_path};
+    use crate::analyzer::{LintSeverity, lint_source_with_flavor, lint_source_with_flavor_at_path};
     use crate::completions::build_completion_catalog;
     use serde_json::Value;
     use vm::{SourceFlavor, collect_inferred_local_type_hints};
@@ -819,6 +819,64 @@ mod lint_tests {
                 report.diagnostics
             );
         }
+    }
+
+    #[test]
+    fn lint_accepts_bytes_literals_and_native_bytes_helpers() {
+        let source = r#"
+            use bytes;
+            let payload = b"RSS\x00";
+            let hex = bytes::to_hex(payload);
+            let roundtrip = bytes::from_hex(hex);
+            assert(roundtrip == payload);
+            roundtrip;
+        "#;
+
+        let report = lint_source_with_flavor(source, SourceFlavor::RustScript);
+        assert!(
+            report.diagnostics.is_empty(),
+            "expected bytes literal lint to pass, got {:?}",
+            report.diagnostics
+        );
+    }
+
+    #[test]
+    fn lint_warns_for_deprecated_base64_bytes_helpers() {
+        let source = r#"
+            use bytes;
+            let payload = bytes::from_base64("QQ==");
+            let encoded = bytes::to_base64(payload);
+            encoded;
+        "#;
+
+        let report = lint_source_with_flavor(source, SourceFlavor::RustScript);
+        let deprecated = report
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.severity == LintSeverity::Warning)
+            .map(|diagnostic| diagnostic.message.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            deprecated.len(),
+            2,
+            "expected two deprecated-base64 warnings, got {:?}",
+            report.diagnostics
+        );
+        assert!(
+            deprecated
+                .iter()
+                .any(|message| message.contains("bytes::from_base64")),
+            "expected from_base64 warning, got {:?}",
+            report.diagnostics
+        );
+        assert!(
+            deprecated
+                .iter()
+                .any(|message| message.contains("bytes::to_base64")),
+            "expected to_base64 warning, got {:?}",
+            report.diagnostics
+        );
     }
 
     #[test]
@@ -1320,6 +1378,64 @@ mod runtime_tests {
             diagnostic.rendered.contains("x + x;"),
             "expected rendered diagnostic snippet, got {:?}",
             diagnostic.rendered
+        );
+    }
+
+    #[test]
+    fn lint_accepts_bytes_literals_and_native_bytes_helpers() {
+        let source = r#"
+            use bytes;
+            let payload = b"RSS\x00";
+            let hex = bytes::to_hex(payload);
+            let roundtrip = bytes::from_hex(hex);
+            assert(roundtrip == payload);
+            roundtrip;
+        "#;
+
+        let report = lint_source_with_flavor(source, SourceFlavor::RustScript);
+        assert!(
+            report.diagnostics.is_empty(),
+            "expected bytes literal lint to pass, got {:?}",
+            report.diagnostics
+        );
+    }
+
+    #[test]
+    fn lint_warns_for_deprecated_base64_bytes_helpers() {
+        let source = r#"
+            use bytes;
+            let payload = bytes::from_base64("QQ==");
+            let encoded = bytes::to_base64(payload);
+            encoded;
+        "#;
+
+        let report = lint_source_with_flavor(source, SourceFlavor::RustScript);
+        let deprecated = report
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.severity == LintSeverity::Warning)
+            .map(|diagnostic| diagnostic.message.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            deprecated.len(),
+            2,
+            "expected two deprecated-base64 warnings, got {:?}",
+            report.diagnostics
+        );
+        assert!(
+            deprecated
+                .iter()
+                .any(|message| message.contains("bytes::from_base64")),
+            "expected from_base64 warning, got {:?}",
+            report.diagnostics
+        );
+        assert!(
+            deprecated
+                .iter()
+                .any(|message| message.contains("bytes::to_base64")),
+            "expected to_base64 warning, got {:?}",
+            report.diagnostics
         );
     }
 

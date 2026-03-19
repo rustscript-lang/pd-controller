@@ -1,19 +1,20 @@
+use bytes;
 use http;
 use webrtc;
 
 // Request headers:
 // - x-webrtc-message: optional text payload
-// - x-webrtc-binary-base64: optional binary payload; when present the sample uses binary message APIs
+// - x-webrtc-binary-hex: optional binary payload encoded as hex text at the HTTP boundary
 // - x-webrtc-handle: "default" to use webrtc::connection::default_upstream(), otherwise webrtc::connection::new()
 // - x-webrtc-data-channel-label: optional data channel label; defaults to "sample-channel"
 // - x-webrtc-ice-servers: optional comma-separated ICE server URLs
 let text_payload = http::request::get_header("x-webrtc-message");
-let binary_payload = http::request::get_header("x-webrtc-binary-base64");
+let binary_payload_hex = http::request::get_header("x-webrtc-binary-hex");
 let requested_handle = http::request::get_header("x-webrtc-handle");
 let mut data_channel_label = http::request::get_header("x-webrtc-data-channel-label");
 let ice_servers = http::request::get_header("x-webrtc-ice-servers");
 let signal_host = "127.0.0.1";
-let signal_port = if binary_payload != "" || requested_handle == "default" => { 18088 } else => { 18087 };
+let signal_port = if binary_payload_hex != "" || requested_handle == "default" => { 18088 } else => { 18087 };
 let signal_path = "/offer";
 let signal_scheme = "http";
 
@@ -79,11 +80,11 @@ if true {
         http::response::set_header("x-webrtc-eof-before-close", "false");
     }
 
-    if binary_payload != "" {
-        webrtc::connection::send_binary_base64(connection, binary_payload);
-        let reply = webrtc::connection::read_binary_base64(connection);
+    if binary_payload_hex != "" {
+        webrtc::connection::send_binary(connection, bytes::from_hex(binary_payload_hex));
+        let reply = webrtc::connection::read_binary(connection);
         http::response::set_header("x-webrtc-mode", "binary");
-        http::response::set_body(reply);
+        http::response::set_body(bytes::to_hex(reply));
     } else {
         webrtc::connection::send_text(connection, text_payload);
         let reply = webrtc::connection::read_text(connection);

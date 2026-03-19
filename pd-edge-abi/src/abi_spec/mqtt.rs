@@ -85,6 +85,17 @@ fn mqtt_connection_publish_binary_base64(
     unreachable!("abi declaration only")
 }
 
+#[pd_host_function(name = "mqtt::connection::publish_binary")]
+fn mqtt_connection_publish_binary(
+    connection: i64,
+    topic: &str,
+    payload: Bytes,
+    qos: i64,
+    retain: bool,
+) -> bool {
+    unreachable!("abi declaration only")
+}
+
 #[pd_host_function(name = "mqtt::connection::subscribe")]
 fn mqtt_connection_subscribe(connection: i64, filter: &str, qos: i64) -> bool {
     unreachable!("abi declaration only")

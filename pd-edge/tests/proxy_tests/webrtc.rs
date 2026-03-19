@@ -145,14 +145,14 @@ async fn sample_webrtc_proxy_program_round_trips_binary_messages_with_default_ha
         .join("proxy")
         .join("sample_webrtc_proxy_program.rss");
     let compiled = compile_edge_source_file(&program_path).expect("sample should compile");
-    let payload = STANDARD.encode(b"webrtc-bin");
+    let payload = "7765627274632d62696e";
 
     let upload = upload_program(&client, admin_addr, &compiled.program).await;
     assert_eq!(upload.status(), StatusCode::NO_CONTENT);
 
     let response = client
         .get(format!("http://{data_addr}/webrtc-binary"))
-        .header("x-webrtc-binary-base64", &payload)
+        .header("x-webrtc-binary-hex", payload)
         .header("x-webrtc-handle", "default")
         .send()
         .await

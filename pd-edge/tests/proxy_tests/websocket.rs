@@ -147,14 +147,14 @@ async fn sample_websocket_proxy_program_round_trips_binary_frames_with_default_h
         .join("proxy")
         .join("sample_websocket_proxy_program.rss");
     let compiled = compile_edge_source_file(&program_path).expect("sample should compile");
-    let payload = STANDARD.encode(b"bin-payload");
+    let payload = "62696e2d7061796c6f6164";
 
     let upload = upload_program(&client, admin_addr, &compiled.program).await;
     assert_eq!(upload.status(), StatusCode::NO_CONTENT);
 
     let response = client
         .get(format!("http://{data_addr}/ws-binary-sample"))
-        .header("x-ws-binary-base64", &payload)
+        .header("x-ws-binary-hex", payload)
         .header("x-ws-handle", "default")
         .send()
         .await

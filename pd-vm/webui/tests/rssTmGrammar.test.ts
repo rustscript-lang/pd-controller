@@ -12,6 +12,8 @@ type GrammarPattern = {
 };
 
 type GrammarSection = {
+  begin?: string;
+  end?: string;
   patterns?: GrammarPattern[];
 };
 
@@ -20,8 +22,16 @@ type Grammar = {
   repository?: Record<string, GrammarSection>;
 };
 
-function repoPattern(name: string, index = 0): GrammarPattern {
+function repoSection(name: string): GrammarSection {
   const section = (grammar as Grammar).repository?.[name];
+  if (!section) {
+    throw new Error(`missing grammar section ${name}`);
+  }
+  return section;
+}
+
+function repoPattern(name: string, index = 0): GrammarPattern {
+  const section = repoSection(name);
   if (!section?.patterns?.[index]) {
     throw new Error(`missing grammar pattern ${name}[${index}]`);
   }
@@ -49,6 +59,20 @@ describe("RustScript TextMate grammar", () => {
     expect(new RegExp(typedLet.begin ?? "").test("let mut detached: ")).toBe(true);
     expect(new RegExp(functionParam.begin ?? "").test("value: ")).toBe(true);
     expect(new RegExp(typedLet.begin ?? "").test("score: closure_value,")).toBe(false);
+  });
+
+  test("matches bytes literals before plain strings and supports hex escapes", () => {
+    const strings = repoSection("strings");
+    const includes = (strings?.patterns ?? [])
+      .map((pattern) => pattern.include)
+      .filter((value): value is string => typeof value === "string");
+    const byteString = repoSection("byte-quoted-string");
+    const plainString = repoSection("double-quoted-string");
+
+    expect(includes[0]).toBe("#byte-quoted-string");
+    expect(new RegExp(byteString.begin ?? "").test("b\"")).toBe(true);
+    expect(new RegExp(byteString.patterns?.[0]?.match ?? "").test("\\x4f")).toBe(true);
+    expect(new RegExp(plainString.patterns?.[0]?.match ?? "").test("\\x4f")).toBe(true);
   });
 
   test("lets declaration headers reuse generic-type-arguments for K/V highlighting", () => {

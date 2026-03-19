@@ -1,3 +1,4 @@
+use bytes;
 use http;
 use mqtt;
 
@@ -10,6 +11,7 @@ use mqtt;
 // - x-mqtt-handle: "default" to use mqtt::connection::default_upstream(), otherwise mqtt::connection::new()
 // - x-mqtt-topic: publish topic; defaults to pd-edge/sample
 // - x-mqtt-payload: optional publish payload when the HTTP request body is empty
+// - x-mqtt-payload-hex: optional hex-encoded binary payload published with the native bytes API
 // - x-mqtt-subscribe: optional topic filter; when present the sample waits for one event
 // - x-mqtt-qos: optional 0 or 1; defaults to 0
 // - x-mqtt-retain: optional true/false retain flag for publish; defaults to false
@@ -73,6 +75,7 @@ if topic == "" {
 
 let request_body = http::request::get_body();
 let header_payload = http::request::get_header("x-mqtt-payload");
+let header_payload_hex = http::request::get_header("x-mqtt-payload-hex");
 let payload = if request_body != "" => {
     request_body
 } else => {
@@ -129,9 +132,20 @@ if subscribe_filter != "" {
     http::response::set_header("x-mqtt-subscribe", subscribe_filter);
 }
 
-if payload != "" {
+if header_payload_hex != "" {
+    mqtt::connection::publish_binary(
+        connection,
+        topic,
+        bytes::from_hex(header_payload_hex),
+        qos,
+        retain
+    );
+    http::response::set_header("x-mqtt-publish-topic", topic);
+    http::response::set_header("x-mqtt-publish-mode", "binary");
+} else if payload != "" {
     mqtt::connection::publish_text(connection, topic, payload, qos, retain);
     http::response::set_header("x-mqtt-publish-topic", topic);
+    http::response::set_header("x-mqtt-publish-mode", "text");
 }
 
 if subscribe_filter != "" {
@@ -155,7 +169,7 @@ if subscribe_filter != "" {
     } else {
         http::response::set_body(kind);
     }
-} else if payload != "" {
+} else if header_payload_hex != "" || payload != "" {
     http::response::set_body("mqtt publish completed");
 } else {
     http::response::set_body("mqtt connect completed");

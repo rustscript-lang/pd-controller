@@ -157,6 +157,14 @@ describe("RustScript generic highlighting", () => {
     expect(stateHasMatch(provider, "root", "lrucache::new::<string, int>(2)")).toBe(true);
   });
 
+  test("matches bytes literals and hex escapes", () => {
+    expect(stateHasMatch(provider, "root", "let payload = b\"RSS\\x00\";")).toBe(true);
+
+    const tokens = tokenizeLine(provider, "let payload = b\"RSS\\x00\";");
+    expect(tokens).toContainEqual({ token: "string", value: "b\"" });
+    expect(tokens).toContainEqual({ token: "string.escape", value: "\\x00" });
+  });
+
   test("tokenizes generic punctuation separately from type identifiers", () => {
     const tokens = tokenizeLine(provider, "let mut detached: LruNode<K, V> = node;");
     expect(tokens).toContainEqual({ token: "type.identifier", value: "LruNode" });

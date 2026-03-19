@@ -25,9 +25,10 @@ type TmGrammar = {
 const FALLBACK_BLOCK_COMMENT_BEGIN = "/\\*";
 const FALLBACK_BLOCK_COMMENT_END = "\\*/";
 const FALLBACK_LINE_COMMENT = "//.*$";
+const FALLBACK_BYTES_STRING_BEGIN = "b\"";
 const FALLBACK_STRING_BEGIN = "\"";
 const FALLBACK_STRING_END = "\"";
-const FALLBACK_STRING_ESCAPE = "\\\\(?:[nrt\\\\\"0])";
+const FALLBACK_STRING_ESCAPE = "\\\\(?:x[0-9A-Fa-f]{2}|[nrt\\\\\"0])";
 const FALLBACK_NUMBERS = "\\b(?:\\d+\\.\\d+|\\d+)\\b";
 const FALLBACK_OPERATORS = "=>|==|!=|&&|\\|\\||&|=|\\+|-|\\*|/|%|<|>|!|\\?";
 const IDENT = "[A-Za-z_][A-Za-z0-9_]*";
@@ -126,6 +127,7 @@ export function ensureRustScriptLanguage(monaco: typeof import("monaco-editor"))
   const lineCommentPattern = fullLineCommentPattern(findByName("comments", "comment.line"), FALLBACK_LINE_COMMENT);
   const blockCommentBegin = beginPattern(findByName("comments", "comment.block"), FALLBACK_BLOCK_COMMENT_BEGIN);
   const blockCommentEnd = endPattern(findByName("comments", "comment.block"), FALLBACK_BLOCK_COMMENT_END);
+  const bytesStringBegin = beginPattern(section("byte-quoted-string"), FALLBACK_BYTES_STRING_BEGIN);
   const stringBegin = beginPattern(section("double-quoted-string"), FALLBACK_STRING_BEGIN);
   const stringEnd = endPattern(section("double-quoted-string"), FALLBACK_STRING_END);
   const stringEscape =
@@ -134,6 +136,7 @@ export function ensureRustScriptLanguage(monaco: typeof import("monaco-editor"))
   const rootRules: Monaco.languages.IMonarchLanguageRule[] = [
     [lineCommentPattern, "comment"],
     [blockCommentBegin, "comment", "@blockComment"],
+    [bytesStringBegin, "string", "@string"],
     [stringBegin, "string", "@string"],
     [new RegExp(`\\b(struct)(\\s+)(${IDENT})\\b`), ["keyword", "", "type.identifier"], "@afterStructName"],
     [new RegExp(`\\b(use)(\\s+)(${PATH})(\\s+)(as)(\\s+)(${IDENT})\\b`), ["keyword", "", "type.identifier", "", "keyword", "", "identifier"]],
@@ -183,6 +186,7 @@ export function ensureRustScriptLanguage(monaco: typeof import("monaco-editor"))
       functionSignature: [
         [lineCommentPattern, "comment"],
         [blockCommentBegin, "comment", "@blockComment"],
+        [bytesStringBegin, "string", "@string"],
         [stringBegin, "string", "@string"],
         [new RegExp(`\\b(${IDENT})(\\s*)(:)(\\s*)`), ["identifier", "", "delimiter", ""], "@typeBeforeParamDelimiter"],
         [/(->)(\s*)/, ["operator", ""], "@typeBeforeReturnTerminator"],
@@ -205,6 +209,7 @@ export function ensureRustScriptLanguage(monaco: typeof import("monaco-editor"))
       structBlock: [
         [lineCommentPattern, "comment"],
         [blockCommentBegin, "comment", "@blockComment"],
+        [bytesStringBegin, "string", "@string"],
         [stringBegin, "string", "@string"],
         [/\{/, "delimiter", "@push"],
         [/\}/, "delimiter", "@pop"],

@@ -1,4 +1,6 @@
 // Pure RustScript AES-128-CBC implementation with lookup tables.
+use bytes;
+
 fn modn(value, base) {
     value -(value / base) * base
 }
@@ -434,17 +436,17 @@ fn aes_128_cbc_decrypt_bytes(ciphertext, key_bytes, iv_bytes) {
 }
 
 pub fn encrypt_cbc_hex(plaintext_hex, key_hex, iv_hex) {
-    let plaintext = hex_to_bytes(plaintext_hex);
-    let key_bytes = hex_to_bytes(key_hex);
-    let iv_bytes = hex_to_bytes(iv_hex);
+    let plaintext = bytes::to_array_u8(bytes::from_hex(plaintext_hex));
+    let key_bytes = bytes::to_array_u8(bytes::from_hex(key_hex));
+    let iv_bytes = bytes::to_array_u8(bytes::from_hex(iv_hex));
     let ciphertext = aes_128_cbc_encrypt_bytes(plaintext, key_bytes, iv_bytes);
-    bytes_to_hex(ciphertext)
+    bytes::to_hex(bytes::from_array_u8(ciphertext))
 }
 
 pub fn decrypt_cbc_hex(ciphertext_hex, key_hex, iv_hex) {
-    let ciphertext = hex_to_bytes(ciphertext_hex);
-    let key_bytes = hex_to_bytes(key_hex);
-    let iv_bytes = hex_to_bytes(iv_hex);
+    let ciphertext = bytes::to_array_u8(bytes::from_hex(ciphertext_hex));
+    let key_bytes = bytes::to_array_u8(bytes::from_hex(key_hex));
+    let iv_bytes = bytes::to_array_u8(bytes::from_hex(iv_hex));
     let plaintext = aes_128_cbc_decrypt_bytes(ciphertext, key_bytes, iv_bytes);
-    bytes_to_hex(plaintext)
+    bytes::to_hex(bytes::from_array_u8(plaintext))
 }

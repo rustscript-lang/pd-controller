@@ -175,6 +175,14 @@ describe("RustScript generic highlighting", () => {
     expect(stateHasMatch(provider, "root", "lrucache::new::<string, int>(2)")).toBe(true);
   });
 
+  test("matches bytes literals and hex escapes", () => {
+    expect(stateHasMatch(provider, "root", "let payload = b\"RSS\\x00\";")).toBe(true);
+
+    const tokens = tokenizeLine(provider, "let payload = b\"RSS\\x00\";");
+    expect(tokens).toContainEqual({ token: "string", value: "b\"" });
+    expect(tokens).toContainEqual({ token: "string.escape", value: "\\x00" });
+  });
+
   test("matches full line comments instead of only the opener", () => {
     expect(stateHasFullCommentMatch(provider, "root", "// comment body")).toBe(true);
     expect(stateHasFullCommentMatch(provider, "functionSignature", "// comment body")).toBe(true);

@@ -91,7 +91,34 @@
     "strings": {
       "patterns": [
         {
+          "include": "#byte-quoted-string"
+        },
+        {
           "include": "#double-quoted-string"
+        }
+      ]
+    },
+    "byte-quoted-string": {
+      "name": "string.quoted.double.bytes.rss",
+      "begin": "(b)(\")",
+      "beginCaptures": {
+        "1": {
+          "name": "storage.type.bytes.rss"
+        },
+        "2": {
+          "name": "punctuation.definition.string.begin.rss"
+        }
+      },
+      "end": "\"",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.end.rss"
+        }
+      },
+      "patterns": [
+        {
+          "name": "constant.character.escape.rss",
+          "match": "\\\\(?:x[0-9A-Fa-f]{2}|[nrt\\\\\"0])"
         }
       ]
     },
@@ -112,7 +139,7 @@
       "patterns": [
         {
           "name": "constant.character.escape.rss",
-          "match": "\\\\(?:[nrt\\\\\"0])"
+          "match": "\\\\(?:x[0-9A-Fa-f]{2}|[nrt\\\\\"0])"
         }
       ]
     },

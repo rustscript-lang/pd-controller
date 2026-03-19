@@ -27,6 +27,7 @@ use crate::abi_impl::http::state::{
 use crate::abi_impl::transport::SharedTcpStreamIo;
 #[cfg(feature = "tls")]
 use crate::abi_impl::transport::{SharedTlsStreamIo, TlsFlowState, build_dynamic_client_config};
+use crate::abi_impl::value_bytes::value_to_bytes;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MqttHandle {
@@ -1343,6 +1344,22 @@ async fn connection_publish_text(
         retain,
     )
     .await?;
+    Ok(CallOutcome::Return(vec![Value::Bool(published)]))
+}
+
+/// Publishes a binary payload on the MQTT connection.
+#[pd_edge_host_function(name = mqtt::connection::PUBLISH_BINARY.name, scope = mqtt)]
+async fn connection_publish_binary(
+    _vm: &mut Vm,
+    context: SharedProxyVmContext,
+    connection: i64,
+    topic: String,
+    payload: Value,
+    qos: i64,
+    retain: bool,
+) -> Result<CallOutcome, VmError> {
+    let payload = value_to_bytes(&payload, "mqtt::connection::publish_binary payload")?.to_vec();
+    let published = publish_payload(&context, connection, topic, payload, qos, retain).await?;
     Ok(CallOutcome::Return(vec![Value::Bool(published)]))
 }
 

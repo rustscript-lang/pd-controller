@@ -5,12 +5,13 @@
 // - host
 // - [scheme=mqtt|mqtts]
 // - [topic]
-// - [payload]
+// - [payload or hex:<payload-hex>]
 // - [subscribe-filter]
 // - [qos=0|1]
 //
 // If subscribe-filter is non-empty, the sample waits for one MQTT event and prints it.
 
+use bytes;
 use console;
 use mqtt;
 use runtime;
@@ -78,7 +79,20 @@ if argc == 0 {
     }
 
     if topic != "" {
-        mqtt::connection::publish_text(connection, topic, payload, qos, false);
+        let use_binary_payload = payload.length >= 4 && payload[0:4] == "hex:";
+        if use_binary_payload {
+            mqtt::connection::publish_binary(
+                connection,
+                topic,
+                bytes::from_hex(payload[4:payload.length]),
+                qos,
+                false
+            );
+            console::stdout::write("published-mode=binary\n");
+        } else {
+            mqtt::connection::publish_text(connection, topic, payload, qos, false);
+            console::stdout::write("published-mode=text\n");
+        }
         console::stdout::write("published-topic=" + topic + "\n");
     }
 

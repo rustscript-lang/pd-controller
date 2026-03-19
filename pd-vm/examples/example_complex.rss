@@ -1,5 +1,6 @@
 use super::stdlib::rss::strings as string;
 
+use bytes;
 use io;
 use re;
 use json;
@@ -47,10 +48,14 @@ let a = [1, "a"];
 let b = a[1];
 
 let regex_ok = re::match("(?i)^rustscript$", "RUSTSCRIPT");
+let packet = b"pd\x01";
+let packet_hex = bytes::to_hex(packet);
+assert(bytes::from_hex(packet_hex) == packet);
 let payload = {
     lang: "rustscript",
     score: closure_value,
     matched: matched,
+    packet_hex: packet_hex,
 };
 struct PayloadPartial {
     score: int,
