@@ -31,17 +31,15 @@ pub use bytecode::{HostImport, OpCode, Program, TypeMap, Value, ValueType};
 pub use compiler::diagnostics::{render_compile_error, render_source_error};
 pub use compiler::source_map::{LineSpanMapping, LoweredSource, SourceId, SourceMap, Span};
 pub use compiler::{
-    CompileError, CompileSourceFileOptions, CompiledProgram, CompiledReplProgram, Compiler,
-    DeprecatedFunctionCall, Expr, FormatError, FunctionDecl, InferredLocalTypeHint, ParseError,
-    ReplLocalBinding, SourceError, SourceFlavor, SourcePathError, Stmt, UnknownInferredLocal,
-    collect_inferred_local_type_hints, collect_inferred_local_type_hints_at_path_with_options,
+    CompileError, CompileSourceFileOptions, CompiledProgram, CompiledReplProgram, Compiler, Expr,
+    FormatError, FunctionDecl, InferredLocalTypeHint, ParseError, ReplLocalBinding, SourceError,
+    SourceFlavor, SourcePathError, Stmt, UnknownInferredLocal, collect_inferred_local_type_hints,
+    collect_inferred_local_type_hints_at_path_with_options,
     collect_inferred_local_type_hints_with_options, compile_source,
     compile_source_at_path_with_flavor_and_options, compile_source_file,
     compile_source_file_with_options, compile_source_for_repl, compile_source_for_repl_with_locals,
     compile_source_with_flavor, compile_source_with_flavor_and_options, format_source,
-    format_source_with_flavor, lint_deprecated_function_calls,
-    lint_deprecated_function_calls_at_path_with_options,
-    lint_deprecated_function_calls_with_options, lint_trailing_function_return_semicolons,
+    format_source_with_flavor, lint_trailing_function_return_semicolons,
     lint_unknown_inferred_local_types, lint_unknown_inferred_local_types_at_path_with_options,
     lint_unknown_inferred_local_types_with_options, lint_unknown_type_annotations,
 };
@@ -62,9 +60,10 @@ pub use jit::{
 pub use vm::diagnostics::render_vm_error;
 #[cfg(feature = "runtime")]
 pub use vm::{
-    CallOutcome, EpochCheckpoint, EpochHandle, FuelCheckpoint, HostArgsFunction, HostAsyncBridge,
-    HostBindingPlan, HostFunction, HostFunctionRegistry, HostOpId, StaticHostArgsFunction,
-    StaticHostFunction, Store, Vm, VmError, VmResult, VmStatus, VmYieldReason,
+    AotArtifactError, CallOutcome, EpochCheckpoint, EpochHandle, FuelCheckpoint, HostArgsFunction,
+    HostAsyncBridge, HostBindingPlan, HostFunction, HostFunctionRegistry, HostOpId,
+    StaticHostArgsFunction, StaticHostFunction, Store, Vm, VmError, VmResult, VmStatus,
+    VmYieldReason,
 };
 #[cfg(feature = "runtime")]
 pub use vmbc::{

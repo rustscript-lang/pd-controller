@@ -1,7 +1,9 @@
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use vm::jit::TraceStep;
 use vm::{
-    BytecodeBuilder, CallOutcome, HostFunction, JitConfig, JitNyiReason, JitTraceTerminal, Value,
-    Vm, VmStatus, compile_source,
+    AotArtifactError, BytecodeBuilder, CallOutcome, HostFunction, JitConfig, JitNyiReason,
+    JitTraceTerminal, Value, Vm, VmStatus, compile_source,
 };
 
 fn native_jit_supported() -> bool {
@@ -17,6 +19,20 @@ fn configure_jit(vm: &mut Vm) {
         hot_loop_threshold: 1,
         max_trace_len: 128,
     });
+}
+
+fn disable_trace_jit(vm: &mut Vm) {
+    vm.set_jit_config(JitConfig {
+        enabled: false,
+        hot_loop_threshold: 1,
+        max_trace_len: 128,
+    });
+}
+
+fn install_aot(vm: &mut Vm) {
+    disable_trace_jit(vm);
+    vm.compile_aot().expect("aot compile should succeed");
+    assert!(vm.has_aot_program(), "aot program should be installed");
 }
 
 fn patch_branch_target(code: &mut [u8], instr_ip: u32, target: u32) {
@@ -59,6 +75,43 @@ fn loop_if_false_root_program() -> ManualTraceProgram {
         target_ip: root_ip as usize,
         exit_ip: exit_ip as usize,
     }
+}
+
+fn backward_brfalse_non_root_program() -> (vm::Program, usize) {
+    let mut bc = BytecodeBuilder::new();
+    bc.ldc(0);
+    bc.stloc(0);
+    bc.ldloc(0);
+    let target_ip = bc.position();
+    bc.ldc(1);
+    bc.add();
+    bc.dup();
+    bc.stloc(0);
+    bc.dup();
+    bc.ldc(2);
+    bc.ceq();
+    let branch_ip = bc.position();
+    bc.brfalse(0);
+    bc.ret();
+
+    let mut code = bc.finish();
+    patch_branch_target(&mut code, branch_ip, target_ip);
+
+    (
+        vm::Program::new(vec![Value::Int(0), Value::Int(1), Value::Int(4)], code)
+            .with_local_count(1),
+        target_ip as usize,
+    )
+}
+
+fn unique_artifact_path() -> std::path::PathBuf {
+    let mut path = std::env::temp_dir();
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock should be after unix epoch")
+        .as_nanos();
+    path.push(format!("pd-vm-aot-{}-{stamp}.bin", std::process::id()));
+    path
 }
 
 struct UnusedBuiltinOverride;
@@ -118,12 +171,48 @@ fn jit_supports_backward_brfalse_to_trace_root() {
 }
 
 #[test]
-#[ignore = "AOT path removed pending full-program AOT"]
-fn aot_supports_backward_brfalse_to_earlier_non_root_step() {}
+fn aot_supports_backward_brfalse_to_earlier_non_root_step() {
+    if !native_jit_supported() {
+        return;
+    }
+
+    let (program, target_ip) = backward_brfalse_non_root_program();
+    let mut vm = Vm::new(program);
+    install_aot(&mut vm);
+
+    let status = vm.run().expect("aot vm should run");
+    assert_eq!(status, VmStatus::Halted);
+    assert_eq!(vm.stack(), &[Value::Int(4)]);
+    assert!(
+        vm.aot_resume_ips()
+            .expect("resume ips should exist")
+            .contains(&target_ip),
+        "backward branch target should be resumable, dump:\n{}",
+        vm.dump_aot_info()
+    );
+}
 
 #[test]
-#[ignore = "AOT path removed pending full-program AOT"]
-fn aot_keeps_backward_brfalse_outside_trace_as_guard_false() {}
+fn aot_keeps_backward_brfalse_outside_trace_as_guard_false() {
+    if !native_jit_supported() {
+        return;
+    }
+
+    let case = loop_if_false_root_program();
+    let mut vm = Vm::new(case.program);
+    install_aot(&mut vm);
+
+    let status = vm.run().expect("aot vm should run");
+    assert_eq!(status, VmStatus::Halted);
+    assert_eq!(vm.stack(), &[Value::Int(4)]);
+    assert!(
+        vm.aot_resume_ips()
+            .expect("resume ips should exist")
+            .contains(&case.root_ip),
+        "loop root should be resumable, dump:\n{}",
+        vm.dump_aot_info()
+    );
+}
 
 #[test]
 fn trace_interpreter_path_executes_loop_if_false() {
@@ -166,8 +255,72 @@ fn trace_interpreter_path_executes_loop_if_false() {
 }
 
 #[test]
-#[ignore = "AOT path removed pending full-program AOT"]
-fn aot_bundle_roundtrips_loop_if_false_traces() {}
+fn aot_bundle_roundtrips_loop_if_false_traces() {
+    if !native_jit_supported() {
+        return;
+    }
+
+    let first_case = loop_if_false_root_program();
+    let mut compiled_vm = Vm::new(first_case.program);
+    install_aot(&mut compiled_vm);
+    let expected_resume_ips = compiled_vm
+        .aot_resume_ips()
+        .expect("resume ips should exist")
+        .to_vec();
+
+    let artifact_path = unique_artifact_path();
+    compiled_vm
+        .save_aot_artifact_to_file(&artifact_path)
+        .expect("artifact save should succeed");
+
+    let second_case = loop_if_false_root_program();
+    let mut loaded_vm = Vm::new(second_case.program);
+    disable_trace_jit(&mut loaded_vm);
+    loaded_vm
+        .load_aot_artifact_from_file(&artifact_path)
+        .expect("artifact load should succeed");
+    std::fs::remove_file(&artifact_path).expect("artifact cleanup should succeed");
+
+    assert_eq!(
+        loaded_vm
+            .aot_resume_ips()
+            .expect("loaded resume ips should exist"),
+        expected_resume_ips.as_slice()
+    );
+
+    let status = loaded_vm.run().expect("loaded aot should run");
+    assert_eq!(status, VmStatus::Halted);
+    assert_eq!(loaded_vm.stack(), &[Value::Int(4)]);
+    assert!(
+        loaded_vm.aot_exec_count() > 0,
+        "loaded artifact should execute natively"
+    );
+}
+
+#[test]
+fn aot_bundle_rejects_program_hash_mismatch() {
+    if !native_jit_supported() {
+        return;
+    }
+
+    let source_case = loop_if_false_root_program();
+    let mut source_vm = Vm::new(source_case.program);
+    install_aot(&mut source_vm);
+    let bytes = source_vm
+        .encode_aot_artifact()
+        .expect("artifact encode should succeed");
+
+    let (other_program, _) = backward_brfalse_non_root_program();
+    let mut target_vm = Vm::new(other_program);
+    disable_trace_jit(&mut target_vm);
+    let err = target_vm
+        .load_aot_artifact(&bytes)
+        .expect_err("different programs should reject the artifact");
+    assert!(matches!(
+        err,
+        AotArtifactError::IncompatibleProgramHash { .. }
+    ));
+}
 
 #[test]
 fn jit_records_trace_too_long_nyi_and_preserves_results() {

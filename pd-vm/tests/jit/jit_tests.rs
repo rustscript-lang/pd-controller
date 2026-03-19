@@ -1,7 +1,7 @@
 use vm::jit::TraceStep;
 use vm::{
-    CallOutcome, HostFunction, JitConfig, JitTraceTerminal, OpCode, Value, Vm, VmStatus,
-    compile_source, disassemble_program,
+    BytecodeBuilder, CallOutcome, HostFunction, JitConfig, JitTraceTerminal, OpCode, Program,
+    Value, Vm, VmStatus, VmYieldReason, compile_source, disassemble_program,
 };
 
 fn native_jit_supported() -> bool {
@@ -45,13 +45,354 @@ impl HostFunction for PrintNoReturn {
     }
 }
 
-#[test]
-#[ignore = "AOT path removed pending full-program AOT"]
-fn aot_compiles_whole_non_loop_program() {}
+struct YieldOnce {
+    yielded: bool,
+}
+
+impl HostFunction for YieldOnce {
+    fn call(&mut self, _vm: &mut Vm, _args: &[Value]) -> Result<CallOutcome, vm::VmError> {
+        if self.yielded {
+            Ok(CallOutcome::Return(vec![Value::Int(42)]))
+        } else {
+            self.yielded = true;
+            Ok(CallOutcome::Yield)
+        }
+    }
+}
+
+struct PendingOnce {
+    called: bool,
+    op_id: u64,
+}
+
+impl HostFunction for PendingOnce {
+    fn call(&mut self, _vm: &mut Vm, _args: &[Value]) -> Result<CallOutcome, vm::VmError> {
+        if self.called {
+            return Err(vm::VmError::HostError(
+                "pending host should not be replayed".to_string(),
+            ));
+        }
+        self.called = true;
+        Ok(CallOutcome::Pending(self.op_id))
+    }
+}
+
+fn disable_trace_jit(vm: &mut Vm) {
+    vm.set_jit_config(JitConfig {
+        enabled: false,
+        hot_loop_threshold: 1,
+        max_trace_len: 512,
+    });
+}
+
+fn install_aot(vm: &mut Vm) {
+    disable_trace_jit(vm);
+    vm.compile_aot().expect("aot compile should succeed");
+    assert!(vm.has_aot_program(), "aot program should be installed");
+}
 
 #[test]
-#[ignore = "AOT path removed pending full-program AOT"]
-fn aot_handles_string_equality_paths() {}
+fn aot_compiles_whole_non_loop_program() {
+    if !native_jit_supported() {
+        return;
+    }
+
+    let source = r#"
+        let lhs = 5;
+        let rhs = 8;
+        if lhs < rhs {
+            lhs + rhs;
+        } else {
+            0;
+        }
+    "#;
+
+    let compiled = compile_source(source).expect("compile should succeed");
+    let mut vm = Vm::new(compiled.program.with_local_count(compiled.locals));
+    install_aot(&mut vm);
+
+    let resume_ips = vm
+        .aot_resume_ips()
+        .expect("aot resume ip table should exist")
+        .to_vec();
+    assert!(
+        resume_ips.contains(&0),
+        "entry ip should be resumable, dump:\n{}",
+        vm.dump_aot_info()
+    );
+
+    let status = vm.run().expect("aot vm should run");
+    assert_eq!(status, VmStatus::Halted);
+    assert_eq!(vm.stack(), &[Value::Int(13)]);
+    assert!(vm.aot_exec_count() > 0, "aot should execute natively");
+
+    let dump = vm.dump_aot_info();
+    assert!(dump.contains("whole-program aot: enabled"));
+    assert!(dump.contains("code_bytes="));
+}
+
+#[test]
+fn aot_handles_string_equality_paths() {
+    if !native_jit_supported() {
+        return;
+    }
+
+    let source = r#"
+        let label = "west";
+        if label == "east" {
+            1;
+        } else if label == "west" {
+            2;
+        } else {
+            3;
+        }
+    "#;
+
+    let compiled = compile_source(source).expect("compile should succeed");
+    let mut vm = Vm::new(compiled.program.with_local_count(compiled.locals));
+    install_aot(&mut vm);
+
+    let status = vm.run().expect("aot vm should run");
+    assert_eq!(status, VmStatus::Halted);
+    assert_eq!(vm.stack(), &[Value::Int(2)]);
+    assert!(vm.aot_exec_count() > 0, "aot should execute natively");
+}
+
+#[test]
+fn aot_inlines_typed_numeric_steps_without_bridge_fallback() {
+    if !native_jit_supported() {
+        return;
+    }
+
+    let source = r#"
+        let lhs = 1.5;
+        let rhs = 2.25;
+        let out = lhs * rhs + rhs / lhs - lhs;
+        out;
+    "#;
+
+    let compiled = compile_source(source).expect("compile should succeed");
+    let mut vm = Vm::new(compiled.program.with_local_count(compiled.locals));
+    vm.set_jit_native_bridge_stats_enabled(true);
+    install_aot(&mut vm);
+
+    let status = vm.run().expect("aot vm should run");
+    assert_eq!(status, VmStatus::Halted);
+    assert_eq!(vm.stack(), &[Value::Float(3.375)]);
+    let bridge_hits = vm.jit_native_bridge_stats_snapshot();
+    assert!(
+        bridge_hits.iter().all(|(name, _)| *name == "ldc"),
+        "typed aot arithmetic should only fall back for initial stack growth, not math ops: {bridge_hits:?}"
+    );
+}
+
+#[test]
+fn aot_replays_host_yield_and_resumes_at_call_site() {
+    if !native_jit_supported() {
+        return;
+    }
+
+    let mut bc = BytecodeBuilder::new();
+    bc.call(0, 0);
+    bc.ret();
+
+    let mut vm = Vm::new(Program::new(Vec::new(), bc.finish()));
+    vm.register_function(Box::new(YieldOnce { yielded: false }));
+    install_aot(&mut vm);
+
+    let first = vm.run().expect("first aot run should yield");
+    assert_eq!(first, VmStatus::Yielded);
+    assert_eq!(vm.last_yield_reason(), Some(VmYieldReason::Host));
+
+    let resumed = vm.resume().expect("resume should halt");
+    assert_eq!(resumed, VmStatus::Halted);
+    assert_eq!(vm.stack(), &[Value::Int(42)]);
+    assert!(vm.aot_exec_count() >= 2, "aot should re-enter after yield");
+}
+
+#[test]
+fn aot_waits_for_pending_host_and_resumes_without_replay() {
+    if !native_jit_supported() {
+        return;
+    }
+
+    let mut bc = BytecodeBuilder::new();
+    bc.call(0, 0);
+    bc.ret();
+
+    let op_id = 77;
+    let mut vm = Vm::new(Program::new(Vec::new(), bc.finish()));
+    vm.register_function(Box::new(PendingOnce {
+        called: false,
+        op_id,
+    }));
+    install_aot(&mut vm);
+
+    let waiting = vm.run().expect("first aot run should wait");
+    assert_eq!(waiting, VmStatus::Waiting(op_id));
+
+    vm.complete_host_op(op_id, vec![Value::Int(7)])
+        .expect("host op completion should succeed");
+    let resumed = vm.resume().expect("resume should halt");
+    assert_eq!(resumed, VmStatus::Halted);
+    assert_eq!(vm.stack(), &[Value::Int(7)]);
+}
+
+#[test]
+fn aot_honors_fuel_metering_and_resume() {
+    if !native_jit_supported() {
+        return;
+    }
+
+    let source = r#"
+        let mut i = 0;
+        while i < 20 {
+            i = i + 1;
+        }
+        i;
+    "#;
+
+    let compiled = compile_source(source).expect("compile should succeed");
+    let mut vm = Vm::new(compiled.program.with_local_count(compiled.locals));
+    install_aot(&mut vm);
+    vm.set_fuel_check_interval(1)
+        .expect("fuel interval update should succeed");
+    vm.set_fuel(5);
+
+    let mut yielded = 0u64;
+    loop {
+        match vm.run().expect("aot run should succeed") {
+            VmStatus::Halted => break,
+            VmStatus::Yielded => {
+                yielded = yielded.saturating_add(1);
+                assert_eq!(vm.last_yield_reason(), Some(VmYieldReason::Fuel));
+                vm.recharge_fuel(5).expect("recharge should succeed");
+            }
+            VmStatus::Waiting(op_id) => panic!("unexpected host wait on op {op_id}"),
+        }
+    }
+
+    assert!(yielded > 0, "expected at least one fuel yield");
+    assert_eq!(vm.stack().last(), Some(&Value::Int(20)));
+    assert!(
+        vm.aot_exec_count() > 1,
+        "aot should resume after fuel yields"
+    );
+}
+
+#[test]
+fn aot_honors_epoch_interruption_and_resume() {
+    if !native_jit_supported() {
+        return;
+    }
+
+    let source = r#"
+        let mut i = 0;
+        while i < 8 {
+            i = i + 1;
+        }
+        i;
+    "#;
+
+    let compiled = compile_source(source).expect("compile should succeed");
+    let mut vm = Vm::new(compiled.program.with_local_count(compiled.locals));
+    install_aot(&mut vm);
+    vm.set_epoch_check_interval(1)
+        .expect("epoch interval update should succeed");
+    vm.set_epoch_deadline(0)
+        .expect("setting epoch deadline should succeed");
+
+    let first = vm.run().expect("first aot run should yield");
+    assert_eq!(first, VmStatus::Yielded);
+    assert_eq!(vm.last_yield_reason(), Some(VmYieldReason::Epoch));
+
+    let second = vm.resume().expect("resume should yield again");
+    assert_eq!(second, VmStatus::Yielded);
+    assert_eq!(vm.last_yield_reason(), Some(VmYieldReason::Epoch));
+
+    vm.clear_epoch_deadline();
+    let halted = vm.run().expect("run should halt after clearing epoch");
+    assert_eq!(halted, VmStatus::Halted);
+    assert_eq!(vm.stack().last(), Some(&Value::Int(8)));
+}
+
+#[test]
+fn aot_survives_reset_for_reuse() {
+    if !native_jit_supported() {
+        return;
+    }
+
+    let source = r#"
+        let mut i = 0;
+        while i < 4 {
+            i = i + 1;
+        }
+        i;
+    "#;
+
+    let compiled = compile_source(source).expect("compile should succeed");
+    let mut vm = Vm::new(compiled.program.with_local_count(compiled.locals));
+    install_aot(&mut vm);
+
+    let first = vm.run().expect("first aot run should halt");
+    assert_eq!(first, VmStatus::Halted);
+    assert_eq!(vm.stack(), &[Value::Int(4)]);
+    let first_execs = vm.aot_exec_count();
+    assert!(first_execs > 0, "first run should execute aot");
+
+    vm.reset_for_reuse();
+    assert!(vm.has_aot_program(), "reset should preserve aot program");
+
+    let second = vm.run().expect("second aot run should halt");
+    assert_eq!(second, VmStatus::Halted);
+    assert_eq!(vm.stack(), &[Value::Int(4)]);
+    assert!(
+        vm.aot_exec_count() > first_execs,
+        "second run should reuse the installed aot artifact"
+    );
+}
+
+#[test]
+fn aot_preserves_drop_contract_parity_for_loop_locals() {
+    if !native_jit_supported() {
+        return;
+    }
+
+    let source = r#"
+        let mut i = 0;
+        while i < 5 {
+            let tmp = { v: i };
+            i = i + 1;
+        }
+        i;
+    "#;
+
+    let compiled_interp = compile_source(source).expect("compile should succeed");
+    let mut interp_vm = Vm::new(
+        compiled_interp
+            .program
+            .with_local_count(compiled_interp.locals),
+    );
+    disable_trace_jit(&mut interp_vm);
+    interp_vm.set_drop_contract_events_enabled(true);
+    let interp_status = interp_vm.run().expect("interpreter run should halt");
+    assert_eq!(interp_status, VmStatus::Halted);
+    let interp_drops = interp_vm.drop_contract_event_count();
+
+    let compiled_aot = compile_source(source).expect("compile should succeed");
+    let mut aot_vm = Vm::new(compiled_aot.program.with_local_count(compiled_aot.locals));
+    aot_vm.set_drop_contract_events_enabled(true);
+    install_aot(&mut aot_vm);
+    let aot_status = aot_vm.run().expect("aot run should halt");
+    assert_eq!(aot_status, VmStatus::Halted);
+
+    assert_eq!(aot_vm.stack(), interp_vm.stack());
+    assert_eq!(
+        aot_vm.drop_contract_event_count(),
+        interp_drops,
+        "aot drop behavior should match the interpreter"
+    );
+}
 
 #[test]
 fn trace_jit_compiles_hot_loop_and_is_dumpable() {

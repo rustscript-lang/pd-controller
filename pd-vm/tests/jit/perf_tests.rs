@@ -408,7 +408,7 @@ fn perf_manual_aes_128_cbc_rustscript_matches_in_interpreter_jit_and_aot() {
     };
     let diag_enabled = std::env::var_os("PDVM_PERF_AES_JIT_DIAG").is_some();
     println!(
-        "aes perf mode: {} (trials={}, hot_loop_threshold={}, max_trace_len={}, aot=skipped)",
+        "aes perf mode: {} (trials={}, hot_loop_threshold={}, max_trace_len={}, aot=enabled)",
         if full_benchmark {
             "benchmark"
         } else {
@@ -420,10 +420,12 @@ fn perf_manual_aes_128_cbc_rustscript_matches_in_interpreter_jit_and_aot() {
     );
     let mut interpreter_times = Vec::with_capacity(trials);
     let mut jit_times = Vec::with_capacity(trials);
+    let mut aot_times = Vec::with_capacity(trials);
     let mut jit_attempts_total = 0usize;
     let mut jit_traces_total = 0usize;
     let mut jit_nyi_total = 0usize;
     let mut jit_native_exec_total = 0u64;
+    let mut aot_exec_total = 0u64;
 
     for trial in 0..trials {
         let mut vm_interpreter = Vm::new(compiled.program.clone());
@@ -537,25 +539,193 @@ fn perf_manual_aes_128_cbc_rustscript_matches_in_interpreter_jit_and_aot() {
             }
         }
         jit_times.push(jit_elapsed);
+
+        let mut vm_aot = Vm::new(compiled.program.clone());
+        vm_aot.set_jit_config(JitConfig {
+            enabled: false,
+            hot_loop_threshold,
+            max_trace_len,
+        });
+        vm_aot
+            .compile_aot()
+            .expect("aes aot compile should succeed");
+        let aot_started = Instant::now();
+        let aot_status = vm_aot
+            .run()
+            .expect("aes RustScript example should run in aot mode");
+        let aot_elapsed = aot_started.elapsed();
+        assert_eq!(
+            aot_status,
+            VmStatus::Halted,
+            "aot should halt on trial {trial}"
+        );
+        assert_eq!(
+            vm_aot.stack(),
+            expected.as_slice(),
+            "aot result mismatch on trial {trial}"
+        );
+        assert_eq!(
+            vm_aot.stack(),
+            vm_interpreter.stack(),
+            "interpreter/aot stack mismatch on trial {trial}"
+        );
+        assert!(
+            vm_aot.aot_exec_count() > 0,
+            "expected aot execution count > 0, dump:\n{}",
+            vm_aot.dump_aot_info()
+        );
+        aot_exec_total = aot_exec_total.saturating_add(vm_aot.aot_exec_count());
+        if diag_enabled && trial == 0 && std::env::var_os("PDVM_PERF_AES_AOT_DUMP").is_some() {
+            println!("aes aot trial0 dump:\n{}", vm_aot.dump_aot_info());
+        }
+        aot_times.push(aot_elapsed);
     }
 
     let interpreter_median = median_duration(&mut interpreter_times);
     let jit_median = median_duration(&mut jit_times);
+    let aot_median = median_duration(&mut aot_times);
     let jit_speedup =
         interpreter_median.as_secs_f64() / jit_median.as_secs_f64().max(f64::MIN_POSITIVE);
+    let aot_speedup =
+        interpreter_median.as_secs_f64() / aot_median.as_secs_f64().max(f64::MIN_POSITIVE);
     println!(
-        "aes-128-cbc rss latency median: interpreter={}us jit={}us jit_speedup={:.2}x",
+        "aes-128-cbc rss latency median: interpreter={}us jit={}us aot={}us jit_speedup={:.2}x aot_speedup={:.2}x",
         interpreter_median.as_micros(),
         jit_median.as_micros(),
-        jit_speedup
+        aot_median.as_micros(),
+        jit_speedup,
+        aot_speedup
     );
-    println!("aes aot skipped: known hanging path pending removal");
     if diag_enabled {
         println!(
             "aes jit aggregate diagnostics across {} trials: attempts={} traces={} nyi={} native_exec={}",
             trials, jit_attempts_total, jit_traces_total, jit_nyi_total, jit_native_exec_total
         );
+        println!(
+            "aes aot aggregate diagnostics across {} trials: executions={}",
+            trials, aot_exec_total
+        );
     }
+}
+
+#[test]
+#[ignore = "manual run performance test; run explicitly"]
+fn perf_manual_ifft_math_matches_in_interpreter_jit_and_aot_without_warmup_or_compile_time() {
+    if !native_jit_supported() {
+        println!("skipping ifft perf on unsupported native JIT target");
+        return;
+    }
+
+    let full_benchmark = std::env::var_os("PDVM_RUN_IFFT_PERF").is_some();
+    let trials = std::env::var("PDVM_PERF_IFFT_TRIALS")
+        .ok()
+        .and_then(|raw| raw.parse::<usize>().ok())
+        .filter(|count| *count > 0)
+        .unwrap_or(if full_benchmark { 9 } else { 5 });
+    let program_repeats = std::env::var("PDVM_PERF_IFFT_REPEATS")
+        .ok()
+        .and_then(|raw| raw.parse::<usize>().ok())
+        .filter(|count| *count > 0)
+        .unwrap_or(if full_benchmark { 4_096 } else { 512 });
+    let hot_loop_threshold = 1;
+    let max_trace_len = if full_benchmark { 16_384 } else { 4_096 };
+
+    let source = build_ifft_perf_source(program_repeats);
+    let source_compile_started = Instant::now();
+    let compiled = compile_source(&source).expect("ifft perf source should compile");
+    let source_compile_elapsed = source_compile_started.elapsed();
+    let expected_iterations = i64::try_from(program_repeats).expect("program repeats should fit");
+    let expected_stack = vec![Value::Int(expected_iterations)];
+
+    println!(
+        "ifft perf mode: {} (trials={}, program_repeats={}, hot_loop_threshold={}, max_trace_len={}, timed_section=reset+run only, source_compile_us={})",
+        if full_benchmark {
+            "benchmark"
+        } else {
+            "bounded smoke"
+        },
+        trials,
+        program_repeats,
+        hot_loop_threshold,
+        max_trace_len,
+        source_compile_elapsed.as_micros()
+    );
+
+    let mut vm_interpreter = Vm::new(compiled.program.clone());
+    vm_interpreter.set_jit_config(JitConfig {
+        enabled: false,
+        hot_loop_threshold,
+        max_trace_len,
+    });
+    let interpreter_warmup = warm_reusable_vm_once(&mut vm_interpreter, &expected_stack);
+    let mut interpreter_times =
+        sample_reused_vm_latencies(&mut vm_interpreter, &expected_stack, trials);
+
+    let mut vm_jit = Vm::new(compiled.program.clone());
+    vm_jit.set_jit_config(JitConfig {
+        enabled: true,
+        hot_loop_threshold,
+        max_trace_len,
+    });
+    let jit_warmup = warm_reusable_vm_once(&mut vm_jit, &expected_stack);
+    assert!(
+        vm_jit.jit_native_trace_count() > 0,
+        "expected JIT warmup to install native traces"
+    );
+    assert!(
+        vm_jit.jit_native_exec_count() > 0,
+        "expected JIT warmup to execute native traces"
+    );
+    let mut jit_times = sample_reused_vm_latencies(&mut vm_jit, &expected_stack, trials);
+    let jit_trace_count = vm_jit.jit_native_trace_count();
+    let jit_exec_count = vm_jit.jit_native_exec_count();
+
+    let mut vm_aot = Vm::new(compiled.program);
+    vm_aot.set_jit_config(JitConfig {
+        enabled: false,
+        hot_loop_threshold,
+        max_trace_len,
+    });
+    let aot_compile_started = Instant::now();
+    vm_aot
+        .compile_aot()
+        .expect("ifft perf aot compile should succeed");
+    let aot_compile_elapsed = aot_compile_started.elapsed();
+    let aot_warmup = warm_reusable_vm_once(&mut vm_aot, &expected_stack);
+    assert!(
+        vm_aot.aot_exec_count() > 0,
+        "expected warmed aot vm to execute natively, dump:\n{}",
+        vm_aot.dump_aot_info()
+    );
+    let mut aot_times = sample_reused_vm_latencies(&mut vm_aot, &expected_stack, trials);
+    let aot_exec_count = vm_aot.aot_exec_count();
+
+    let interpreter_median = median_duration(&mut interpreter_times);
+    let jit_median = median_duration(&mut jit_times);
+    let aot_median = median_duration(&mut aot_times);
+    let jit_speedup =
+        interpreter_median.as_secs_f64() / jit_median.as_secs_f64().max(f64::MIN_POSITIVE);
+    let aot_speedup =
+        interpreter_median.as_secs_f64() / aot_median.as_secs_f64().max(f64::MIN_POSITIVE);
+
+    println!(
+        "ifft_math warmed latency median: interpreter={}us jit={}us aot={}us jit_speedup={:.2}x aot_speedup={:.2}x",
+        interpreter_median.as_micros(),
+        jit_median.as_micros(),
+        aot_median.as_micros(),
+        jit_speedup,
+        aot_speedup
+    );
+    println!(
+        "ifft_math setup diagnostics: interpreter_warmup_us={} jit_warmup_us={} aot_compile_us={} aot_warmup_us={} jit_traces={} jit_native_execs={} aot_execs={}",
+        interpreter_warmup.as_micros(),
+        jit_warmup.as_micros(),
+        aot_compile_elapsed.as_micros(),
+        aot_warmup.as_micros(),
+        jit_trace_count,
+        jit_exec_count,
+        aot_exec_count
+    );
 }
 
 #[test]
@@ -724,6 +894,76 @@ struct PerfRun {
 fn median_duration(samples: &mut [std::time::Duration]) -> std::time::Duration {
     samples.sort_unstable();
     samples[samples.len() / 2]
+}
+
+fn build_ifft_perf_source(program_repeats: usize) -> String {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/ifft_math.rss");
+    let source = std::fs::read_to_string(&path).expect("ifft math example should be readable");
+    let (prefix, _) = source
+        .split_once("// These bins are the forward DFT of [1, 2, 3, 4].")
+        .expect("ifft math example should contain the benchmark split marker");
+
+    format!(
+        r#"{}
+
+let spectrum_re = [10.0,-2.0,-2.0,-2.0];
+let spectrum_im = [0.0, 2.0, 0.0,-2.0];
+
+let mut iteration = 0;
+let mut sample_total = 0.0;
+let mut imag_total = 0.0;
+while iteration < {} {{
+    let signal = ifft(spectrum_re, spectrum_im);
+    let signal_re = signal.re;
+    let signal_im = signal.im;
+
+    sample_total = sample_total + signal_re[0] + signal_re[1] + signal_re[2] + signal_re[3];
+    imag_total = imag_total
+        + math::abs(signal_im[0])
+        + math::abs(signal_im[1])
+        + math::abs(signal_im[2])
+        + math::abs(signal_im[3]);
+    iteration = iteration + 1;
+}}
+
+assert(nearly_equal(sample_total, 10.0 * {}.0));
+assert(nearly_zero(imag_total));
+
+iteration;
+"#,
+        prefix.trim_end(),
+        program_repeats,
+        program_repeats
+    )
+}
+
+fn warm_reusable_vm_once(vm: &mut Vm, expected_stack: &[Value]) -> std::time::Duration {
+    let elapsed = run_vm_once(vm, expected_stack);
+    vm.reset_for_reuse();
+    elapsed
+}
+
+fn sample_reused_vm_latencies(
+    vm: &mut Vm,
+    expected_stack: &[Value],
+    trials: usize,
+) -> Vec<std::time::Duration> {
+    let mut samples = Vec::with_capacity(trials);
+    for _ in 0..trials {
+        let elapsed = run_vm_once(vm, expected_stack);
+        samples.push(elapsed);
+        vm.reset_for_reuse();
+    }
+    samples
+}
+
+fn run_vm_once(vm: &mut Vm, expected_stack: &[Value]) -> std::time::Duration {
+    let started = Instant::now();
+    let status = vm.run().expect("vm should run");
+    let elapsed = started.elapsed();
+    assert_eq!(status, VmStatus::Halted);
+    assert_eq!(vm.stack(), expected_stack);
+    elapsed
 }
 
 #[derive(Clone, Copy, Debug)]

@@ -67,8 +67,7 @@ pub(super) fn builtin_bytes_to_hex_impl(payload: &[u8]) -> String {
     out
 }
 
-/// Deprecated: decodes a base64 string into bytes.
-/// Prefer native `bytes` values and only decode base64 at explicit text boundaries.
+/// Decodes a base64 string into bytes.
 #[pd_host_function(name = "bytes::from_base64")]
 pub(super) fn builtin_bytes_from_base64_impl(text: &str) -> VmResult<VmBytes> {
     STANDARD.decode(text).map_err(|err| {
@@ -76,8 +75,7 @@ pub(super) fn builtin_bytes_from_base64_impl(text: &str) -> VmResult<VmBytes> {
     })
 }
 
-/// Deprecated: encodes bytes as base64 text.
-/// Prefer native `bytes` values and only encode base64 at explicit text boundaries.
+/// Encodes bytes as standard base64.
 #[pd_host_function(name = "bytes::to_base64")]
 pub(super) fn builtin_bytes_to_base64_impl(payload: &[u8]) -> String {
     STANDARD.encode(payload)

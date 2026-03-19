@@ -1,14 +1,16 @@
-use super::super::super::{HostCallExecOutcome, NumericValue, Value, Vm, VmError, VmResult};
+use super::super::super::{Vm, VmError, VmResult};
 use super::super::{JitTrace, TraceStep};
-use super::{
-    NativeCompileProfile, NativeInterruptSettings, STATUS_CONTINUE, STATUS_ERROR, STATUS_HALTED,
-    STATUS_OUT_OF_FUEL, STATUS_TRACE_EXIT, STATUS_WAITING, STATUS_YIELDED, store_bridge_error,
+use super::NativeCompileProfile;
+use crate::vm::native::{
+    ExecutableBuffer, NativeInterruptSettings, OP_ADD, OP_AND, OP_BUILTIN_CALL, OP_CALL, OP_CEQ,
+    OP_CGT, OP_CLT, OP_DIV, OP_DUP, OP_GUARD_FALSE, OP_GUARD_TRUE, OP_JUMP, OP_LDC, OP_LDLOC,
+    OP_LOOP_IF_FALSE, OP_LSHR, OP_MOD, OP_MUL, OP_NEG, OP_NOT, OP_OR, OP_POP, OP_SHL, OP_SHR,
+    OP_STLOC, OP_SUB, STATUS_CONTINUE, STATUS_HALTED, STATUS_OUT_OF_FUEL, STATUS_TRACE_EXIT,
+    detect_native_stack_layout, entry_signature, helper_signature, jump_with_status,
+    string_concat_helper_entry_address,
 };
-use crate::builtins::BuiltinFunction;
 use cranelift_codegen::ir::condcodes::{FloatCC, IntCC};
-use cranelift_codegen::ir::{
-    AbiParam, Block, BlockArg, InstBuilder, MemFlags, SigRef, Signature, types,
-};
+use cranelift_codegen::ir::{Block, BlockArg, InstBuilder, MemFlags, SigRef, types};
 use cranelift_codegen::isa::OwnedTargetIsa;
 use cranelift_codegen::settings::{self, Configurable};
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
@@ -18,54 +20,18 @@ use std::collections::{BTreeSet, HashMap};
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-#[path = "bridge.rs"]
-mod bridge;
 #[path = "codegen.rs"]
 mod codegen;
-#[path = "layout.rs"]
-mod layout;
 
-use super::exec::ExecutableBuffer;
-use bridge::{pd_vm_cranelift_sconcat, pd_vm_cranelift_step};
 use codegen::{
     HelperEmitCtx, emit_helper_step, emit_inline_or_helper_step, emit_interrupt_tick_inline,
-    emit_interrupt_tick_inline_guarded, entry_signature, helper_signature, jump_with_status,
-    resolve_offsets,
+    emit_interrupt_tick_inline_guarded, resolve_offsets,
 };
-use layout::detect_native_stack_layout;
 
 type FuncRef = SigRef;
 
 static CRANELIFT_TRACE_ID: AtomicU64 = AtomicU64::new(1);
-static NATIVE_STACK_LAYOUT: OnceLock<Result<NativeStackLayout, String>> = OnceLock::new();
 static CRANELIFT_JIT_ISA: OnceLock<Result<OwnedTargetIsa, String>> = OnceLock::new();
-
-const OP_LDC: i64 = 1;
-const OP_ADD: i64 = 2;
-const OP_SUB: i64 = 3;
-const OP_MUL: i64 = 4;
-const OP_DIV: i64 = 5;
-const OP_MOD: i64 = 6;
-const OP_SHL: i64 = 7;
-const OP_SHR: i64 = 8;
-const OP_LSHR: i64 = 9;
-const OP_AND: i64 = 10;
-const OP_OR: i64 = 11;
-const OP_NOT: i64 = 12;
-const OP_NEG: i64 = 13;
-const OP_CEQ: i64 = 14;
-const OP_CLT: i64 = 15;
-const OP_CGT: i64 = 16;
-const OP_POP: i64 = 17;
-const OP_DUP: i64 = 18;
-const OP_LDLOC: i64 = 19;
-const OP_STLOC: i64 = 20;
-const OP_CALL: i64 = 21;
-const OP_GUARD_FALSE: i64 = 22;
-const OP_JUMP: i64 = 23;
-const OP_BUILTIN_CALL: i64 = 24;
-const OP_GUARD_TRUE: i64 = 25;
-const OP_LOOP_IF_FALSE: i64 = 26;
 
 pub(crate) struct CompiledTrace {
     pub(crate) entry: *const u8,
@@ -90,45 +56,6 @@ impl TraceKeepAlive {
 }
 
 #[derive(Clone, Copy)]
-struct VecLayout {
-    ptr_offset: i32,
-    len_offset: i32,
-    cap_offset: i32,
-}
-
-#[derive(Clone, Copy)]
-struct ValueLayout {
-    size: i32,
-    tag_offset: i32,
-    tag_size: u8,
-    null_tag: u32,
-    int_tag: u32,
-    float_tag: u32,
-    bool_tag: u32,
-    int_payload_offset: i32,
-    float_payload_offset: i32,
-    bool_payload_offset: i32,
-}
-
-#[derive(Clone, Copy)]
-struct NativeStackLayout {
-    vm_stack_offset: i32,
-    vm_locals_offset: i32,
-    vm_program_constants_ptr_offset: i32,
-    vm_program_constants_len_offset: i32,
-    vm_ip_offset: i32,
-    vm_interrupt_mode_offset: i32,
-    vm_fuel_remaining_offset: i32,
-    vm_fuel_check_interval_offset: i32,
-    vm_fuel_ops_until_check_offset: i32,
-    vm_epoch_deadline_offset: i32,
-    vm_epoch_counter_ptr_offset: i32,
-    vm_drop_contract_events_offset: i32,
-    stack_vec: VecLayout,
-    value: ValueLayout,
-}
-
-#[derive(Clone, Copy)]
 struct ResolvedOffsets {
     stack_ptr: i32,
     stack_len: i32,
@@ -145,14 +72,6 @@ struct ResolvedOffsets {
     epoch_deadline: i32,
     epoch_counter_ptr: i32,
     drop_contract_events: i32,
-}
-
-pub(crate) fn helper_entry_address() -> usize {
-    pd_vm_cranelift_step as *const () as usize
-}
-
-pub(crate) fn sconcat_helper_entry_address() -> usize {
-    pd_vm_cranelift_sconcat as *const () as usize
 }
 
 pub(super) fn native_helper_fn_offset() -> i32 {
@@ -225,7 +144,7 @@ pub(crate) fn compile_trace(
 
         let helper_ref = b.import_signature(helper_sig.clone());
         let vm_status_helper_ref = b.import_signature(entry_signature(pointer_type, call_conv));
-        let sconcat_helper_addr = sconcat_helper_entry_address();
+        let sconcat_helper_addr = string_concat_helper_entry_address();
 
         let mut step_index = 0usize;
         while step_index < trace.steps.len() {

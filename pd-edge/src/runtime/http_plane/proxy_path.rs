@@ -1445,7 +1445,6 @@ mod tests {
         let compiled = compile_source(source).expect("source should compile");
         LoadedProgram {
             program: Arc::new(compiled.program.with_local_count(compiled.locals)),
-            no_interrupt_aot_bundle: None,
             vm_pool: Arc::new(crate::runtime::vm_runner::LoadedProgramVmPool::new()),
         }
     }

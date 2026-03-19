@@ -1,183 +1,402 @@
-# Effort Evaluation: Whole-Program AOT Native Code Emission
+# Re-evaluation: Whole-Program AOT Native Code Emission
 
-## Current Architecture (Trace-Based AOT)
+## Status Update
 
-The existing AOT pipeline works as follows:
+This plan started from a trace-JIT-only baseline. The current codebase has moved past that point.
+
+Implemented:
+
+- whole-program AOT lives under `pd-vm/src/vm/aot/`
+- neutral shared native helpers live under `pd-vm/src/vm/native/`
+- in-memory whole-program native execution is working
+- self-contained persisted PAT bundles are working
+- `pd-vm-run --aot-load <artifact.pat>` can construct and run the VM without a source path
+- the ignored AOT placeholder tests were replaced with real coverage
+- CLI and runtime builtin product surface now expose AOT compile/load/save/introspection paths
+- CLI host binding now goes through `Program.imports` and a shared registry plan; the old name-based binding path is gone
+
+Remaining phase-3 work is mostly cleanup and optimization:
+
+- extract additional reusable codegen helpers from `vm/jit` and `vm/aot` into the neutral shared layer
+- continue perf characterization and tuning now that interpreter, trace-JIT, and AOT are all runnable surfaces
+
+## Bottom Line
+
+The previous AOT implementation is gone. There is no live `pd-vm/src/vm/jit/aot.rs`, no
+`prepare_aot`, no bundle loader/decoder, no `AOT_VERSION`, and no encoded-trace machinery left in
+`pd-vm/src`. The current baseline is a trace JIT with optional per-trace native emission through
+Cranelift.
+
+That changes the scope materially:
+
+- Whole-program AOT is no longer an extension of an existing AOT pipeline.
+- It is a new compiler/runtime path that can reuse current native opcode lowering, bridge helpers,
+  interruption plumbing, and program hashing, but it should not be built under
+  `pd-vm/src/vm/jit`.
+- The highest-leverage plan is to build whole-program native execution in memory first, then add
+  serialization/load only if persisted AOT artifacts are still a product requirement.
+- The implementation boundary should be explicit:
+  - new AOT-specific code lives under `pd-vm/src/vm/aot/`
+  - trace-JIT-specific code stays under `pd-vm/src/vm/jit/`
+  - shared native helpers move to a neutral shared directory such as `pd-vm/src/vm/native/`
+    and must not branch on "jit vs aot"
+
+## Historical Baseline (Trace JIT Only)
 
 ```mermaid
 graph LR
-    A[Bytecode] -->|scan_program_block_roots| B[Block Root IPs]
-    B -->|compile_aot_block per root| C["JitTrace (TraceStep IR)"]
-    C -->|Cranelift codegen| D[Native Machine Code per Trace]
-    D -->|serialize| E[AOT Bundle]
-    E -->|load + mmap| F[Executable Traces]
+    A[Bytecode] -->|hot loop detection| B[Trace root IP]
+    B -->|record| C[JitTrace / TraceStep]
+    C -->|compile_trace| D[Cranelift function per trace]
+    D -->|execute_jit_native| E[Native trace]
+    E -->|trace exit / yield / pending / fuel / epoch| F[Interpreter or next trace]
 ```
 
 | Property | Current Value |
-|---|---|
-| **Compilation unit** | Individual traces (mostly linear, with optional in-trace `LoopIfFalse` back-edges) |
-| **IR** | `TraceStep` — 23 variants, 1:1 with opcodes except branches become `GuardFalse`/`LoopIfFalse`/`JumpToRoot`/`JumpToIp` |
-| **Codegen backend** | Cranelift (via `cranelift-codegen` crate, no `cranelift-jit` module used directly) |
-| **Opcode coverage** | All 25 `OpCode` variants handled; backward `Brfalse` is supported when it targets an earlier step in the same trace |
-| **Branch model** | Traces are still trace-oriented rather than full CFGs; `Brfalse` becomes `GuardFalse` or `LoopIfFalse`, and backward `Br` still terminates the trace |
-| **Call model** | All `Call` ops dispatch to host functions via a bridge ([pd_vm_cranelift_step](pd-vm/src/vm/jit/native/bridge.rs#53-247)); no intra-program call frames |
-| **Dispatch** | Interpreter loop enters traces at known root IPs; traces exit back to interpreter on guard failure, `LoopIfFalse` fallthrough, backward `Br`, or halt |
-| **Yielding/Async** | `CallOutcome::Yield` rewinds IP and re-pushes args (unsupported in native-only AOT); `Pending` advances IP |
+| --- | --- |
+| Compilation unit | Individual hot-loop traces only |
+| IR | `JitTrace` plus trace-oriented `TraceStep` |
+| Native backend | Cranelift, one native function per trace |
+| Runtime model | Trace executes natively, then usually exits back to interpreter or chains to another trace |
+| Branch model | Trace guards, loop back-edges inside a trace, explicit trace exits for non-trace control flow |
+| Interrupt model | Fuel/epoch checks injected into trace code and surfaced as status returns |
+| Call model | Host and builtin calls only; no intra-program script call frames |
+| AOT surface | Removed at the time of this re-evaluation; now reintroduced under `pd-vm/src/vm/aot/` |
+| Artifact format | Removed at the time of this re-evaluation; now reintroduced as self-contained `.pat` whole-program bundles |
+| Test state | Historical note: ignored placeholders existed then; they have since been replaced with real AOT coverage |
 
-### Key Files and Sizes
+### Relevant Files and Sizes
+
+`repo-analysis.md` currently reports `pd-vm/vm/jit` at `6929` LOC inside a `50809` LOC `pd-vm`
+crate with `501` detected tests.
 
 | File | Lines | Role |
-|---|---|---|
-| [trace.rs](pd-vm/src/vm/jit/trace.rs) | 1200 | Trace recording, `TraceStep` IR, [prepare_aot](pd-vm/src/vm/jit/trace.rs#198-244), block-root scanning |
-| [aot.rs](pd-vm/src/vm/jit/aot.rs) | 927 | AOT bundle encode/decode, entry points |
-| [codegen.rs](pd-vm/src/vm/jit/native/codegen.rs) | 2085 | Cranelift IR emission for each `TraceStep` |
-| [bridge.rs](pd-vm/src/vm/jit/native/bridge.rs) | 247 | Runtime helper called from native code for non-inlined ops |
-| [runtime.rs](pd-vm/src/vm/jit/runtime.rs) | 809 | Trace execution loop, native trace caching, chained dispatch |
-| [cranelift.rs](pd-vm/src/vm/jit/native/cranelift.rs) | ~400 | Cranelift function builder, layout probing |
-| [exec.rs](pd-vm/src/vm/jit/native/exec.rs) | 155 | Executable memory allocation (mmap/VirtualAlloc) |
-| [mod.rs (vm)](pd-vm/src/vm/mod.rs) | 2600+ | Interpreter loop (calls [execute_jit_entry](pd-vm/src/vm/jit/runtime.rs#459-484) for hot IPs) |
+| --- | ---: | --- |
+| `pd-vm/src/vm/jit/trace.rs` | 1312 | Trace recording, loop-header detection, trace IR |
+| `pd-vm/src/vm/jit/runtime.rs` | 1040 | Interpreter trace execution and native trace runtime |
+| `pd-vm/src/vm/jit/native/codegen.rs` | 3685 | Per-step Cranelift lowering helpers and inline/native helpers |
+| `pd-vm/src/vm/jit/native/cranelift.rs` | 405 | `compile_trace` entry point and Cranelift function assembly |
+| `pd-vm/src/vm/jit/native/bridge.rs` | 278 | Helper bridge for generic/native fallback operations |
+| `pd-vm/src/vm/jit/native/layout.rs` | 323 | Native stack/value layout probing |
+| `pd-vm/src/vm/jit/native/exec.rs` | 160 | Executable memory management |
+| `pd-vm/src/vm/jit/native/mod.rs` | 146 | Native backend surface and status codes |
 
----
+### Target Directory Layout
 
-## What "Whole-Program" AOT Means
+The plan should target this shape rather than extending `vm/jit`:
 
-Instead of producing a bag of traces that individually cover straight-line code regions and exit to an interpreter, the goal is to emit **a single native function (or small set of functions) that can execute the entire bytecode program** without needing a bytecode interpreter at all.
+- `pd-vm/src/vm/aot/`
+  - whole-program CFG construction
+  - AOT IR
+  - program-level Cranelift lowering
+  - AOT runtime entry/resume
+  - optional artifact encode/decode
+- `pd-vm/src/vm/jit/`
+  - trace recording
+  - trace runtime
+  - trace-specific native compilation entry points
+- `pd-vm/src/vm/native/` or equivalent shared-neutral directory
+  - executable buffer management
+  - native layout probing
+  - Cranelift signatures and low-level emit helpers
+  - helper bridge ABI utilities
 
-This requires handling:
-1. **All control flow** — including backward `Brfalse` branches, arbitrary loops, and irreducible CFGs
-2. **All opcodes** — no "unsupported opcode" bail-out
-3. **Suspension/resumption** — yield, pending, and fuel interrupts from arbitrary program points
-4. **Dynamic stack management** — the VM operand stack and locals are still dynamically typed `Value` objects
+Shared code in that neutral layer should not contain "if this is JIT do X, else if this is AOT do
+Y". If behavior differs, the caller-specific code should live in `vm/jit` or `vm/aot`, while the
+shared layer exposes smaller neutral primitives.
 
----
+## What "Whole-Program AOT" Means From This Baseline
 
-## Gap Analysis
+From the current codebase, whole-program AOT means emitting one native program entry point, or a
+small fixed set of native entry points, that can execute the full bytecode program without
+interpreter participation at normal control-flow boundaries.
 
-### 1. Control-Flow Graph Construction *(New — not present today)*
+That requires:
 
-| Aspect | Current | Required |
-|---|---|---|
-| CFG | Not constructed; traces are linear | Must build a full CFG from bytecode |
-| Backward branches | In-trace backward `Brfalse` lowers to `LoopIfFalse`; full CFG branching is still not modeled | Must become normal conditional branches in native code |
-| Forward branches | `GuardFalse` (side exit) | Must become standard Cranelift `brif` with both targets |
-| Irreducible loops | Not relevant | Must handle (or prove the compiler never emits them) |
+1. Building a full CFG from bytecode instead of recording hot traces.
+2. Supporting arbitrary branch targets and loop back-edges as normal native control flow.
+3. Re-entering native code from an arbitrary bytecode IP after yield, pending host ops, fuel
+   interruption, or epoch interruption.
+4. Preserving existing VM semantics for the dynamic operand stack, locals, drop-contract side
+   effects, and host-call behavior.
+5. Optionally serializing and reloading the compiled native program if persisted AOT remains a
+   requirement.
 
-**Effort**: New module (~300–500 lines) to build a basic-block CFG from the bytecode, identify loop headers, and produce a Cranelift block layout. Can partially reuse [scan_program_block_roots](pd-vm/src/vm/jit/trace.rs#1066-1130) and [scan_loop_headers](pd-vm/src/vm/jit/trace.rs#1131-1174).
+## Reusable Pieces
 
-### 2. Cranelift Codegen Refactor *(Heavy — rewrite of codegen.rs)*
+- The current Cranelift backend already knows how to lower most VM operations and interact with the
+  real `Vm` layout.
+- `pd-vm/src/vm/jit/native/codegen.rs` contains the expensive opcode-specific logic; parts of that
+  are reusable, but only after being extracted into neutral helpers outside `vm/jit`.
+- Host call bridging already returns stable statuses for continue, halt, yield, pending, error, and
+  interruption.
+- Program hashing and cache invalidation already exist through `program_cache_key`.
+- The VM already preserves enough state for resumption:
+  `CallOutcome::Yield` rewinds `ip` to the call site, pending host ops advance `ip` to the resume
+  point, and fuel/epoch yield through VM status transitions.
 
-The current [codegen.rs](pd-vm/src/vm/jit/native/codegen.rs) (2085 lines) emits Cranelift IR by walking a flat `Vec<TraceStep>` sequentially. For whole-program compilation:
+Practical consequence:
 
-- **Block structure**: Must create one Cranelift block per basic block and wire `brif`/[jump](pd-vm/src/vm/jit/native/codegen.rs#1823-1831) instructions between them.
-- **Guard removal**: `GuardFalse` with side-exit becomes a normal conditional branch to the "false" basic block.
-- **Loop back-edges**: Must become normal jumps to loop-header blocks.
-- **Entry from any IP**: For fuel-interrupt resumption, must support entering execution at an arbitrary block, not just a single trace root.
+- Do not add `vm/jit/aot.rs`.
+- Do not make `vm/jit/native/*` the permanent home of whole-program AOT code.
+- If `layout.rs`, `exec.rs`, helper ABI signatures, or opcode emit fragments are shared, move them
+  into a neutral shared layer and have both `vm/jit` and `vm/aot` call into it.
+- Avoid shared enums or helpers whose main purpose is to switch on `Jit` versus `Aot`.
 
-**Effort**: ~70% rewrite of [codegen.rs](pd-vm/src/vm/jit/native/codegen.rs). The per-opcode inline emitters (Ldc, Add, Ldloc, etc.) are reusable as-is, but the top-level function that builds the Cranelift function needs to be restructured around a block-per-basic-block approach. Estimated: **1,000–1,500 lines of rework**.
+## Main Gaps
 
-### 3. TraceStep IR Elimination or Generalization
+### 1. Product Surface and Compile Mode
 
-Currently `TraceStep` is trace-centric (no backward branches, `GuardFalse` as a unidirectional side exit, `JumpToRoot`). For whole-program:
+Current code only has `NativeCompileProfile::Jit`. There is no whole-program compile API, no load
+API, no persistent artifact type, and no runtime switch that prefers a program-level native entry.
 
-- **Option A**: Keep `TraceStep` and add new branch variants (`BrFalse { true_bb, false_bb }`, `Br { target_bb }`). ~100 lines of new IR + updates.
-- **Option B**: Skip `TraceStep` entirely and lower bytecode directly to Cranelift IR. This removes a layer and simplifies the pipeline but loses the interpreter-mode JIT fallback.
+Required work:
 
-**Recommended**: Option A for incremental adoption — keep trace-based JIT working alongside whole-program AOT.
+- Create a new `pd-vm/src/vm/aot/` module tree.
+- Introduce an explicit whole-program native mode.
+- Add program-level compiled artifact structs and runtime ownership.
+- Decide whether this lives under the existing `cranelift-jit` feature or a more general native
+  backend feature.
+- Define the shared-neutral layer up front so AOT does not accrete inside `vm/jit`.
 
-### 4. Suspension/Resumption from Any Program Point *(Hardest change)*
+Effort: `200-400` lines plus some public API churn.
 
-> [!CAUTION]
-> This is the most architecturally challenging part of the conversion.
+### 2. CFG Construction and Resume-Point Inventory
 
-Today, when a native trace encounters `STATUS_OUT_OF_FUEL` or `STATUS_YIELDED`, it simply returns to the interpreter, which knows where the IP is and resumes from there in the interpreter loop. In a **whole-program** native bundle there is no interpreter to fall back to.
+The current trace recorder only scans loop headers and records straight-line traces rooted at hot
+IPs. Whole-program AOT needs a true basic-block CFG plus a map of every native re-entry location.
 
-Two approaches:
+Required work:
 
-| Approach | Description | Effort |
-|---|---|---|
-| **Re-entry dispatch table** | Emit a `switch` on the IP at function entry that jumps to the correct Cranelift block. After any suspension (fuel, yield, pending), the native function returns, and the next [run()](pd-vm/src/vm/jit/native/bridge.rs#3-22) call re-enters the same native function which dispatches to the correct block via the switch. | Medium (~300 lines). Similar to what Wasm engines do for resumable coroutines. The existing [collect_resumable_aot_roots](pd-vm/src/vm/jit/aot.rs#257-278) already identifies fuel-interrupt re-entry points. |
-| **Stackful coroutines / setjmp** | Use `setjmp`/`longjmp` (or Cranelift's stack switching) to save/restore the native call frame on suspension. | Very high complexity, platform-specific, and hard to debug. Not recommended. |
+- Split bytecode into basic blocks using branch targets and fallthrough edges.
+- Record normal control-flow edges for `Br`, `Brfalse`, and `Ret`.
+- Compute re-entry points for:
+  - initial entry
+  - branch targets
+  - post-call resume IPs
+  - call-site replay IPs for `Yield`
+  - interruption checkpoints
 
-**Recommended**: Re-entry dispatch table. The current AOT already generates "resume root" traces for fuel-checkpoint IPs; this can be unified into a single Cranelift function with a block per resume point.
+Reusing `scan_loop_headers` helps only a little. Most of this is net-new.
 
-### 5. `CallOutcome::Yield` IP-Rewind Semantics
+Effort: `400-700` lines new.
 
-The KI documents note:
-> `CallOutcome::Yield` is currently **unsupported in native-only AOT bundles** as it requires bytecode replay which is unavailable.
+### 3. AOT IR
 
-For whole-program AOT this remains a design decision:
-- **Keep unsupported**: Host functions that return `Yield` must be handled by the caller (pd-edge) without relying on IP rewind. This is the path of least resistance.
-- **Support it**: The re-entry dispatch table (approach from §4) naturally supports re-executing from the `Call` instruction's block entry. Would require the native code to "undo" the call's arg pops (same as interpreter does today). Adds ~100–200 lines.
+The old note recommended extending `TraceStep`. I no longer think that is the right default.
 
-### 6. AOT Bundle Format *(Moderate — mostly additive)*
+`TraceStep` is deeply trace-specific:
 
-Current bundle format stores a list of traces with per-trace machine code. For whole-program:
+- `JitTraceTerminal` is trace-oriented.
+- `JumpToRoot`, `JumpToIp`, `GuardFalse`, `GuardTrue`, and `LoopIfFalse` encode trace exit
+  behavior, not whole-program CFG behavior.
+- The trace runtime and many tests assume `root_ip`, `step_ips`, and trace termination semantics.
 
-- Replace `traces: Vec<EncodedAotTrace>` with a single `program_code: Vec<u8>` blob.
-- Must still store re-entry point metadata (IP → offset into native code) for the dispatch table.
-- Constants, imports, local_count, interrupt settings remain the same.
-- **AOT_VERSION** bump required.
+Recommended direction:
 
-**Effort**: ~200–300 lines of changes in [aot.rs](pd-vm/src/vm/jit/aot.rs). Mostly simplification (one code blob instead of N trace blobs).
+- Keep trace JIT unchanged.
+- Add a separate whole-program IR such as `AotProgram`, `AotBlock`, and `AotStep`, or lower
+  directly from CFG blocks to Cranelift if the IR proves unnecessary.
+- Keep that IR under `pd-vm/src/vm/aot/`, not under `pd-vm/src/vm/jit/`.
 
-### 7. Runtime Changes *(Moderate)*
+Effort: `250-450` lines new.
 
-- [execute_jit_native](pd-vm/src/vm/jit/runtime.rs#485-611) currently loops over traces, chaining them. For whole-program, it calls one function and handles the return status. This is simpler.
-- [from_aot_bundle_bytes](pd-vm/src/vm/jit/aot.rs#160-222) must reconstruct the re-entry dispatch metadata instead of per-trace data.
-- Thread-local native trace cache becomes a whole-program code cache (simpler).
+### 4. Cranelift Program Codegen
 
-**Effort**: ~300–400 lines of rework in [runtime.rs](pd-vm/src/vm/jit/runtime.rs).
+This is still the largest engineering slice.
 
-### 8. Testing *(Significant)*
+Today `compile_trace` in `pd-vm/src/vm/jit/native/cranelift.rs` builds one Cranelift function with:
 
-The existing test suite exercises the trace-based JIT extensively. Whole-program AOT needs:
-- All existing interpreter tests must also pass in whole-program-native mode
-- Control-flow edge cases: nested loops, if-else chains, loop-with-break, early return
-- Fuel interruption and resumption at every basic-block boundary
-- Yield and Pending from host calls
-- AOT bundle round-trip (encode → decode → execute)
+- one root block
+- one exit block
+- optional loop-target blocks for `LoopIfFalse`
+- trace-exit returns through `STATUS_TRACE_EXIT`
 
----
+Whole-program AOT needs a new `compile_program` path that:
+
+- creates one Cranelift block per bytecode basic block
+- emits a dispatch block that jumps by current `vm.ip`
+- lowers `Brfalse` to a normal two-way branch
+- lowers `Br` to a normal jump
+- keeps yield/pending/error/interruption as native status returns
+- reuses existing per-op inline/helper emitters where possible, after extracting them to a neutral
+  shared layer
+
+Most opcode-specific emitters in `codegen.rs` are still valuable, but they should be split into:
+
+- AOT/JIT-agnostic primitives in a neutral shared directory
+- trace-specific orchestration in `vm/jit`
+- whole-program orchestration in `vm/aot`
+
+The top-level builder and branch lowering strategy need a separate path rather than a small edit to
+`compile_trace`.
+
+Effort: `900-1500` lines new/refactored. Difficulty: high.
+
+### 5. Runtime Entry, Resume, and Caching
+
+Current native runtime assumes trace execution:
+
+- `STATUS_TRACE_EXIT` means bounce to interpreter or chain into another trace.
+- native artifacts are cached per trace shape, root IP, interrupt settings, and compile profile.
+
+Whole-program AOT needs:
+
+- one program-level executable object instead of many trace objects
+- entry by program start or current `vm.ip`
+- a resume path that re-enters native code after yield, pending, fuel, and epoch events
+- program-level cache keys layered on top of the existing `program_cache_key`
+- an AOT-owned runtime under `pd-vm/src/vm/aot/`, not a special mode hidden inside
+  `pd-vm/src/vm/jit/runtime.rs`
+
+This is simpler than the old trace-AOT runtime in one sense, because there is only one native
+program body to manage. It is harder in another sense, because none of the old AOT load/execute
+surface still exists.
+
+Effort: `400-700` lines new/refactored.
+
+### 6. Persisted Artifact Format (Optional Phase 2)
+
+If the actual goal is "native whole-program execution" rather than "serialized AOT bundles", this
+should be deferred until after the in-memory path is working.
+
+Why:
+
+- No serializer/deserializer survives in the current tree.
+- A new format will need versioning, metadata, validation, and executable mapping anyway.
+- Doing serialization first adds surface area before semantic correctness is proven.
+
+If persisted AOT is still required, the new artifact should store:
+
+- one code blob
+- one IP-to-entry-offset table
+- program hash / layout compatibility metadata
+- interrupt-mode compatibility metadata
+- enough embedded program payload to reconstruct a `Vm` without the original source file
+
+Effort: `300-600` lines new after the in-memory path exists.
+
+### 7. Tests
+
+Current test coverage is strong for interpreter and trace JIT, but whole-program AOT has to be
+rebuilt from scratch.
+
+Minimum new coverage:
+
+- re-enable the five ignored AOT placeholders in `pd-vm/tests/jit/jit_tests.rs` and
+  `pd-vm/tests/jit/jit_nyi_edge_tests.rs`
+- whole non-loop program execution
+- branch diamonds and nested loops
+- backward `Brfalse` to non-root targets
+- host call return, yield, and pending semantics
+- fuel and epoch interruption with arbitrary-IP re-entry
+- drop-contract-sensitive locals/stack updates
+- roundtrip encode/decode/load tests if serialization is added
+
+Effort: `400-800` lines new tests.
+
+## Important Design Change vs The Old Note
+
+The old note treated `CallOutcome::Yield` as potentially unsupported in native-only AOT.
+
+From the current codebase, I would plan to support it.
+
+Reason:
+
+- bound host functions already restore args and rewind `ip` to the call site on `Yield`
+- args-slice host functions already leave args on the stack and rewind `ip`
+- a whole-program native dispatch block can simply re-enter at that `ip`
+
+So this is no longer a blocker that requires bytecode replay machinery. It is mainly a dispatch and
+resume-table requirement.
+
+## Recommended Implementation Plan
+
+### Phase 1: In-Memory Whole-Program Native Execution
+
+Goal: prove correctness without serialization.
+
+1. Create `pd-vm/src/vm/aot/` and define its module boundaries first.
+2. Extract neutral native helpers into a shared directory such as `pd-vm/src/vm/native/`.
+3. Add a program CFG builder and resume-point inventory under `vm/aot`.
+4. Add a separate whole-program IR or direct CFG-to-Cranelift lowering path under `vm/aot`.
+5. Implement `compile_program` in `vm/aot`, using only neutral shared helpers.
+6. Add a program-level native runtime entry under `vm/aot` that dispatches by `vm.ip`.
+7. Pass interpreter parity tests for control flow, yield, pending, fuel, and epoch cases.
+
+### Phase 2: Persisted AOT Artifact
+
+Goal: make the native program portable across process boundaries.
+
+1. Define a new artifact version and metadata format.
+2. Encode one code blob plus IP-entry metadata and the embedded program payload.
+3. Validate layout and compatibility on load.
+4. Add roundtrip tests, standalone load tests, and corrupted-artifact rejection tests.
+
+### Phase 3: Optimization and Cleanup
+
+Goal: reduce duplication and improve compile/runtime quality.
+
+1. Share reusable opcode emitters between trace JIT and whole-program codegen only through neutral
+   shared helpers.
+2. Move any newly discovered shared logic out of `vm/jit` or `vm/aot` rather than layering mode
+   switches into shared files.
+3. Add perf coverage for whole-program native mode against interpreter and trace JIT.
 
 ## Effort Summary
 
-| Component | Lines Changed/New | Difficulty | Dependencies |
-|---|---|---|---|
-| CFG construction | ~400 new | Medium | None |
-| IR changes (`TraceStep`) | ~150 | Low | CFG |
-| Codegen rewrite | ~1,200 rework | **High** | CFG, IR |
-| Re-entry dispatch table | ~300 new | Medium-High | Codegen |
-| AOT bundle format | ~250 rework | Low | Codegen, dispatch |
-| Runtime ([runtime.rs](pd-vm/src/vm/jit/runtime.rs)) | ~350 rework | Medium | Bundle format |
-| Yield/Pending support | ~150 new | Medium | Dispatch |
-| Test coverage | ~500–800 new | Medium | All above |
-| **Total** | **~2,800–3,500 lines** | | |
+| Component | Lines Changed/New | Difficulty |
+| --- | ---: | --- |
+| Product surface / compile mode | `200-400` | Medium |
+| CFG construction + resume inventory | `400-700` | Medium |
+| Separate AOT IR | `250-450` | Medium |
+| Program codegen path | `900-1500` | High |
+| Runtime entry + cache | `400-700` | Medium-High |
+| Persisted artifact format (phase 2) | `300-600` | Medium |
+| Tests | `400-800` | Medium |
+| Total without serialization | `2150-3550` | |
+| Total with serialization | `2450-4150` | |
 
-### Time Estimate
+## Time Estimate
 
-Assuming familiarity with the codebase and Cranelift:
+Assuming familiarity with this VM and Cranelift:
 
-| Phase | Estimated Time |
-|---|---|
-| Design + CFG construction | 2–3 days |
-| Codegen rewrite + dispatch table | 4–6 days |
-| Bundle format + runtime | 2–3 days |
-| Testing + debugging | 3–5 days |
-| **Total** | **~2–3 weeks** |
+| Scope | Estimated Time |
+| --- | --- |
+| In-memory whole-program native execution | `2-3 weeks` |
+| Persisted/loadable AOT on top of that | `+1-2 weeks` |
+| Full end-to-end whole-program AOT with serialization | `3-5 weeks` |
 
 ## Simplifying Factors
 
-Several properties of the existing codebase make this easier than a general-purpose VM:
-
-1. **Small opcode set** — Only 25 opcodes, all already have Cranelift emission code
-2. **No intra-program call stack** — All `Call` goes to host functions; no recursive dispatch or stack frames to manage in native code
-3. **Structured control flow from compiler** — The RustScript/JS/Scheme/Lua frontends all emit structured control flow (`Br`/`Brfalse`); irreducible CFGs are unlikely
-4. **Existing Cranelift infrastructure** — Layout probing, helper bridge, executable memory management are all production-ready
-5. **Existing fuel-checkpoint resume roots** — [collect_resumable_aot_roots](pd-vm/src/vm/jit/aot.rs#257-278) already identifies the exact IPs where the re-entry dispatch table needs entries
+- The opcode surface is still small enough to make whole-program lowering tractable.
+- Host calls are still the only call shape in the current VM.
+- The existing Cranelift backend already knows the real `Vm`, stack, local, and `Value` layouts.
+- Fuel and epoch semantics are already implemented and tested in the native trace path.
 
 ## Complicating Factors
 
-1. **Dynamic typing on the stack** — Every `Value` is a tagged union with heap variants (`String`, `Array`, `Map`). The codegen must always handle slow paths via the bridge helper — this is already the case and won't change
-2. **Yield IP-rewind** — Deciding whether to support this affects the dispatch table design
-3. **Backward `Brfalse`** — Currently NYI; must be supported, which means proper loop-header identification and Cranelift block placement
-4. **Two compilation modes** — Must keep trace-based JIT working alongside whole-program AOT (unless you're willing to remove the trace JIT)
+- Trace-specific assumptions are baked into both runtime and tests.
+- No old AOT serializer, loader, or runtime surface remains to extend.
+- Arbitrary-IP resume is mandatory for correctness, not an optional optimization.
+- Dynamic `Value` semantics and drop-contract side effects limit how aggressive native lowering can
+  be.
+
+## Final Assessment
+
+Whole-program AOT is still feasible, but the current codebase changes the nature of the work.
+
+This is not a "revive the old AOT bundle path" task. It is a new whole-program native compiler and
+runtime track built beside the existing trace JIT, with its own `pd-vm/src/vm/aot/` tree. The good
+news is that the hardest per-op native lowering work is already present. The missing pieces are the
+product shell around it: CFG building, program-level dispatch/re-entry, runtime ownership, and
+optionally a new persisted artifact format.
+
+The structural rule matters here:
+
+- AOT should not piggyback on `pd-vm/src/vm/jit/`.
+- Shared code should move to a neutral shared directory.
+- Shared code should expose reusable primitives, not `if jit { ... } else { ... }` control flow.
+
+If the real goal is runtime performance rather than offline bundle portability, the right scope is
+Phase 1 only: in-memory whole-program native execution first, persisted AOT second.

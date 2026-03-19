@@ -1,5 +1,9 @@
-use super::layout::checked_add_i32;
 use super::*;
+use crate::vm::native::{
+    InlineEmitCtx as SharedInlineEmitCtx, NativeInlineStep as SharedNativeInlineStep,
+    NativeStackLayout, ResolvedOffsets as SharedResolvedOffsets, ValueLayout, checked_add_i32,
+    emit_native_inline_step,
+};
 
 #[derive(Clone, Copy)]
 pub(super) struct HelperEmitCtx {
@@ -7,6 +11,53 @@ pub(super) struct HelperEmitCtx {
     pub(super) helper_ref: FuncRef,
     pub(super) exit_block: Block,
     pub(super) offsets: ResolvedOffsets,
+}
+
+fn shared_inline_offsets(
+    layout: NativeStackLayout,
+    offsets: ResolvedOffsets,
+) -> SharedResolvedOffsets {
+    SharedResolvedOffsets {
+        stack_ptr: offsets.stack_ptr,
+        stack_len: offsets.stack_len,
+        stack_cap: offsets.stack_cap,
+        locals_ptr: offsets.locals_ptr,
+        locals_len: offsets.locals_len,
+        constants_ptr: offsets.constants_ptr,
+        constants_len: offsets.constants_len,
+        vm_ip: offsets.vm_ip,
+        drop_contract_events_enabled: layout.vm_drop_contract_events_enabled_offset,
+        drop_contract_events: offsets.drop_contract_events,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_shared_inline_trace_step(
+    b: &mut FunctionBuilder,
+    vm_ptr: cranelift_codegen::ir::Value,
+    helper_ref: FuncRef,
+    vm_status_helper_ref: FuncRef,
+    exit_block: Block,
+    pointer_type: cranelift_codegen::ir::Type,
+    layout: NativeStackLayout,
+    offsets: ResolvedOffsets,
+    step_ip: usize,
+    step: SharedNativeInlineStep,
+) -> VmResult<()> {
+    emit_native_inline_step(
+        b,
+        SharedInlineEmitCtx {
+            vm_ptr,
+            helper_ref,
+            vm_status_helper_ref,
+            exit_block,
+            pointer_type,
+            layout,
+            offsets: shared_inline_offsets(layout, offsets),
+        },
+        step_ip,
+        step,
+    )
 }
 
 pub(super) fn emit_interrupt_tick_inline(
@@ -330,6 +381,7 @@ pub(super) fn emit_inline_or_helper_step(
                 b,
                 vm_ptr,
                 helper_ref,
+                vm_status_helper_ref,
                 exit_block,
                 pointer_type,
                 layout,
@@ -345,6 +397,7 @@ pub(super) fn emit_inline_or_helper_step(
                 b,
                 vm_ptr,
                 helper_ref,
+                vm_status_helper_ref,
                 exit_block,
                 pointer_type,
                 layout,
@@ -360,6 +413,7 @@ pub(super) fn emit_inline_or_helper_step(
                 b,
                 vm_ptr,
                 helper_ref,
+                vm_status_helper_ref,
                 exit_block,
                 pointer_type,
                 layout,
@@ -376,6 +430,7 @@ pub(super) fn emit_inline_or_helper_step(
                 b,
                 vm_ptr,
                 helper_ref,
+                vm_status_helper_ref,
                 exit_block,
                 pointer_type,
                 layout,
@@ -390,6 +445,7 @@ pub(super) fn emit_inline_or_helper_step(
                 b,
                 vm_ptr,
                 helper_ref,
+                vm_status_helper_ref,
                 exit_block,
                 pointer_type,
                 layout,
@@ -404,6 +460,7 @@ pub(super) fn emit_inline_or_helper_step(
                 b,
                 vm_ptr,
                 helper_ref,
+                vm_status_helper_ref,
                 exit_block,
                 pointer_type,
                 layout,
@@ -448,6 +505,7 @@ pub(super) fn emit_inline_or_helper_step(
                 b,
                 vm_ptr,
                 helper_ref,
+                vm_status_helper_ref,
                 exit_block,
                 pointer_type,
                 layout,
@@ -491,9 +549,11 @@ pub(super) fn emit_inline_or_helper_step(
             emit_inline_sconcat(
                 b,
                 vm_ptr,
+                helper_ref,
                 vm_status_helper_ref,
                 exit_block,
                 pointer_type,
+                layout,
                 offsets,
                 sconcat_helper_addr,
                 root_ip,
@@ -506,6 +566,7 @@ pub(super) fn emit_inline_or_helper_step(
                 b,
                 vm_ptr,
                 helper_ref,
+                vm_status_helper_ref,
                 exit_block,
                 pointer_type,
                 layout,
@@ -550,6 +611,7 @@ pub(super) fn emit_inline_or_helper_step(
                 b,
                 vm_ptr,
                 helper_ref,
+                vm_status_helper_ref,
                 exit_block,
                 pointer_type,
                 layout,
@@ -594,6 +656,7 @@ pub(super) fn emit_inline_or_helper_step(
                 b,
                 vm_ptr,
                 helper_ref,
+                vm_status_helper_ref,
                 exit_block,
                 pointer_type,
                 layout,
@@ -638,6 +701,7 @@ pub(super) fn emit_inline_or_helper_step(
                 b,
                 vm_ptr,
                 helper_ref,
+                vm_status_helper_ref,
                 exit_block,
                 pointer_type,
                 layout,
@@ -682,6 +746,7 @@ pub(super) fn emit_inline_or_helper_step(
                 b,
                 vm_ptr,
                 helper_ref,
+                vm_status_helper_ref,
                 exit_block,
                 pointer_type,
                 layout,
@@ -726,6 +791,7 @@ pub(super) fn emit_inline_or_helper_step(
                 b,
                 vm_ptr,
                 helper_ref,
+                vm_status_helper_ref,
                 exit_block,
                 pointer_type,
                 layout,
@@ -770,6 +836,7 @@ pub(super) fn emit_inline_or_helper_step(
                 b,
                 vm_ptr,
                 helper_ref,
+                vm_status_helper_ref,
                 exit_block,
                 pointer_type,
                 layout,
@@ -814,6 +881,7 @@ pub(super) fn emit_inline_or_helper_step(
                 b,
                 vm_ptr,
                 helper_ref,
+                vm_status_helper_ref,
                 exit_block,
                 pointer_type,
                 layout,
@@ -858,6 +926,7 @@ pub(super) fn emit_inline_or_helper_step(
                 b,
                 vm_ptr,
                 helper_ref,
+                vm_status_helper_ref,
                 exit_block,
                 pointer_type,
                 layout,
@@ -888,6 +957,7 @@ pub(super) fn emit_inline_or_helper_step(
                 b,
                 vm_ptr,
                 helper_ref,
+                vm_status_helper_ref,
                 exit_block,
                 pointer_type,
                 layout,
@@ -903,6 +973,7 @@ pub(super) fn emit_inline_or_helper_step(
                 b,
                 vm_ptr,
                 helper_ref,
+                vm_status_helper_ref,
                 exit_block,
                 pointer_type,
                 layout,
@@ -918,6 +989,7 @@ pub(super) fn emit_inline_or_helper_step(
                 b,
                 vm_ptr,
                 helper_ref,
+                vm_status_helper_ref,
                 exit_block,
                 pointer_type,
                 layout,
@@ -933,6 +1005,7 @@ pub(super) fn emit_inline_or_helper_step(
                 b,
                 vm_ptr,
                 helper_ref,
+                vm_status_helper_ref,
                 exit_block,
                 pointer_type,
                 layout,
@@ -944,7 +1017,18 @@ pub(super) fn emit_inline_or_helper_step(
             Ok(true)
         }
         TraceStep::Not => {
-            emit_inline_not(b, vm_ptr, helper_ref, exit_block, offsets, root_ip, step_ip)?;
+            emit_inline_not(
+                b,
+                vm_ptr,
+                helper_ref,
+                vm_status_helper_ref,
+                exit_block,
+                pointer_type,
+                layout,
+                offsets,
+                root_ip,
+                step_ip,
+            )?;
             Ok(true)
         }
         TraceStep::Neg | TraceStep::INeg => {
@@ -952,6 +1036,7 @@ pub(super) fn emit_inline_or_helper_step(
                 b,
                 vm_ptr,
                 helper_ref,
+                vm_status_helper_ref,
                 exit_block,
                 pointer_type,
                 layout,
@@ -966,6 +1051,7 @@ pub(super) fn emit_inline_or_helper_step(
                 b,
                 vm_ptr,
                 helper_ref,
+                vm_status_helper_ref,
                 exit_block,
                 pointer_type,
                 layout,
@@ -980,6 +1066,7 @@ pub(super) fn emit_inline_or_helper_step(
                 b,
                 vm_ptr,
                 helper_ref,
+                vm_status_helper_ref,
                 exit_block,
                 pointer_type,
                 layout,
@@ -1010,6 +1097,7 @@ pub(super) fn emit_inline_or_helper_step(
                 b,
                 vm_ptr,
                 helper_ref,
+                vm_status_helper_ref,
                 exit_block,
                 pointer_type,
                 layout,
@@ -1040,6 +1128,7 @@ pub(super) fn emit_inline_or_helper_step(
                 b,
                 vm_ptr,
                 helper_ref,
+                vm_status_helper_ref,
                 exit_block,
                 pointer_type,
                 layout,
@@ -1070,6 +1159,7 @@ pub(super) fn emit_inline_or_helper_step(
                 b,
                 vm_ptr,
                 helper_ref,
+                vm_status_helper_ref,
                 exit_block,
                 pointer_type,
                 layout,
@@ -1100,6 +1190,7 @@ pub(super) fn emit_inline_or_helper_step(
                 b,
                 vm_ptr,
                 helper_ref,
+                vm_status_helper_ref,
                 exit_block,
                 pointer_type,
                 layout,
@@ -1114,6 +1205,7 @@ pub(super) fn emit_inline_or_helper_step(
                 b,
                 vm_ptr,
                 helper_ref,
+                vm_status_helper_ref,
                 exit_block,
                 pointer_type,
                 layout,
@@ -1180,6 +1272,7 @@ fn emit_inline_ldc(
     b: &mut FunctionBuilder,
     vm_ptr: cranelift_codegen::ir::Value,
     helper_ref: FuncRef,
+    vm_status_helper_ref: FuncRef,
     exit_block: Block,
     pointer_type: cranelift_codegen::ir::Type,
     layout: NativeStackLayout,
@@ -1188,65 +1281,19 @@ fn emit_inline_ldc(
     root_ip: usize,
     step_ip: usize,
 ) -> VmResult<()> {
-    let slow = b.create_block();
-    let fast = b.create_block();
-    let next = b.create_block();
-
-    let constants_len = b
-        .ins()
-        .load(pointer_type, MemFlags::new(), vm_ptr, offsets.constants_len);
-    let idx = b.ins().iconst(pointer_type, i64::from(index));
-    let in_bounds = b.ins().icmp(IntCC::UnsignedLessThan, idx, constants_len);
-    b.ins().brif(in_bounds, fast, &[], slow, &[]);
-
-    b.switch_to_block(fast);
-    let stack_len = b
-        .ins()
-        .load(pointer_type, MemFlags::new(), vm_ptr, offsets.stack_len);
-    let stack_cap = b
-        .ins()
-        .load(pointer_type, MemFlags::new(), vm_ptr, offsets.stack_cap);
-    let has_capacity = b.ins().icmp(IntCC::UnsignedLessThan, stack_len, stack_cap);
-    let cap_ok = b.create_block();
-    b.ins().brif(has_capacity, cap_ok, &[], slow, &[]);
-
-    b.switch_to_block(cap_ok);
-    let constants_ptr = b
-        .ins()
-        .load(pointer_type, MemFlags::new(), vm_ptr, offsets.constants_ptr);
-    let src_addr = value_addr(b, pointer_type, constants_ptr, idx, layout.value.size);
-    let src_tag = load_tag_i32(b, layout.value, src_addr);
-    let scalar = is_scalar_tag(b, layout.value, src_tag);
-    let scalar_ok = b.create_block();
-    b.ins().brif(scalar, scalar_ok, &[], slow, &[]);
-
-    b.switch_to_block(scalar_ok);
-    let stack_ptr = b
-        .ins()
-        .load(pointer_type, MemFlags::new(), vm_ptr, offsets.stack_ptr);
-    let dst_addr = value_addr(b, pointer_type, stack_ptr, stack_len, layout.value.size);
-    copy_value_bytes(b, src_addr, dst_addr, layout.value.size);
-    let one = b.ins().iconst(pointer_type, 1);
-    let new_len = b.ins().iadd(stack_len, one);
-    b.ins()
-        .store(MemFlags::new(), new_len, vm_ptr, offsets.stack_len);
-    b.ins().jump(next, &[]);
-
-    b.switch_to_block(slow);
-    emit_helper_step_from_call_tuple(
+    let _ = root_ip;
+    emit_shared_inline_trace_step(
         b,
         vm_ptr,
         helper_ref,
+        vm_status_helper_ref,
         exit_block,
-        next,
+        pointer_type,
+        layout,
         offsets,
         step_ip,
-        (OP_LDC, i64::from(index), 0, 0),
-    );
-
-    b.switch_to_block(next);
-    let _ = root_ip;
-    Ok(())
+        SharedNativeInlineStep::Ldc(index),
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1254,6 +1301,7 @@ fn emit_inline_ldloc(
     b: &mut FunctionBuilder,
     vm_ptr: cranelift_codegen::ir::Value,
     helper_ref: FuncRef,
+    vm_status_helper_ref: FuncRef,
     exit_block: Block,
     pointer_type: cranelift_codegen::ir::Type,
     layout: NativeStackLayout,
@@ -1262,65 +1310,19 @@ fn emit_inline_ldloc(
     root_ip: usize,
     step_ip: usize,
 ) -> VmResult<()> {
-    let slow = b.create_block();
-    let fast = b.create_block();
-    let next = b.create_block();
-
-    let locals_len = b
-        .ins()
-        .load(pointer_type, MemFlags::new(), vm_ptr, offsets.locals_len);
-    let idx = b.ins().iconst(pointer_type, i64::from(index));
-    let in_bounds = b.ins().icmp(IntCC::UnsignedLessThan, idx, locals_len);
-    b.ins().brif(in_bounds, fast, &[], slow, &[]);
-
-    b.switch_to_block(fast);
-    let stack_len = b
-        .ins()
-        .load(pointer_type, MemFlags::new(), vm_ptr, offsets.stack_len);
-    let stack_cap = b
-        .ins()
-        .load(pointer_type, MemFlags::new(), vm_ptr, offsets.stack_cap);
-    let has_capacity = b.ins().icmp(IntCC::UnsignedLessThan, stack_len, stack_cap);
-    let cap_ok = b.create_block();
-    b.ins().brif(has_capacity, cap_ok, &[], slow, &[]);
-
-    b.switch_to_block(cap_ok);
-    let locals_ptr = b
-        .ins()
-        .load(pointer_type, MemFlags::new(), vm_ptr, offsets.locals_ptr);
-    let src_addr = value_addr(b, pointer_type, locals_ptr, idx, layout.value.size);
-    let src_tag = load_tag_i32(b, layout.value, src_addr);
-    let scalar = is_scalar_tag(b, layout.value, src_tag);
-    let scalar_ok = b.create_block();
-    b.ins().brif(scalar, scalar_ok, &[], slow, &[]);
-
-    b.switch_to_block(scalar_ok);
-    let stack_ptr = b
-        .ins()
-        .load(pointer_type, MemFlags::new(), vm_ptr, offsets.stack_ptr);
-    let dst_addr = value_addr(b, pointer_type, stack_ptr, stack_len, layout.value.size);
-    copy_value_bytes(b, src_addr, dst_addr, layout.value.size);
-    let one = b.ins().iconst(pointer_type, 1);
-    let new_len = b.ins().iadd(stack_len, one);
-    b.ins()
-        .store(MemFlags::new(), new_len, vm_ptr, offsets.stack_len);
-    b.ins().jump(next, &[]);
-
-    b.switch_to_block(slow);
-    emit_helper_step_from_call_tuple(
+    let _ = root_ip;
+    emit_shared_inline_trace_step(
         b,
         vm_ptr,
         helper_ref,
+        vm_status_helper_ref,
         exit_block,
-        next,
+        pointer_type,
+        layout,
         offsets,
         step_ip,
-        (OP_LDLOC, i64::from(index), 0, 0),
-    );
-
-    b.switch_to_block(next);
-    let _ = root_ip;
-    Ok(())
+        SharedNativeInlineStep::Ldloc(index),
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1328,6 +1330,7 @@ fn emit_inline_stloc(
     b: &mut FunctionBuilder,
     vm_ptr: cranelift_codegen::ir::Value,
     helper_ref: FuncRef,
+    vm_status_helper_ref: FuncRef,
     exit_block: Block,
     pointer_type: cranelift_codegen::ir::Type,
     layout: NativeStackLayout,
@@ -1337,96 +1340,19 @@ fn emit_inline_stloc(
     step_ip: usize,
     drop_contract_events_enabled: bool,
 ) -> VmResult<()> {
-    let slow = b.create_block();
-    let fast = b.create_block();
-    let next = b.create_block();
-
-    let stack_len = b
-        .ins()
-        .load(pointer_type, MemFlags::new(), vm_ptr, offsets.stack_len);
-    let has_stack = b
-        .ins()
-        .icmp_imm(IntCC::UnsignedGreaterThanOrEqual, stack_len, 1);
-    b.ins().brif(has_stack, fast, &[], slow, &[]);
-
-    b.switch_to_block(fast);
-    let locals_len = b
-        .ins()
-        .load(pointer_type, MemFlags::new(), vm_ptr, offsets.locals_len);
-    let idx = b.ins().iconst(pointer_type, i64::from(index));
-    let in_bounds = b.ins().icmp(IntCC::UnsignedLessThan, idx, locals_len);
-    let bounds_ok = b.create_block();
-    b.ins().brif(in_bounds, bounds_ok, &[], slow, &[]);
-
-    b.switch_to_block(bounds_ok);
-    let one = b.ins().iconst(pointer_type, 1);
-    let src_index = b.ins().isub(stack_len, one);
-    let stack_ptr = b
-        .ins()
-        .load(pointer_type, MemFlags::new(), vm_ptr, offsets.stack_ptr);
-    let src_addr = value_addr(b, pointer_type, stack_ptr, src_index, layout.value.size);
-
-    let locals_ptr = b
-        .ins()
-        .load(pointer_type, MemFlags::new(), vm_ptr, offsets.locals_ptr);
-    let dst_addr = value_addr(b, pointer_type, locals_ptr, idx, layout.value.size);
-    let dst_tag = load_tag_i32(b, layout.value, dst_addr);
-
-    let dst_scalar = is_scalar_tag(b, layout.value, dst_tag);
-    let scalar_ok = b.create_block();
-    b.ins().brif(dst_scalar, scalar_ok, &[], slow, &[]);
-
-    b.switch_to_block(scalar_ok);
-    let copy_block = b.create_block();
-    let dst_is_null = b
-        .ins()
-        .icmp_imm(IntCC::Equal, dst_tag, i64::from(layout.value.null_tag));
-    if drop_contract_events_enabled {
-        let count_drop_block = b.create_block();
-        b.ins()
-            .brif(dst_is_null, copy_block, &[], count_drop_block, &[]);
-
-        b.switch_to_block(count_drop_block);
-        let drop_count = b.ins().load(
-            types::I64,
-            MemFlags::new(),
-            vm_ptr,
-            offsets.drop_contract_events,
-        );
-        let next_drop_count = b.ins().iadd_imm(drop_count, 1);
-        b.ins().store(
-            MemFlags::new(),
-            next_drop_count,
-            vm_ptr,
-            offsets.drop_contract_events,
-        );
-        b.ins().jump(copy_block, &[]);
-    } else {
-        b.ins().jump(copy_block, &[]);
-    }
-
-    b.switch_to_block(copy_block);
-    copy_value_bytes(b, src_addr, dst_addr, layout.value.size);
-    let new_len = b.ins().isub(stack_len, one);
-    b.ins()
-        .store(MemFlags::new(), new_len, vm_ptr, offsets.stack_len);
-    b.ins().jump(next, &[]);
-
-    b.switch_to_block(slow);
-    emit_helper_step_from_call_tuple(
+    let _ = (root_ip, drop_contract_events_enabled);
+    emit_shared_inline_trace_step(
         b,
         vm_ptr,
         helper_ref,
+        vm_status_helper_ref,
         exit_block,
-        next,
+        pointer_type,
+        layout,
         offsets,
         step_ip,
-        (OP_STLOC, i64::from(index), 0, 0),
-    );
-
-    b.switch_to_block(next);
-    let _ = root_ip;
-    Ok(())
+        SharedNativeInlineStep::Stloc(index),
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1434,6 +1360,7 @@ fn emit_inline_pop(
     b: &mut FunctionBuilder,
     vm_ptr: cranelift_codegen::ir::Value,
     helper_ref: FuncRef,
+    vm_status_helper_ref: FuncRef,
     exit_block: Block,
     pointer_type: cranelift_codegen::ir::Type,
     layout: NativeStackLayout,
@@ -1441,49 +1368,19 @@ fn emit_inline_pop(
     root_ip: usize,
     step_ip: usize,
 ) -> VmResult<()> {
-    let slow = b.create_block();
-    let fast = b.create_block();
-    let next = b.create_block();
-
-    let len = b
-        .ins()
-        .load(pointer_type, MemFlags::new(), vm_ptr, offsets.stack_len);
-    let has_stack = b.ins().icmp_imm(IntCC::UnsignedGreaterThanOrEqual, len, 1);
-    b.ins().brif(has_stack, fast, &[], slow, &[]);
-
-    b.switch_to_block(fast);
-    let one = b.ins().iconst(pointer_type, 1);
-    let top_index = b.ins().isub(len, one);
-    let stack_ptr = b
-        .ins()
-        .load(pointer_type, MemFlags::new(), vm_ptr, offsets.stack_ptr);
-    let top_addr = value_addr(b, pointer_type, stack_ptr, top_index, layout.value.size);
-    let top_tag = load_tag_i32(b, layout.value, top_addr);
-    let scalar = is_scalar_tag(b, layout.value, top_tag);
-    let scalar_ok = b.create_block();
-    b.ins().brif(scalar, scalar_ok, &[], slow, &[]);
-
-    b.switch_to_block(scalar_ok);
-    let new_len = b.ins().isub(len, one);
-    b.ins()
-        .store(MemFlags::new(), new_len, vm_ptr, offsets.stack_len);
-    b.ins().jump(next, &[]);
-
-    b.switch_to_block(slow);
-    emit_helper_step_from_call_tuple(
+    let _ = root_ip;
+    emit_shared_inline_trace_step(
         b,
         vm_ptr,
         helper_ref,
+        vm_status_helper_ref,
         exit_block,
-        next,
+        pointer_type,
+        layout,
         offsets,
         step_ip,
-        (OP_POP, 0, 0, 0),
-    );
-
-    b.switch_to_block(next);
-    let _ = root_ip;
-    Ok(())
+        SharedNativeInlineStep::Pop,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1491,6 +1388,7 @@ fn emit_inline_dup(
     b: &mut FunctionBuilder,
     vm_ptr: cranelift_codegen::ir::Value,
     helper_ref: FuncRef,
+    vm_status_helper_ref: FuncRef,
     exit_block: Block,
     pointer_type: cranelift_codegen::ir::Type,
     layout: NativeStackLayout,
@@ -1498,59 +1396,19 @@ fn emit_inline_dup(
     root_ip: usize,
     step_ip: usize,
 ) -> VmResult<()> {
-    let slow = b.create_block();
-    let fast = b.create_block();
-    let next = b.create_block();
-
-    let len = b
-        .ins()
-        .load(pointer_type, MemFlags::new(), vm_ptr, offsets.stack_len);
-    let has_stack = b.ins().icmp_imm(IntCC::UnsignedGreaterThanOrEqual, len, 1);
-    b.ins().brif(has_stack, fast, &[], slow, &[]);
-
-    b.switch_to_block(fast);
-    let cap = b
-        .ins()
-        .load(pointer_type, MemFlags::new(), vm_ptr, offsets.stack_cap);
-    let has_capacity = b.ins().icmp(IntCC::UnsignedLessThan, len, cap);
-    let cap_ok = b.create_block();
-    b.ins().brif(has_capacity, cap_ok, &[], slow, &[]);
-
-    b.switch_to_block(cap_ok);
-    let one = b.ins().iconst(pointer_type, 1);
-    let src_index = b.ins().isub(len, one);
-    let stack_ptr = b
-        .ins()
-        .load(pointer_type, MemFlags::new(), vm_ptr, offsets.stack_ptr);
-    let src_addr = value_addr(b, pointer_type, stack_ptr, src_index, layout.value.size);
-    let src_tag = load_tag_i32(b, layout.value, src_addr);
-    let scalar = is_scalar_tag(b, layout.value, src_tag);
-    let scalar_ok = b.create_block();
-    b.ins().brif(scalar, scalar_ok, &[], slow, &[]);
-
-    b.switch_to_block(scalar_ok);
-    let dst_addr = value_addr(b, pointer_type, stack_ptr, len, layout.value.size);
-    copy_value_bytes(b, src_addr, dst_addr, layout.value.size);
-    let new_len = b.ins().iadd(len, one);
-    b.ins()
-        .store(MemFlags::new(), new_len, vm_ptr, offsets.stack_len);
-    b.ins().jump(next, &[]);
-
-    b.switch_to_block(slow);
-    emit_helper_step_from_call_tuple(
+    let _ = root_ip;
+    emit_shared_inline_trace_step(
         b,
         vm_ptr,
         helper_ref,
+        vm_status_helper_ref,
         exit_block,
-        next,
+        pointer_type,
+        layout,
         offsets,
         step_ip,
-        (OP_DUP, 0, 0, 0),
-    );
-
-    b.switch_to_block(next);
-    let _ = root_ip;
-    Ok(())
+        SharedNativeInlineStep::Dup,
+    )
 }
 
 enum IntBinopKind {
@@ -1661,6 +1519,7 @@ fn emit_inline_int_binop(
     b: &mut FunctionBuilder,
     vm_ptr: cranelift_codegen::ir::Value,
     helper_ref: FuncRef,
+    vm_status_helper_ref: FuncRef,
     exit_block: Block,
     pointer_type: cranelift_codegen::ir::Type,
     layout: NativeStackLayout,
@@ -1669,87 +1528,23 @@ fn emit_inline_int_binop(
     step_ip: usize,
     kind: IntBinopKind,
 ) -> VmResult<()> {
-    let slow = b.create_block();
-    let len_ok = b.create_block();
-    let fast = b.create_block();
-    let next = b.create_block();
-
-    let len = b
-        .ins()
-        .load(pointer_type, MemFlags::new(), vm_ptr, offsets.stack_len);
-    let enough = b.ins().icmp_imm(IntCC::UnsignedGreaterThanOrEqual, len, 2);
-    b.ins().brif(enough, len_ok, &[], slow, &[]);
-
-    b.switch_to_block(len_ok);
-    let one = b.ins().iconst(pointer_type, 1);
-    let two = b.ins().iconst(pointer_type, 2);
-    let rhs_index = b.ins().isub(len, one);
-    let lhs_index = b.ins().isub(len, two);
-    let stack_ptr = b
-        .ins()
-        .load(pointer_type, MemFlags::new(), vm_ptr, offsets.stack_ptr);
-    let lhs_addr = value_addr(b, pointer_type, stack_ptr, lhs_index, layout.value.size);
-    let rhs_addr = value_addr(b, pointer_type, stack_ptr, rhs_index, layout.value.size);
-    let lhs_tag = load_tag_i32(b, layout.value, lhs_addr);
-    let rhs_tag = load_tag_i32(b, layout.value, rhs_addr);
-    let lhs_int = b
-        .ins()
-        .icmp_imm(IntCC::Equal, lhs_tag, i64::from(layout.value.int_tag));
-    let rhs_int = b
-        .ins()
-        .icmp_imm(IntCC::Equal, rhs_tag, i64::from(layout.value.int_tag));
-    let both_int = b.ins().band(lhs_int, rhs_int);
-    b.ins().brif(both_int, fast, &[], slow, &[]);
-
-    b.switch_to_block(fast);
-    let lhs = b.ins().load(
-        types::I64,
-        MemFlags::new(),
-        lhs_addr,
-        layout.value.int_payload_offset,
-    );
-    let rhs = b.ins().load(
-        types::I64,
-        MemFlags::new(),
-        rhs_addr,
-        layout.value.int_payload_offset,
-    );
-    let out = match kind {
-        IntBinopKind::Add => b.ins().iadd(lhs, rhs),
-        IntBinopKind::Sub => b.ins().isub(lhs, rhs),
-        IntBinopKind::Mul => b.ins().imul(lhs, rhs),
-    };
-    b.ins().store(
-        MemFlags::new(),
-        out,
-        lhs_addr,
-        layout.value.int_payload_offset,
-    );
-    let new_len = b.ins().isub(len, one);
-    b.ins()
-        .store(MemFlags::new(), new_len, vm_ptr, offsets.stack_len);
-    b.ins().jump(next, &[]);
-
-    b.switch_to_block(slow);
-    let op = match kind {
-        IntBinopKind::Add => OP_ADD,
-        IntBinopKind::Sub => OP_SUB,
-        IntBinopKind::Mul => OP_MUL,
-    };
-    emit_helper_step_from_call_tuple(
+    let _ = root_ip;
+    emit_shared_inline_trace_step(
         b,
         vm_ptr,
         helper_ref,
+        vm_status_helper_ref,
         exit_block,
-        next,
+        pointer_type,
+        layout,
         offsets,
         step_ip,
-        (op, 0, 0, 0),
-    );
-
-    b.switch_to_block(next);
-    let _ = root_ip;
-    Ok(())
+        match kind {
+            IntBinopKind::Add => SharedNativeInlineStep::Add,
+            IntBinopKind::Sub => SharedNativeInlineStep::Sub,
+            IntBinopKind::Mul => SharedNativeInlineStep::Mul,
+        },
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1757,6 +1552,7 @@ fn emit_inline_float_binop(
     b: &mut FunctionBuilder,
     vm_ptr: cranelift_codegen::ir::Value,
     helper_ref: FuncRef,
+    vm_status_helper_ref: FuncRef,
     exit_block: Block,
     pointer_type: cranelift_codegen::ir::Type,
     layout: NativeStackLayout,
@@ -1765,96 +1561,25 @@ fn emit_inline_float_binop(
     step_ip: usize,
     kind: FloatBinopKind,
 ) -> VmResult<()> {
-    let slow = b.create_block();
-    let len_ok = b.create_block();
-    let fast = b.create_block();
-    let next = b.create_block();
-
-    let len = b
-        .ins()
-        .load(pointer_type, MemFlags::new(), vm_ptr, offsets.stack_len);
-    let enough = b.ins().icmp_imm(IntCC::UnsignedGreaterThanOrEqual, len, 2);
-    b.ins().brif(enough, len_ok, &[], slow, &[]);
-
-    b.switch_to_block(len_ok);
-    let one = b.ins().iconst(pointer_type, 1);
-    let two = b.ins().iconst(pointer_type, 2);
-    let rhs_index = b.ins().isub(len, one);
-    let lhs_index = b.ins().isub(len, two);
-    let stack_ptr = b
-        .ins()
-        .load(pointer_type, MemFlags::new(), vm_ptr, offsets.stack_ptr);
-    let lhs_addr = value_addr(b, pointer_type, stack_ptr, lhs_index, layout.value.size);
-    let rhs_addr = value_addr(b, pointer_type, stack_ptr, rhs_index, layout.value.size);
-    let lhs_tag = load_tag_i32(b, layout.value, lhs_addr);
-    let rhs_tag = load_tag_i32(b, layout.value, rhs_addr);
-    let lhs_float = b
-        .ins()
-        .icmp_imm(IntCC::Equal, lhs_tag, i64::from(layout.value.float_tag));
-    let rhs_float = b
-        .ins()
-        .icmp_imm(IntCC::Equal, rhs_tag, i64::from(layout.value.float_tag));
-    let both_float = b.ins().band(lhs_float, rhs_float);
-    b.ins().brif(both_float, fast, &[], slow, &[]);
-
-    b.switch_to_block(fast);
-    let lhs = b.ins().load(
-        types::F64,
-        MemFlags::new(),
-        lhs_addr,
-        layout.value.float_payload_offset,
-    );
-    let rhs = b.ins().load(
-        types::F64,
-        MemFlags::new(),
-        rhs_addr,
-        layout.value.float_payload_offset,
-    );
-    let out = match kind {
-        FloatBinopKind::Add => b.ins().fadd(lhs, rhs),
-        FloatBinopKind::Sub => b.ins().fsub(lhs, rhs),
-        FloatBinopKind::Mul => b.ins().fmul(lhs, rhs),
-        FloatBinopKind::Div => b.ins().fdiv(lhs, rhs),
-        FloatBinopKind::Mod => {
-            let quotient = b.ins().fdiv(lhs, rhs);
-            let truncated = b.ins().trunc(quotient);
-            let product = b.ins().fmul(truncated, rhs);
-            b.ins().fsub(lhs, product)
-        }
-    };
-    b.ins().store(
-        MemFlags::new(),
-        out,
-        lhs_addr,
-        layout.value.float_payload_offset,
-    );
-    let new_len = b.ins().isub(len, one);
-    b.ins()
-        .store(MemFlags::new(), new_len, vm_ptr, offsets.stack_len);
-    b.ins().jump(next, &[]);
-
-    b.switch_to_block(slow);
-    let op = match kind {
-        FloatBinopKind::Add => OP_ADD,
-        FloatBinopKind::Sub => OP_SUB,
-        FloatBinopKind::Mul => OP_MUL,
-        FloatBinopKind::Div => OP_DIV,
-        FloatBinopKind::Mod => OP_MOD,
-    };
-    emit_helper_step_from_call_tuple(
+    let _ = root_ip;
+    emit_shared_inline_trace_step(
         b,
         vm_ptr,
         helper_ref,
+        vm_status_helper_ref,
         exit_block,
-        next,
+        pointer_type,
+        layout,
         offsets,
         step_ip,
-        (op, 0, 0, 0),
-    );
-
-    b.switch_to_block(next);
-    let _ = root_ip;
-    Ok(())
+        match kind {
+            FloatBinopKind::Add => SharedNativeInlineStep::FAdd,
+            FloatBinopKind::Sub => SharedNativeInlineStep::FSub,
+            FloatBinopKind::Mul => SharedNativeInlineStep::FMul,
+            FloatBinopKind::Div => SharedNativeInlineStep::FDiv,
+            FloatBinopKind::Mod => SharedNativeInlineStep::FMod,
+        },
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2209,35 +1934,28 @@ fn emit_inline_sconcat(
     b: &mut FunctionBuilder,
     vm_ptr: cranelift_codegen::ir::Value,
     helper_ref: FuncRef,
+    vm_status_helper_ref: FuncRef,
     exit_block: Block,
     pointer_type: cranelift_codegen::ir::Type,
+    layout: NativeStackLayout,
     offsets: ResolvedOffsets,
     helper_addr: usize,
     root_ip: usize,
     step_ip: usize,
 ) -> VmResult<()> {
-    let next = b.create_block();
-    let step_ip = i64::try_from(step_ip)
-        .map_err(|_| VmError::JitNative("step ip out of range for i64".to_string()))?;
-    let step_ip_val = b.ins().iconst(pointer_type, step_ip);
-    b.ins()
-        .store(MemFlags::new(), step_ip_val, vm_ptr, offsets.vm_ip);
-
-    let helper_addr = i64::try_from(helper_addr)
-        .map_err(|_| VmError::JitNative("sconcat helper address out of range".to_string()))?;
-    let helper_ptr = b.ins().iconst(pointer_type, helper_addr);
-    let call = b.ins().call_indirect(helper_ref, helper_ptr, &[vm_ptr]);
-    let status = b.inst_results(call)[0];
-
-    let is_continue = b
-        .ins()
-        .icmp_imm(IntCC::Equal, status, STATUS_CONTINUE as i64);
-    let else_args = [BlockArg::Value(status)];
-    b.ins().brif(is_continue, next, &[], exit_block, &else_args);
-
-    b.switch_to_block(next);
-    let _ = root_ip;
-    Ok(())
+    let _ = (helper_addr, root_ip);
+    emit_shared_inline_trace_step(
+        b,
+        vm_ptr,
+        helper_ref,
+        vm_status_helper_ref,
+        exit_block,
+        pointer_type,
+        layout,
+        offsets,
+        step_ip,
+        SharedNativeInlineStep::SConcat,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2245,6 +1963,7 @@ fn emit_inline_int_divrem(
     b: &mut FunctionBuilder,
     vm_ptr: cranelift_codegen::ir::Value,
     helper_ref: FuncRef,
+    vm_status_helper_ref: FuncRef,
     exit_block: Block,
     pointer_type: cranelift_codegen::ir::Type,
     layout: NativeStackLayout,
@@ -2253,97 +1972,23 @@ fn emit_inline_int_divrem(
     step_ip: usize,
     is_mod: bool,
 ) -> VmResult<()> {
-    let slow = b.create_block();
-    let len_ok = b.create_block();
-    let type_ok = b.create_block();
-    let non_zero = b.create_block();
-    let next = b.create_block();
-
-    let len = b
-        .ins()
-        .load(pointer_type, MemFlags::new(), vm_ptr, offsets.stack_len);
-    let enough = b.ins().icmp_imm(IntCC::UnsignedGreaterThanOrEqual, len, 2);
-    b.ins().brif(enough, len_ok, &[], slow, &[]);
-
-    b.switch_to_block(len_ok);
-    let one = b.ins().iconst(pointer_type, 1);
-    let two = b.ins().iconst(pointer_type, 2);
-    let rhs_index = b.ins().isub(len, one);
-    let lhs_index = b.ins().isub(len, two);
-    let stack_ptr = b
-        .ins()
-        .load(pointer_type, MemFlags::new(), vm_ptr, offsets.stack_ptr);
-    let lhs_addr = value_addr(b, pointer_type, stack_ptr, lhs_index, layout.value.size);
-    let rhs_addr = value_addr(b, pointer_type, stack_ptr, rhs_index, layout.value.size);
-    let lhs_tag = load_tag_i32(b, layout.value, lhs_addr);
-    let rhs_tag = load_tag_i32(b, layout.value, rhs_addr);
-    let lhs_int = b
-        .ins()
-        .icmp_imm(IntCC::Equal, lhs_tag, i64::from(layout.value.int_tag));
-    let rhs_int = b
-        .ins()
-        .icmp_imm(IntCC::Equal, rhs_tag, i64::from(layout.value.int_tag));
-    let both_int = b.ins().band(lhs_int, rhs_int);
-    b.ins().brif(both_int, type_ok, &[], slow, &[]);
-
-    b.switch_to_block(type_ok);
-    let lhs = b.ins().load(
-        types::I64,
-        MemFlags::new(),
-        lhs_addr,
-        layout.value.int_payload_offset,
-    );
-    let rhs = b.ins().load(
-        types::I64,
-        MemFlags::new(),
-        rhs_addr,
-        layout.value.int_payload_offset,
-    );
-    let rhs_not_zero = b.ins().icmp_imm(IntCC::NotEqual, rhs, 0);
-    b.ins().brif(rhs_not_zero, non_zero, &[], slow, &[]);
-
-    b.switch_to_block(non_zero);
-    let min_i64 = b.ins().iconst(types::I64, i64::MIN);
-    let neg_one = b.ins().iconst(types::I64, -1);
-    let lhs_is_min = b.ins().icmp(IntCC::Equal, lhs, min_i64);
-    let rhs_is_neg_one = b.ins().icmp(IntCC::Equal, rhs, neg_one);
-    let overflow_case = b.ins().band(lhs_is_min, rhs_is_neg_one);
-
-    let normal_block = b.create_block();
-    b.ins().brif(overflow_case, slow, &[], normal_block, &[]);
-
-    b.switch_to_block(normal_block);
-    let out = if is_mod {
-        b.ins().srem(lhs, rhs)
-    } else {
-        b.ins().sdiv(lhs, rhs)
-    };
-    b.ins().store(
-        MemFlags::new(),
-        out,
-        lhs_addr,
-        layout.value.int_payload_offset,
-    );
-    let new_len = b.ins().isub(len, one);
-    b.ins()
-        .store(MemFlags::new(), new_len, vm_ptr, offsets.stack_len);
-    b.ins().jump(next, &[]);
-
-    b.switch_to_block(slow);
-    emit_helper_step_from_call_tuple(
+    let _ = root_ip;
+    emit_shared_inline_trace_step(
         b,
         vm_ptr,
         helper_ref,
+        vm_status_helper_ref,
         exit_block,
-        next,
+        pointer_type,
+        layout,
         offsets,
         step_ip,
-        (if is_mod { OP_MOD } else { OP_DIV }, 0, 0, 0),
-    );
-
-    b.switch_to_block(next);
-    let _ = root_ip;
-    Ok(())
+        if is_mod {
+            SharedNativeInlineStep::Mod
+        } else {
+            SharedNativeInlineStep::Div
+        },
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2351,6 +1996,7 @@ fn emit_inline_shift(
     b: &mut FunctionBuilder,
     vm_ptr: cranelift_codegen::ir::Value,
     helper_ref: FuncRef,
+    vm_status_helper_ref: FuncRef,
     exit_block: Block,
     pointer_type: cranelift_codegen::ir::Type,
     layout: NativeStackLayout,
@@ -2359,123 +2005,50 @@ fn emit_inline_shift(
     step_ip: usize,
     kind: ShiftKind,
 ) -> VmResult<()> {
-    let slow = b.create_block();
-    let len_ok = b.create_block();
-    let type_ok = b.create_block();
-    let shift_ok = b.create_block();
-    let next = b.create_block();
-
-    let len = b
-        .ins()
-        .load(pointer_type, MemFlags::new(), vm_ptr, offsets.stack_len);
-    let enough = b.ins().icmp_imm(IntCC::UnsignedGreaterThanOrEqual, len, 2);
-    b.ins().brif(enough, len_ok, &[], slow, &[]);
-
-    b.switch_to_block(len_ok);
-    let one = b.ins().iconst(pointer_type, 1);
-    let two = b.ins().iconst(pointer_type, 2);
-    let rhs_index = b.ins().isub(len, one);
-    let lhs_index = b.ins().isub(len, two);
-    let stack_ptr = b
-        .ins()
-        .load(pointer_type, MemFlags::new(), vm_ptr, offsets.stack_ptr);
-    let lhs_addr = value_addr(b, pointer_type, stack_ptr, lhs_index, layout.value.size);
-    let rhs_addr = value_addr(b, pointer_type, stack_ptr, rhs_index, layout.value.size);
-    let lhs_tag = load_tag_i32(b, layout.value, lhs_addr);
-    let rhs_tag = load_tag_i32(b, layout.value, rhs_addr);
-    let lhs_int = b
-        .ins()
-        .icmp_imm(IntCC::Equal, lhs_tag, i64::from(layout.value.int_tag));
-    let rhs_int = b
-        .ins()
-        .icmp_imm(IntCC::Equal, rhs_tag, i64::from(layout.value.int_tag));
-    let both_int = b.ins().band(lhs_int, rhs_int);
-    b.ins().brif(both_int, type_ok, &[], slow, &[]);
-
-    b.switch_to_block(type_ok);
-    let lhs = b.ins().load(
-        types::I64,
-        MemFlags::new(),
-        lhs_addr,
-        layout.value.int_payload_offset,
-    );
-    let rhs = b.ins().load(
-        types::I64,
-        MemFlags::new(),
-        rhs_addr,
-        layout.value.int_payload_offset,
-    );
-    let shift_ge_zero = b.ins().icmp_imm(IntCC::SignedGreaterThanOrEqual, rhs, 0);
-    let shift_le_63 = b.ins().icmp_imm(IntCC::SignedLessThanOrEqual, rhs, 63);
-    let shift_in_range = b.ins().band(shift_ge_zero, shift_le_63);
-    b.ins().brif(shift_in_range, shift_ok, &[], slow, &[]);
-
-    b.switch_to_block(shift_ok);
-    let out = match kind {
-        ShiftKind::Left => b.ins().ishl(lhs, rhs),
-        ShiftKind::ArithmeticRight => b.ins().sshr(lhs, rhs),
-        ShiftKind::LogicalRight => b.ins().ushr(lhs, rhs),
-    };
-    b.ins().store(
-        MemFlags::new(),
-        out,
-        lhs_addr,
-        layout.value.int_payload_offset,
-    );
-    let new_len = b.ins().isub(len, one);
-    b.ins()
-        .store(MemFlags::new(), new_len, vm_ptr, offsets.stack_len);
-    b.ins().jump(next, &[]);
-
-    b.switch_to_block(slow);
-    emit_helper_step_from_call_tuple(
+    let _ = root_ip;
+    emit_shared_inline_trace_step(
         b,
         vm_ptr,
         helper_ref,
+        vm_status_helper_ref,
         exit_block,
-        next,
+        pointer_type,
+        layout,
         offsets,
         step_ip,
-        (
-            match kind {
-                ShiftKind::Left => OP_SHL,
-                ShiftKind::ArithmeticRight => OP_SHR,
-                ShiftKind::LogicalRight => OP_LSHR,
-            },
-            0,
-            0,
-            0,
-        ),
-    );
-
-    b.switch_to_block(next);
-    let _ = root_ip;
-    Ok(())
+        match kind {
+            ShiftKind::Left => SharedNativeInlineStep::Shl,
+            ShiftKind::ArithmeticRight => SharedNativeInlineStep::Shr,
+            ShiftKind::LogicalRight => SharedNativeInlineStep::Lshr,
+        },
+    )
 }
 
 fn emit_inline_not(
     b: &mut FunctionBuilder,
     vm_ptr: cranelift_codegen::ir::Value,
     helper_ref: FuncRef,
+    vm_status_helper_ref: FuncRef,
     exit_block: Block,
+    pointer_type: cranelift_codegen::ir::Type,
+    layout: NativeStackLayout,
     offsets: ResolvedOffsets,
     root_ip: usize,
     step_ip: usize,
 ) -> VmResult<()> {
-    let next = b.create_block();
-    emit_helper_step_from_call_tuple(
+    let _ = root_ip;
+    emit_shared_inline_trace_step(
         b,
         vm_ptr,
         helper_ref,
+        vm_status_helper_ref,
         exit_block,
-        next,
+        pointer_type,
+        layout,
         offsets,
         step_ip,
-        (OP_NOT, 0, 0, 0),
-    );
-    b.switch_to_block(next);
-    let _ = root_ip;
-    Ok(())
+        SharedNativeInlineStep::Not,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2483,6 +2056,7 @@ fn emit_inline_bool_logic(
     b: &mut FunctionBuilder,
     vm_ptr: cranelift_codegen::ir::Value,
     helper_ref: FuncRef,
+    vm_status_helper_ref: FuncRef,
     exit_block: Block,
     pointer_type: cranelift_codegen::ir::Type,
     layout: NativeStackLayout,
@@ -2491,79 +2065,23 @@ fn emit_inline_bool_logic(
     step_ip: usize,
     is_and: bool,
 ) -> VmResult<()> {
-    let slow = b.create_block();
-    let len_ok = b.create_block();
-    let type_ok = b.create_block();
-    let next = b.create_block();
-
-    let len = b
-        .ins()
-        .load(pointer_type, MemFlags::new(), vm_ptr, offsets.stack_len);
-    let enough = b.ins().icmp_imm(IntCC::UnsignedGreaterThanOrEqual, len, 2);
-    b.ins().brif(enough, len_ok, &[], slow, &[]);
-
-    b.switch_to_block(len_ok);
-    let one = b.ins().iconst(pointer_type, 1);
-    let two = b.ins().iconst(pointer_type, 2);
-    let rhs_index = b.ins().isub(len, one);
-    let lhs_index = b.ins().isub(len, two);
-    let stack_ptr = b
-        .ins()
-        .load(pointer_type, MemFlags::new(), vm_ptr, offsets.stack_ptr);
-    let lhs_addr = value_addr(b, pointer_type, stack_ptr, lhs_index, layout.value.size);
-    let rhs_addr = value_addr(b, pointer_type, stack_ptr, rhs_index, layout.value.size);
-    let lhs_tag = load_tag_i32(b, layout.value, lhs_addr);
-    let rhs_tag = load_tag_i32(b, layout.value, rhs_addr);
-    let lhs_bool = b
-        .ins()
-        .icmp_imm(IntCC::Equal, lhs_tag, i64::from(layout.value.bool_tag));
-    let rhs_bool = b
-        .ins()
-        .icmp_imm(IntCC::Equal, rhs_tag, i64::from(layout.value.bool_tag));
-    let both_bool = b.ins().band(lhs_bool, rhs_bool);
-    b.ins().brif(both_bool, type_ok, &[], slow, &[]);
-
-    b.switch_to_block(type_ok);
-    let lhs = b.ins().load(
-        types::I8,
-        MemFlags::new(),
-        lhs_addr,
-        layout.value.bool_payload_offset,
-    );
-    let rhs = b.ins().load(
-        types::I8,
-        MemFlags::new(),
-        rhs_addr,
-        layout.value.bool_payload_offset,
-    );
-    let lhs_non_zero = b.ins().icmp_imm(IntCC::NotEqual, lhs, 0);
-    let rhs_non_zero = b.ins().icmp_imm(IntCC::NotEqual, rhs, 0);
-    let out_bool = if is_and {
-        b.ins().band(lhs_non_zero, rhs_non_zero)
-    } else {
-        b.ins().bor(lhs_non_zero, rhs_non_zero)
-    };
-    store_bool_in_value(b, layout.value, lhs_addr, out_bool);
-    let new_len = b.ins().isub(len, one);
-    b.ins()
-        .store(MemFlags::new(), new_len, vm_ptr, offsets.stack_len);
-    b.ins().jump(next, &[]);
-
-    b.switch_to_block(slow);
-    emit_helper_step_from_call_tuple(
+    let _ = root_ip;
+    emit_shared_inline_trace_step(
         b,
         vm_ptr,
         helper_ref,
+        vm_status_helper_ref,
         exit_block,
-        next,
+        pointer_type,
+        layout,
         offsets,
         step_ip,
-        (if is_and { OP_AND } else { OP_OR }, 0, 0, 0),
-    );
-
-    b.switch_to_block(next);
-    let _ = root_ip;
-    Ok(())
+        if is_and {
+            SharedNativeInlineStep::And
+        } else {
+            SharedNativeInlineStep::Or
+        },
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2571,6 +2089,7 @@ fn emit_inline_neg(
     b: &mut FunctionBuilder,
     vm_ptr: cranelift_codegen::ir::Value,
     helper_ref: FuncRef,
+    vm_status_helper_ref: FuncRef,
     exit_block: Block,
     pointer_type: cranelift_codegen::ir::Type,
     layout: NativeStackLayout,
@@ -2578,57 +2097,19 @@ fn emit_inline_neg(
     root_ip: usize,
     step_ip: usize,
 ) -> VmResult<()> {
-    let slow = b.create_block();
-    let fast = b.create_block();
-    let next = b.create_block();
-
-    let len = b
-        .ins()
-        .load(pointer_type, MemFlags::new(), vm_ptr, offsets.stack_len);
-    let has_stack = b.ins().icmp_imm(IntCC::UnsignedGreaterThanOrEqual, len, 1);
-    b.ins().brif(has_stack, fast, &[], slow, &[]);
-
-    b.switch_to_block(fast);
-    let one = b.ins().iconst(pointer_type, 1);
-    let idx = b.ins().isub(len, one);
-    let stack_ptr = b
-        .ins()
-        .load(pointer_type, MemFlags::new(), vm_ptr, offsets.stack_ptr);
-    let addr = value_addr(b, pointer_type, stack_ptr, idx, layout.value.size);
-    let tag = load_tag_i32(b, layout.value, addr);
-    let is_int = b
-        .ins()
-        .icmp_imm(IntCC::Equal, tag, i64::from(layout.value.int_tag));
-    let int_ok = b.create_block();
-    b.ins().brif(is_int, int_ok, &[], slow, &[]);
-
-    b.switch_to_block(int_ok);
-    let value = b.ins().load(
-        types::I64,
-        MemFlags::new(),
-        addr,
-        layout.value.int_payload_offset,
-    );
-    let neg = b.ins().irsub_imm(value, 0);
-    b.ins()
-        .store(MemFlags::new(), neg, addr, layout.value.int_payload_offset);
-    b.ins().jump(next, &[]);
-
-    b.switch_to_block(slow);
-    emit_helper_step_from_call_tuple(
+    let _ = root_ip;
+    emit_shared_inline_trace_step(
         b,
         vm_ptr,
         helper_ref,
+        vm_status_helper_ref,
         exit_block,
-        next,
+        pointer_type,
+        layout,
         offsets,
         step_ip,
-        (OP_NEG, 0, 0, 0),
-    );
-
-    b.switch_to_block(next);
-    let _ = root_ip;
-    Ok(())
+        SharedNativeInlineStep::Neg,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2636,6 +2117,7 @@ fn emit_inline_float_neg(
     b: &mut FunctionBuilder,
     vm_ptr: cranelift_codegen::ir::Value,
     helper_ref: FuncRef,
+    vm_status_helper_ref: FuncRef,
     exit_block: Block,
     pointer_type: cranelift_codegen::ir::Type,
     layout: NativeStackLayout,
@@ -2643,61 +2125,19 @@ fn emit_inline_float_neg(
     root_ip: usize,
     step_ip: usize,
 ) -> VmResult<()> {
-    let slow = b.create_block();
-    let fast = b.create_block();
-    let next = b.create_block();
-
-    let len = b
-        .ins()
-        .load(pointer_type, MemFlags::new(), vm_ptr, offsets.stack_len);
-    let has_stack = b.ins().icmp_imm(IntCC::UnsignedGreaterThanOrEqual, len, 1);
-    b.ins().brif(has_stack, fast, &[], slow, &[]);
-
-    b.switch_to_block(fast);
-    let one = b.ins().iconst(pointer_type, 1);
-    let idx = b.ins().isub(len, one);
-    let stack_ptr = b
-        .ins()
-        .load(pointer_type, MemFlags::new(), vm_ptr, offsets.stack_ptr);
-    let addr = value_addr(b, pointer_type, stack_ptr, idx, layout.value.size);
-    let tag = load_tag_i32(b, layout.value, addr);
-    let is_float = b
-        .ins()
-        .icmp_imm(IntCC::Equal, tag, i64::from(layout.value.float_tag));
-    let float_ok = b.create_block();
-    b.ins().brif(is_float, float_ok, &[], slow, &[]);
-
-    b.switch_to_block(float_ok);
-    let value = b.ins().load(
-        types::F64,
-        MemFlags::new(),
-        addr,
-        layout.value.float_payload_offset,
-    );
-    let neg = b.ins().fneg(value);
-    b.ins().store(
-        MemFlags::new(),
-        neg,
-        addr,
-        layout.value.float_payload_offset,
-    );
-    b.ins().jump(next, &[]);
-
-    b.switch_to_block(slow);
-    emit_helper_step_from_call_tuple(
+    let _ = root_ip;
+    emit_shared_inline_trace_step(
         b,
         vm_ptr,
         helper_ref,
+        vm_status_helper_ref,
         exit_block,
-        next,
+        pointer_type,
+        layout,
         offsets,
         step_ip,
-        (OP_NEG, 0, 0, 0),
-    );
-
-    b.switch_to_block(next);
-    let _ = root_ip;
-    Ok(())
+        SharedNativeInlineStep::FNeg,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2705,6 +2145,7 @@ fn emit_inline_int_compare(
     b: &mut FunctionBuilder,
     vm_ptr: cranelift_codegen::ir::Value,
     helper_ref: FuncRef,
+    vm_status_helper_ref: FuncRef,
     exit_block: Block,
     pointer_type: cranelift_codegen::ir::Type,
     layout: NativeStackLayout,
@@ -2713,77 +2154,23 @@ fn emit_inline_int_compare(
     step_ip: usize,
     less_than: bool,
 ) -> VmResult<()> {
-    let slow = b.create_block();
-    let len_ok = b.create_block();
-    let fast = b.create_block();
-    let next = b.create_block();
-
-    let len = b
-        .ins()
-        .load(pointer_type, MemFlags::new(), vm_ptr, offsets.stack_len);
-    let enough = b.ins().icmp_imm(IntCC::UnsignedGreaterThanOrEqual, len, 2);
-    b.ins().brif(enough, len_ok, &[], slow, &[]);
-
-    b.switch_to_block(len_ok);
-    let one = b.ins().iconst(pointer_type, 1);
-    let two = b.ins().iconst(pointer_type, 2);
-    let rhs_index = b.ins().isub(len, one);
-    let lhs_index = b.ins().isub(len, two);
-    let stack_ptr = b
-        .ins()
-        .load(pointer_type, MemFlags::new(), vm_ptr, offsets.stack_ptr);
-    let lhs_addr = value_addr(b, pointer_type, stack_ptr, lhs_index, layout.value.size);
-    let rhs_addr = value_addr(b, pointer_type, stack_ptr, rhs_index, layout.value.size);
-    let lhs_tag = load_tag_i32(b, layout.value, lhs_addr);
-    let rhs_tag = load_tag_i32(b, layout.value, rhs_addr);
-    let lhs_int = b
-        .ins()
-        .icmp_imm(IntCC::Equal, lhs_tag, i64::from(layout.value.int_tag));
-    let rhs_int = b
-        .ins()
-        .icmp_imm(IntCC::Equal, rhs_tag, i64::from(layout.value.int_tag));
-    let both_int = b.ins().band(lhs_int, rhs_int);
-    b.ins().brif(both_int, fast, &[], slow, &[]);
-
-    b.switch_to_block(fast);
-    let lhs = b.ins().load(
-        types::I64,
-        MemFlags::new(),
-        lhs_addr,
-        layout.value.int_payload_offset,
-    );
-    let rhs = b.ins().load(
-        types::I64,
-        MemFlags::new(),
-        rhs_addr,
-        layout.value.int_payload_offset,
-    );
-    let cmp = if less_than {
-        b.ins().icmp(IntCC::SignedLessThan, lhs, rhs)
-    } else {
-        b.ins().icmp(IntCC::SignedGreaterThan, lhs, rhs)
-    };
-    store_bool_in_value(b, layout.value, lhs_addr, cmp);
-    let new_len = b.ins().isub(len, one);
-    b.ins()
-        .store(MemFlags::new(), new_len, vm_ptr, offsets.stack_len);
-    b.ins().jump(next, &[]);
-
-    b.switch_to_block(slow);
-    emit_helper_step_from_call_tuple(
+    let _ = root_ip;
+    emit_shared_inline_trace_step(
         b,
         vm_ptr,
         helper_ref,
+        vm_status_helper_ref,
         exit_block,
-        next,
+        pointer_type,
+        layout,
         offsets,
         step_ip,
-        (if less_than { OP_CLT } else { OP_CGT }, 0, 0, 0),
-    );
-
-    b.switch_to_block(next);
-    let _ = root_ip;
-    Ok(())
+        if less_than {
+            SharedNativeInlineStep::Clt
+        } else {
+            SharedNativeInlineStep::Cgt
+        },
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2791,6 +2178,7 @@ fn emit_inline_float_compare(
     b: &mut FunctionBuilder,
     vm_ptr: cranelift_codegen::ir::Value,
     helper_ref: FuncRef,
+    vm_status_helper_ref: FuncRef,
     exit_block: Block,
     pointer_type: cranelift_codegen::ir::Type,
     layout: NativeStackLayout,
@@ -2799,77 +2187,23 @@ fn emit_inline_float_compare(
     step_ip: usize,
     less_than: bool,
 ) -> VmResult<()> {
-    let slow = b.create_block();
-    let len_ok = b.create_block();
-    let fast = b.create_block();
-    let next = b.create_block();
-
-    let len = b
-        .ins()
-        .load(pointer_type, MemFlags::new(), vm_ptr, offsets.stack_len);
-    let enough = b.ins().icmp_imm(IntCC::UnsignedGreaterThanOrEqual, len, 2);
-    b.ins().brif(enough, len_ok, &[], slow, &[]);
-
-    b.switch_to_block(len_ok);
-    let one = b.ins().iconst(pointer_type, 1);
-    let two = b.ins().iconst(pointer_type, 2);
-    let rhs_index = b.ins().isub(len, one);
-    let lhs_index = b.ins().isub(len, two);
-    let stack_ptr = b
-        .ins()
-        .load(pointer_type, MemFlags::new(), vm_ptr, offsets.stack_ptr);
-    let lhs_addr = value_addr(b, pointer_type, stack_ptr, lhs_index, layout.value.size);
-    let rhs_addr = value_addr(b, pointer_type, stack_ptr, rhs_index, layout.value.size);
-    let lhs_tag = load_tag_i32(b, layout.value, lhs_addr);
-    let rhs_tag = load_tag_i32(b, layout.value, rhs_addr);
-    let lhs_float = b
-        .ins()
-        .icmp_imm(IntCC::Equal, lhs_tag, i64::from(layout.value.float_tag));
-    let rhs_float = b
-        .ins()
-        .icmp_imm(IntCC::Equal, rhs_tag, i64::from(layout.value.float_tag));
-    let both_float = b.ins().band(lhs_float, rhs_float);
-    b.ins().brif(both_float, fast, &[], slow, &[]);
-
-    b.switch_to_block(fast);
-    let lhs = b.ins().load(
-        types::F64,
-        MemFlags::new(),
-        lhs_addr,
-        layout.value.float_payload_offset,
-    );
-    let rhs = b.ins().load(
-        types::F64,
-        MemFlags::new(),
-        rhs_addr,
-        layout.value.float_payload_offset,
-    );
-    let cmp = if less_than {
-        b.ins().fcmp(FloatCC::LessThan, lhs, rhs)
-    } else {
-        b.ins().fcmp(FloatCC::GreaterThan, lhs, rhs)
-    };
-    store_bool_in_value(b, layout.value, lhs_addr, cmp);
-    let new_len = b.ins().isub(len, one);
-    b.ins()
-        .store(MemFlags::new(), new_len, vm_ptr, offsets.stack_len);
-    b.ins().jump(next, &[]);
-
-    b.switch_to_block(slow);
-    emit_helper_step_from_call_tuple(
+    let _ = root_ip;
+    emit_shared_inline_trace_step(
         b,
         vm_ptr,
         helper_ref,
+        vm_status_helper_ref,
         exit_block,
-        next,
+        pointer_type,
+        layout,
         offsets,
         step_ip,
-        (if less_than { OP_CLT } else { OP_CGT }, 0, 0, 0),
-    );
-
-    b.switch_to_block(next);
-    let _ = root_ip;
-    Ok(())
+        if less_than {
+            SharedNativeInlineStep::FClt
+        } else {
+            SharedNativeInlineStep::FCgt
+        },
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2877,6 +2211,7 @@ fn emit_inline_int_eq(
     b: &mut FunctionBuilder,
     vm_ptr: cranelift_codegen::ir::Value,
     helper_ref: FuncRef,
+    vm_status_helper_ref: FuncRef,
     exit_block: Block,
     pointer_type: cranelift_codegen::ir::Type,
     layout: NativeStackLayout,
@@ -2884,120 +2219,19 @@ fn emit_inline_int_eq(
     root_ip: usize,
     step_ip: usize,
 ) -> VmResult<()> {
-    let slow = b.create_block();
-    let len_ok = b.create_block();
-    let int_fast = b.create_block();
-    let bool_check = b.create_block();
-    let bool_fast = b.create_block();
-    let null_check = b.create_block();
-    let null_fast = b.create_block();
-    let next = b.create_block();
-
-    let len = b
-        .ins()
-        .load(pointer_type, MemFlags::new(), vm_ptr, offsets.stack_len);
-    let enough = b.ins().icmp_imm(IntCC::UnsignedGreaterThanOrEqual, len, 2);
-    b.ins().brif(enough, len_ok, &[], slow, &[]);
-
-    b.switch_to_block(len_ok);
-    let one = b.ins().iconst(pointer_type, 1);
-    let two = b.ins().iconst(pointer_type, 2);
-    let rhs_index = b.ins().isub(len, one);
-    let lhs_index = b.ins().isub(len, two);
-    let stack_ptr = b
-        .ins()
-        .load(pointer_type, MemFlags::new(), vm_ptr, offsets.stack_ptr);
-    let lhs_addr = value_addr(b, pointer_type, stack_ptr, lhs_index, layout.value.size);
-    let rhs_addr = value_addr(b, pointer_type, stack_ptr, rhs_index, layout.value.size);
-    let lhs_tag = load_tag_i32(b, layout.value, lhs_addr);
-    let rhs_tag = load_tag_i32(b, layout.value, rhs_addr);
-    let tags_equal = b.ins().icmp(IntCC::Equal, lhs_tag, rhs_tag);
-    let tag_eq = b.create_block();
-    b.ins().brif(tags_equal, tag_eq, &[], slow, &[]);
-
-    b.switch_to_block(tag_eq);
-    let lhs_int = b
-        .ins()
-        .icmp_imm(IntCC::Equal, lhs_tag, i64::from(layout.value.int_tag));
-    b.ins().brif(lhs_int, int_fast, &[], bool_check, &[]);
-
-    b.switch_to_block(bool_check);
-    let lhs_bool = b
-        .ins()
-        .icmp_imm(IntCC::Equal, lhs_tag, i64::from(layout.value.bool_tag));
-    b.ins().brif(lhs_bool, bool_fast, &[], null_check, &[]);
-
-    b.switch_to_block(null_check);
-    let lhs_null = b
-        .ins()
-        .icmp_imm(IntCC::Equal, lhs_tag, i64::from(layout.value.null_tag));
-    b.ins().brif(lhs_null, null_fast, &[], slow, &[]);
-
-    b.switch_to_block(int_fast);
-    let lhs = b.ins().load(
-        types::I64,
-        MemFlags::new(),
-        lhs_addr,
-        layout.value.int_payload_offset,
-    );
-    let rhs = b.ins().load(
-        types::I64,
-        MemFlags::new(),
-        rhs_addr,
-        layout.value.int_payload_offset,
-    );
-    let cmp = b.ins().icmp(IntCC::Equal, lhs, rhs);
-    store_bool_in_value(b, layout.value, lhs_addr, cmp);
-    let new_len = b.ins().isub(len, one);
-    b.ins()
-        .store(MemFlags::new(), new_len, vm_ptr, offsets.stack_len);
-    b.ins().jump(next, &[]);
-
-    b.switch_to_block(bool_fast);
-    let lhs_bool_value = b.ins().load(
-        types::I8,
-        MemFlags::new(),
-        lhs_addr,
-        layout.value.bool_payload_offset,
-    );
-    let rhs_bool_value = b.ins().load(
-        types::I8,
-        MemFlags::new(),
-        rhs_addr,
-        layout.value.bool_payload_offset,
-    );
-    let bool_eq = b.ins().icmp(IntCC::Equal, lhs_bool_value, rhs_bool_value);
-    store_bool_in_value(b, layout.value, lhs_addr, bool_eq);
-    let new_len_bool = b.ins().isub(len, one);
-    b.ins()
-        .store(MemFlags::new(), new_len_bool, vm_ptr, offsets.stack_len);
-    b.ins().jump(next, &[]);
-
-    b.switch_to_block(null_fast);
-    let null_eq = b
-        .ins()
-        .icmp_imm(IntCC::Equal, lhs_tag, i64::from(layout.value.null_tag));
-    store_bool_in_value(b, layout.value, lhs_addr, null_eq);
-    let new_len_null = b.ins().isub(len, one);
-    b.ins()
-        .store(MemFlags::new(), new_len_null, vm_ptr, offsets.stack_len);
-    b.ins().jump(next, &[]);
-
-    b.switch_to_block(slow);
-    emit_helper_step_from_call_tuple(
+    let _ = root_ip;
+    emit_shared_inline_trace_step(
         b,
         vm_ptr,
         helper_ref,
+        vm_status_helper_ref,
         exit_block,
-        next,
+        pointer_type,
+        layout,
         offsets,
         step_ip,
-        (OP_CEQ, 0, 0, 0),
-    );
-
-    b.switch_to_block(next);
-    let _ = root_ip;
-    Ok(())
+        SharedNativeInlineStep::Ceq,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3005,6 +2239,7 @@ fn emit_inline_float_eq(
     b: &mut FunctionBuilder,
     vm_ptr: cranelift_codegen::ir::Value,
     helper_ref: FuncRef,
+    vm_status_helper_ref: FuncRef,
     exit_block: Block,
     pointer_type: cranelift_codegen::ir::Type,
     layout: NativeStackLayout,
@@ -3012,73 +2247,19 @@ fn emit_inline_float_eq(
     root_ip: usize,
     step_ip: usize,
 ) -> VmResult<()> {
-    let slow = b.create_block();
-    let len_ok = b.create_block();
-    let fast = b.create_block();
-    let next = b.create_block();
-
-    let len = b
-        .ins()
-        .load(pointer_type, MemFlags::new(), vm_ptr, offsets.stack_len);
-    let enough = b.ins().icmp_imm(IntCC::UnsignedGreaterThanOrEqual, len, 2);
-    b.ins().brif(enough, len_ok, &[], slow, &[]);
-
-    b.switch_to_block(len_ok);
-    let one = b.ins().iconst(pointer_type, 1);
-    let two = b.ins().iconst(pointer_type, 2);
-    let rhs_index = b.ins().isub(len, one);
-    let lhs_index = b.ins().isub(len, two);
-    let stack_ptr = b
-        .ins()
-        .load(pointer_type, MemFlags::new(), vm_ptr, offsets.stack_ptr);
-    let lhs_addr = value_addr(b, pointer_type, stack_ptr, lhs_index, layout.value.size);
-    let rhs_addr = value_addr(b, pointer_type, stack_ptr, rhs_index, layout.value.size);
-    let lhs_tag = load_tag_i32(b, layout.value, lhs_addr);
-    let rhs_tag = load_tag_i32(b, layout.value, rhs_addr);
-    let lhs_float = b
-        .ins()
-        .icmp_imm(IntCC::Equal, lhs_tag, i64::from(layout.value.float_tag));
-    let rhs_float = b
-        .ins()
-        .icmp_imm(IntCC::Equal, rhs_tag, i64::from(layout.value.float_tag));
-    let both_float = b.ins().band(lhs_float, rhs_float);
-    b.ins().brif(both_float, fast, &[], slow, &[]);
-
-    b.switch_to_block(fast);
-    let lhs = b.ins().load(
-        types::F64,
-        MemFlags::new(),
-        lhs_addr,
-        layout.value.float_payload_offset,
-    );
-    let rhs = b.ins().load(
-        types::F64,
-        MemFlags::new(),
-        rhs_addr,
-        layout.value.float_payload_offset,
-    );
-    let cmp = b.ins().fcmp(FloatCC::Equal, lhs, rhs);
-    store_bool_in_value(b, layout.value, lhs_addr, cmp);
-    let new_len = b.ins().isub(len, one);
-    b.ins()
-        .store(MemFlags::new(), new_len, vm_ptr, offsets.stack_len);
-    b.ins().jump(next, &[]);
-
-    b.switch_to_block(slow);
-    emit_helper_step_from_call_tuple(
+    let _ = root_ip;
+    emit_shared_inline_trace_step(
         b,
         vm_ptr,
         helper_ref,
+        vm_status_helper_ref,
         exit_block,
-        next,
+        pointer_type,
+        layout,
         offsets,
         step_ip,
-        (OP_CEQ, 0, 0, 0),
-    );
-
-    b.switch_to_block(next);
-    let _ = root_ip;
-    Ok(())
+        SharedNativeInlineStep::FCeq,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3378,15 +2559,6 @@ fn emit_helper_step_from_call_tuple(
         .brif(is_continue, next_block, &[], exit_block, &else_args);
 }
 
-pub(super) fn jump_with_status(
-    b: &mut FunctionBuilder,
-    block: Block,
-    status: cranelift_codegen::ir::Value,
-) {
-    let args = [BlockArg::Value(status)];
-    b.ins().jump(block, &args);
-}
-
 fn value_addr(
     b: &mut FunctionBuilder,
     pointer_type: cranelift_codegen::ir::Type,
@@ -3437,28 +2609,6 @@ fn store_tag(
         .store(MemFlags::new(), raw, value_addr, layout.tag_offset);
 }
 
-fn is_scalar_tag(
-    b: &mut FunctionBuilder,
-    layout: ValueLayout,
-    tag: cranelift_codegen::ir::Value,
-) -> cranelift_codegen::ir::Value {
-    let is_null = b
-        .ins()
-        .icmp_imm(IntCC::Equal, tag, i64::from(layout.null_tag));
-    let is_int = b
-        .ins()
-        .icmp_imm(IntCC::Equal, tag, i64::from(layout.int_tag));
-    let is_float = b
-        .ins()
-        .icmp_imm(IntCC::Equal, tag, i64::from(layout.float_tag));
-    let is_bool = b
-        .ins()
-        .icmp_imm(IntCC::Equal, tag, i64::from(layout.bool_tag));
-    let scalar_a = b.ins().bor(is_null, is_int);
-    let scalar_b = b.ins().bor(is_float, is_bool);
-    b.ins().bor(scalar_a, scalar_b)
-}
-
 fn store_bool_in_value(
     b: &mut FunctionBuilder,
     layout: ValueLayout,
@@ -3475,30 +2625,6 @@ fn store_bool_in_value(
         value_addr,
         layout.bool_payload_offset,
     );
-}
-
-fn copy_value_bytes(
-    b: &mut FunctionBuilder,
-    src_addr: cranelift_codegen::ir::Value,
-    dst_addr: cranelift_codegen::ir::Value,
-    size: i32,
-) {
-    let mut offset = 0i32;
-    while offset + 8 <= size {
-        let chunk = b.ins().load(types::I64, MemFlags::new(), src_addr, offset);
-        b.ins().store(MemFlags::new(), chunk, dst_addr, offset);
-        offset += 8;
-    }
-    if offset + 4 <= size {
-        let chunk = b.ins().load(types::I32, MemFlags::new(), src_addr, offset);
-        b.ins().store(MemFlags::new(), chunk, dst_addr, offset);
-        offset += 4;
-    }
-    while offset < size {
-        let chunk = b.ins().load(types::I8, MemFlags::new(), src_addr, offset);
-        b.ins().store(MemFlags::new(), chunk, dst_addr, offset);
-        offset += 1;
-    }
 }
 
 pub(super) fn resolve_offsets(layout: NativeStackLayout) -> VmResult<ResolvedOffsets> {
@@ -3549,30 +2675,6 @@ pub(super) fn resolve_offsets(layout: NativeStackLayout) -> VmResult<ResolvedOff
         epoch_counter_ptr: layout.vm_epoch_counter_ptr_offset,
         drop_contract_events: layout.vm_drop_contract_events_offset,
     })
-}
-
-pub(super) fn helper_signature(
-    pointer_type: cranelift_codegen::ir::Type,
-    call_conv: cranelift_codegen::isa::CallConv,
-) -> Signature {
-    let mut sig = Signature::new(call_conv);
-    sig.params.push(AbiParam::new(pointer_type));
-    sig.params.push(AbiParam::new(types::I64));
-    sig.params.push(AbiParam::new(types::I64));
-    sig.params.push(AbiParam::new(types::I64));
-    sig.params.push(AbiParam::new(types::I64));
-    sig.returns.push(AbiParam::new(types::I32));
-    sig
-}
-
-pub(super) fn entry_signature(
-    pointer_type: cranelift_codegen::ir::Type,
-    call_conv: cranelift_codegen::isa::CallConv,
-) -> Signature {
-    let mut sig = Signature::new(call_conv);
-    sig.params.push(AbiParam::new(pointer_type));
-    sig.returns.push(AbiParam::new(types::I32));
-    sig
 }
 
 fn step_to_call(step: &TraceStep, root_ip: usize) -> VmResult<(i64, i64, i64, i64)> {

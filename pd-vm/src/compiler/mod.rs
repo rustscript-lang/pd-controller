@@ -29,15 +29,14 @@ pub use self::ir::{
     LocalSlot, MatchPattern, MatchTypePattern, Stmt, StructDecl, TypeSchema,
 };
 pub use self::pipeline::{
-    DeprecatedFunctionCall, InferredLocalTypeHint, UnknownInferredLocal,
-    collect_inferred_local_type_hints, collect_inferred_local_type_hints_at_path_with_options,
+    InferredLocalTypeHint, UnknownInferredLocal, collect_inferred_local_type_hints,
+    collect_inferred_local_type_hints_at_path_with_options,
     collect_inferred_local_type_hints_with_options, compile_source,
     compile_source_at_path_with_flavor_and_options, compile_source_file,
     compile_source_file_with_options, compile_source_for_repl, compile_source_for_repl_with_locals,
     compile_source_with_flavor, compile_source_with_flavor_and_options,
-    lint_deprecated_function_calls, lint_deprecated_function_calls_at_path_with_options,
-    lint_deprecated_function_calls_with_options, lint_trailing_function_return_semicolons,
-    lint_unknown_inferred_local_types, lint_unknown_inferred_local_types_at_path_with_options,
+    lint_trailing_function_return_semicolons, lint_unknown_inferred_local_types,
+    lint_unknown_inferred_local_types_at_path_with_options,
     lint_unknown_inferred_local_types_with_options, lint_unknown_type_annotations,
 };
 

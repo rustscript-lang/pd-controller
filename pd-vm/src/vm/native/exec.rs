@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use crate::{VmError, VmResult};
+use super::super::{VmError, VmResult};
 
 pub(crate) struct ExecutableBuffer {
     ptr: *mut u8,

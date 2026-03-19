@@ -2,15 +2,18 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
+pub(crate) mod aot;
 pub mod diagnostics;
 mod epoch;
 mod fuel;
 mod host;
 pub(crate) mod jit;
+pub(crate) mod native;
 mod store;
 mod superinstructions;
 #[cfg(test)]
 mod tests;
+pub use self::aot::AotArtifactError;
 pub use self::epoch::{EpochCheckpoint, EpochHandle};
 pub use self::fuel::FuelCheckpoint;
 pub use self::host::{
@@ -205,6 +208,8 @@ pub struct Vm {
     program_constants_len: usize,
     #[allow(dead_code)]
     native_helper_fn: usize,
+    #[allow(dead_code)]
+    native_interrupt_helper_fn: usize,
     program_cache_key: u64,
     program_cache_key_ready: bool,
     ip: usize,
@@ -218,6 +223,8 @@ pub struct Vm {
     resolved_calls: Vec<u16>,
     resolved_calls_dirty: bool,
     call_depth: usize,
+    aot_program: Option<aot::CompiledProgram>,
+    aot_exec_count: u64,
     jit: jit::TraceJitEngine,
     native_traces: HashMap<usize, jit::NativeTrace>,
     native_trace_exec_count: u64,
@@ -336,7 +343,8 @@ impl Vm {
             program,
             program_constants_ptr: program_constants_ptr as usize,
             program_constants_len,
-            native_helper_fn: jit::native::helper_entry_address(),
+            native_helper_fn: native::helper_entry_address(),
+            native_interrupt_helper_fn: native::interrupt_helper_entry_address(),
             program_cache_key: 0,
             program_cache_key_ready: false,
             ip: 0,
@@ -350,6 +358,8 @@ impl Vm {
             resolved_calls: Vec::new(),
             resolved_calls_dirty: true,
             call_depth: 0,
+            aot_program: None,
+            aot_exec_count: 0,
             jit: jit::TraceJitEngine::new(jit_config),
             native_traces: HashMap::new(),
             native_trace_exec_count: 0,
@@ -424,7 +434,7 @@ impl Vm {
     }
 
     #[allow(dead_code)]
-    pub(in crate::vm) fn record_jit_native_bridge_hit(&mut self, bridge_name: &'static str) {
+    pub(in crate::vm) fn record_native_bridge_hit(&mut self, bridge_name: &'static str) {
         if !self.jit_native_bridge_stats_enabled {
             return;
         }
@@ -984,6 +994,31 @@ impl Vm {
             }
             if let Some(active_debugger) = debugger.as_deref_mut() {
                 active_debugger.on_instruction(self);
+            }
+
+            if allow_jit && self.has_aot_program() {
+                let outcome = match self.execute_aot_entry() {
+                    Ok(outcome) => outcome,
+                    Err(err) => {
+                        if let Some(reason) = Self::yielded_interrupt_reason(&err) {
+                            self.mark_interrupt_yield(reason);
+                            if self.handle_debugger_error(&mut debugger, &err) {
+                                continue;
+                            }
+                            let status = VmStatus::Yielded;
+                            self.notify_debugger_status(&mut debugger, status);
+                            return Ok(status);
+                        }
+                        if self.handle_debugger_error(&mut debugger, &err) {
+                            continue;
+                        }
+                        return Err(err);
+                    }
+                };
+                if let Some(status) = self.finish_outcome(&mut debugger, outcome) {
+                    return Ok(status);
+                }
+                continue;
             }
 
             if allow_jit && self.jit_config().enabled {

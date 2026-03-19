@@ -44,30 +44,24 @@ const VM_POOL_MAX_PER_BUCKET: usize = 256;
 
 #[derive(Default)]
 struct VmPoolBuckets {
-    aot_enabled: Vec<Vm>,
     baseline: Vec<Vm>,
     jit_disabled: Vec<Vm>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct VmPoolKey {
-    prefer_aot: bool,
     jit_enabled: bool,
 }
 
 impl VmPoolKey {
-    const fn new(prefer_aot: bool, jit_enabled: bool) -> Self {
-        Self {
-            prefer_aot,
-            jit_enabled,
-        }
+    const fn new(jit_enabled: bool) -> Self {
+        Self { jit_enabled }
     }
 
     fn bucket_mut<'a>(&self, buckets: &'a mut VmPoolBuckets) -> &'a mut Vec<Vm> {
-        match (self.jit_enabled, self.prefer_aot) {
-            (false, _) => &mut buckets.jit_disabled,
-            (true, true) => &mut buckets.aot_enabled,
-            (true, false) => &mut buckets.baseline,
+        match self.jit_enabled {
+            false => &mut buckets.jit_disabled,
+            true => &mut buckets.baseline,
         }
     }
 }
@@ -159,13 +153,10 @@ pub async fn execute_vm_with_context(
     register_host_modules: HostModuleRegistrar,
     vm_execution: VmExecutionConfig,
 ) -> Result<(), VmExecutionError> {
-    let prefer_aot =
-        !debug.attach_debugger && matches!(vm_execution.interrupt, VmInterruptConfig::None);
     let AcquiredVmRunnerStore { vm_store, pool_key } = acquire_vm_runner_store(
         program,
         vm_context,
         register_host_modules,
-        prefer_aot,
         vm_execution.jit_enabled,
         vm_execution.drop_contract_events_enabled,
         !debug.attach_debugger,
@@ -348,30 +339,10 @@ fn new_vm_runner_store(
     program: &LoadedProgram,
     vm_context: SharedProxyVmContext,
     async_ops: SharedVmAsyncOps,
-    prefer_aot: bool,
     jit_enabled: bool,
     drop_contract_events_enabled: bool,
 ) -> VmRunnerStore {
-    let prefer_aot = prefer_aot
-        && jit_enabled
-        && !drop_contract_events_enabled
-        && std::env::var_os("PD_EDGE_DISABLE_NO_INTERRUPT_AOT").is_none();
-    let mut vm = if prefer_aot {
-        if let Some(bundle) = program.no_interrupt_aot_bundle.as_ref() {
-            match Vm::from_aot_bundle_bytes(bundle.as_ref().as_slice()) {
-                Ok(vm) => vm,
-                Err(_) => {
-                    let mut vm = Vm::new_shared(program.program.clone());
-                    let _ = vm.install_aot_bundle_bytes(bundle.as_ref().as_slice());
-                    vm
-                }
-            }
-        } else {
-            Vm::new_shared(program.program.clone())
-        }
-    } else {
-        Vm::new_shared(program.program.clone())
-    };
+    let mut vm = Vm::new_shared(program.program.clone());
     vm.set_drop_contract_events_enabled(drop_contract_events_enabled);
     if !jit_enabled {
         let mut jit_config = *vm.jit_config();
@@ -396,13 +367,12 @@ fn acquire_vm_runner_store(
     program: &LoadedProgram,
     vm_context: SharedProxyVmContext,
     register_host_modules: HostModuleRegistrar,
-    prefer_aot: bool,
     jit_enabled: bool,
     drop_contract_events_enabled: bool,
     pooling_enabled: bool,
 ) -> Result<AcquiredVmRunnerStore, VmExecutionError> {
     let async_ops = new_shared_vm_async_ops();
-    let pool_key = pooling_enabled.then(|| VmPoolKey::new(prefer_aot, jit_enabled));
+    let pool_key = pooling_enabled.then(|| VmPoolKey::new(jit_enabled));
     if let Some(pool_key) = pool_key
         && let Some(mut vm) = program.vm_pool.take(pool_key)
     {
@@ -418,7 +388,6 @@ fn acquire_vm_runner_store(
         program,
         vm_context,
         async_ops,
-        prefer_aot,
         jit_enabled,
         drop_contract_events_enabled,
     );
@@ -635,7 +604,6 @@ mod tests {
         let program = Arc::new(compiled.program.with_local_count(compiled.locals));
         let loaded_program = LoadedProgram {
             program,
-            no_interrupt_aot_bundle: None,
             vm_pool: Arc::new(LoadedProgramVmPool::new()),
         };
         let context = Arc::new(ProxyVmContext::from_request_headers(
@@ -643,7 +611,7 @@ mod tests {
             Arc::new(RateLimiterStore::new()),
         ));
         let async_ops = new_shared_vm_async_ops();
-        let store = new_vm_runner_store(&loaded_program, context, async_ops, false, true, false);
+        let store = new_vm_runner_store(&loaded_program, context, async_ops, true, false);
         let debug = VmDebugInvocation {
             attach_debugger: false,
             force_threading: false,
@@ -716,7 +684,6 @@ mod tests {
         let program = Arc::new(vm::Program::new(vec![], vec![vm::OpCode::Ret as u8]));
         let loaded_program = LoadedProgram {
             program,
-            no_interrupt_aot_bundle: None,
             vm_pool: Arc::new(LoadedProgramVmPool::new()),
         };
         let context = Arc::new(ProxyVmContext::from_request_headers(
@@ -730,7 +697,6 @@ mod tests {
             &loaded_program,
             context.clone(),
             counting_host_modules,
-            false,
             true,
             false,
             true,
@@ -747,7 +713,6 @@ mod tests {
             &loaded_program,
             context,
             counting_host_modules,
-            false,
             true,
             false,
             true,

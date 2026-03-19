@@ -1,5 +1,50 @@
-use super::*;
-pub(super) fn detect_native_stack_layout() -> VmResult<NativeStackLayout> {
+use std::sync::OnceLock;
+
+use super::super::{Value, Vm, VmError, VmResult};
+
+static NATIVE_STACK_LAYOUT: OnceLock<Result<NativeStackLayout, String>> = OnceLock::new();
+
+#[derive(Clone, Copy)]
+pub(crate) struct VecLayout {
+    pub(crate) ptr_offset: i32,
+    pub(crate) len_offset: i32,
+    pub(crate) cap_offset: i32,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct ValueLayout {
+    pub(crate) size: i32,
+    pub(crate) tag_offset: i32,
+    pub(crate) tag_size: u8,
+    pub(crate) null_tag: u32,
+    pub(crate) int_tag: u32,
+    pub(crate) float_tag: u32,
+    pub(crate) bool_tag: u32,
+    pub(crate) int_payload_offset: i32,
+    pub(crate) float_payload_offset: i32,
+    pub(crate) bool_payload_offset: i32,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct NativeStackLayout {
+    pub(crate) vm_stack_offset: i32,
+    pub(crate) vm_locals_offset: i32,
+    pub(crate) vm_program_constants_ptr_offset: i32,
+    pub(crate) vm_program_constants_len_offset: i32,
+    pub(crate) vm_ip_offset: i32,
+    pub(crate) vm_interrupt_mode_offset: i32,
+    pub(crate) vm_fuel_remaining_offset: i32,
+    pub(crate) vm_fuel_check_interval_offset: i32,
+    pub(crate) vm_fuel_ops_until_check_offset: i32,
+    pub(crate) vm_epoch_deadline_offset: i32,
+    pub(crate) vm_epoch_counter_ptr_offset: i32,
+    pub(crate) vm_drop_contract_events_enabled_offset: i32,
+    pub(crate) vm_drop_contract_events_offset: i32,
+    pub(crate) stack_vec: VecLayout,
+    pub(crate) value: ValueLayout,
+}
+
+pub(crate) fn detect_native_stack_layout() -> VmResult<NativeStackLayout> {
     let cached = NATIVE_STACK_LAYOUT
         .get_or_init(|| detect_native_stack_layout_uncached().map_err(layout_probe_error_message));
     match cached {
@@ -44,6 +89,10 @@ fn detect_native_stack_layout_uncached() -> VmResult<NativeStackLayout> {
         std::mem::offset_of!(Vm, epoch_counter_ptr),
         "Vm::epoch_counter_ptr offset",
     )?;
+    let vm_drop_contract_events_enabled_offset = usize_to_i32(
+        std::mem::offset_of!(Vm, drop_contract_events_enabled),
+        "Vm::drop_contract_events_enabled offset",
+    )?;
     let vm_drop_contract_events_offset = usize_to_i32(
         std::mem::offset_of!(Vm, drop_contract_events),
         "Vm::drop_contract_events offset",
@@ -62,6 +111,7 @@ fn detect_native_stack_layout_uncached() -> VmResult<NativeStackLayout> {
         vm_fuel_ops_until_check_offset,
         vm_epoch_deadline_offset,
         vm_epoch_counter_ptr_offset,
+        vm_drop_contract_events_enabled_offset,
         vm_drop_contract_events_offset,
         stack_vec,
         value,
@@ -312,7 +362,7 @@ fn encode_value_bytes(value: Value) -> Vec<u8> {
     bytes
 }
 
-pub(super) fn checked_add_i32(lhs: i32, rhs: i32, context: &str) -> VmResult<i32> {
+pub(crate) fn checked_add_i32(lhs: i32, rhs: i32, context: &str) -> VmResult<i32> {
     lhs.checked_add(rhs)
         .ok_or_else(|| VmError::JitNative(context.to_string()))
 }

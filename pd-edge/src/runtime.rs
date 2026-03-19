@@ -165,7 +165,6 @@ pub struct SharedState {
 #[derive(Clone)]
 pub struct LoadedProgram {
     pub program: Arc<Program>,
-    pub no_interrupt_aot_bundle: Option<Arc<Vec<u8>>>,
     pub(crate) vm_pool: Arc<vm_runner::LoadedProgramVmPool>,
 }
 
@@ -717,20 +716,8 @@ pub async fn apply_program_from_bytes(state: &SharedState, bytes: &[u8]) -> Prog
     let const_count = program.constants.len();
     let code_len = program.code.len();
     let program = Arc::new(program);
-    let no_interrupt_aot_bundle =
-        match Vm::new_shared(program.clone()).emit_aot_bundle_with_fuel_check_interval(0) {
-            Ok(bundle) => Some(Arc::new(bundle)),
-            Err(err) => {
-                warn!(
-                    "{} native AOT bundle unavailable for loaded program: {err}",
-                    category_program()
-                );
-                None
-            }
-        };
     state.active_program.store(Some(Arc::new(LoadedProgram {
         program,
-        no_interrupt_aot_bundle,
         vm_pool: Arc::new(vm_runner::LoadedProgramVmPool::new()),
     })));
     state.record_program_apply_success();

@@ -3,8 +3,7 @@ use std::path::Path;
 use vm::{
     CompileSourceFileOptions, CompiledProgram, SourceError, SourceFlavor, SourceMap,
     SourcePathError, compile_source_at_path_with_flavor_and_options,
-    compile_source_with_flavor_and_options, lint_deprecated_function_calls_at_path_with_options,
-    lint_deprecated_function_calls_with_options, lint_trailing_function_return_semicolons,
+    compile_source_with_flavor_and_options, lint_trailing_function_return_semicolons,
     lint_unknown_inferred_local_types_at_path_with_options,
     lint_unknown_inferred_local_types_with_options, render_compile_error, render_source_error,
 };
@@ -112,9 +111,6 @@ fn lint_compile_result(
         Err(SourcePathError::Source(SourceError::Compile(err))) => {
             let mut diagnostics =
                 lint_trailing_function_return_semicolon_diagnostics(source, flavor);
-            diagnostics.extend(lint_deprecated_function_call_diagnostics(
-                source, flavor, path, options,
-            ));
             diagnostics.extend(lint_unknown_inferred_local_diagnostics(
                 source, flavor, path, options,
             ));
@@ -184,9 +180,6 @@ pub(crate) fn lint_success_diagnostics(
 ) -> Vec<LintDiagnostic> {
     let mut diagnostics = lint_trailing_function_return_semicolon_diagnostics(source, flavor);
     let _ = compiled;
-    diagnostics.extend(lint_deprecated_function_call_diagnostics(
-        source, flavor, path, options,
-    ));
     diagnostics.extend(lint_unknown_inferred_local_diagnostics(
         source, flavor, path, options,
     ));
@@ -252,48 +245,6 @@ fn lint_unknown_inferred_local_diagnostics(
                 line: warning.line,
                 severity: LintSeverity::Warning,
                 message,
-                span: lint_span,
-                rendered,
-            })
-        })
-        .collect()
-}
-
-fn lint_deprecated_function_call_diagnostics(
-    source: &str,
-    flavor: SourceFlavor,
-    path: Option<&Path>,
-    options: &CompileSourceFileOptions,
-) -> Vec<LintDiagnostic> {
-    let warnings = if let Some(path) = path {
-        lint_deprecated_function_calls_at_path_with_options(path, source, flavor, options.clone())
-    } else {
-        lint_deprecated_function_calls_with_options(source, flavor, options.clone())
-    };
-    let Ok(warnings) = warnings else {
-        return Vec::new();
-    };
-
-    let mut source_map = SourceMap::new();
-    let source_id = source_map.add_source("<lint>", source.to_string());
-    warnings
-        .into_iter()
-        .filter_map(|warning| {
-            let span = warning
-                .span
-                .or_else(|| source_map.line_span(source_id, warning.line))?;
-            let lint_span = lint_span_from_source_span(&source_map, source_id, span.lo, span.hi);
-            let rendered = render_lint_warning(
-                &source_map,
-                source_id,
-                span.lo,
-                span.hi,
-                warning.message.as_str(),
-            );
-            Some(LintDiagnostic {
-                line: warning.line,
-                severity: LintSeverity::Warning,
-                message: warning.message,
                 span: lint_span,
                 rendered,
             })

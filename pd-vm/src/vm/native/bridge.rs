@@ -1,4 +1,94 @@
-use super::*;
+use crate::builtins::BuiltinFunction;
+use crate::vm::{HostCallExecOutcome, NumericValue, Vm, VmError, VmResult, logical_shr_i64};
+use std::sync::{Mutex, OnceLock};
+
+pub(crate) const STATUS_CONTINUE: i32 = 0;
+pub(crate) const STATUS_HALTED: i32 = 1;
+pub(crate) const STATUS_TRACE_EXIT: i32 = 2;
+pub(crate) const STATUS_YIELDED: i32 = 3;
+pub(crate) const STATUS_WAITING: i32 = 4;
+pub(crate) const STATUS_OUT_OF_FUEL: i32 = 5;
+pub(crate) const STATUS_ERROR: i32 = -1;
+
+pub(crate) const OP_LDC: i64 = 1;
+pub(crate) const OP_ADD: i64 = 2;
+pub(crate) const OP_SUB: i64 = 3;
+pub(crate) const OP_MUL: i64 = 4;
+pub(crate) const OP_DIV: i64 = 5;
+pub(crate) const OP_MOD: i64 = 6;
+pub(crate) const OP_SHL: i64 = 7;
+pub(crate) const OP_SHR: i64 = 8;
+pub(crate) const OP_LSHR: i64 = 9;
+pub(crate) const OP_AND: i64 = 10;
+pub(crate) const OP_OR: i64 = 11;
+pub(crate) const OP_NOT: i64 = 12;
+pub(crate) const OP_NEG: i64 = 13;
+pub(crate) const OP_CEQ: i64 = 14;
+pub(crate) const OP_CLT: i64 = 15;
+pub(crate) const OP_CGT: i64 = 16;
+pub(crate) const OP_POP: i64 = 17;
+pub(crate) const OP_DUP: i64 = 18;
+pub(crate) const OP_LDLOC: i64 = 19;
+pub(crate) const OP_STLOC: i64 = 20;
+pub(crate) const OP_CALL: i64 = 21;
+pub(crate) const OP_GUARD_FALSE: i64 = 22;
+pub(crate) const OP_JUMP: i64 = 23;
+pub(crate) const OP_BUILTIN_CALL: i64 = 24;
+pub(crate) const OP_GUARD_TRUE: i64 = 25;
+pub(crate) const OP_LOOP_IF_FALSE: i64 = 26;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum NativeInterruptMode {
+    Fuel,
+    Epoch,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct NativeInterruptSettings {
+    pub(crate) mode: NativeInterruptMode,
+    pub(crate) check_interval: u32,
+}
+
+impl NativeInterruptSettings {
+    pub(crate) const fn fuel(check_interval: u32) -> Self {
+        Self {
+            mode: NativeInterruptMode::Fuel,
+            check_interval,
+        }
+    }
+
+    pub(crate) const fn epoch(check_interval: u32) -> Self {
+        Self {
+            mode: NativeInterruptMode::Epoch,
+            check_interval,
+        }
+    }
+}
+
+static GENERIC_BRIDGE_ERROR: OnceLock<Mutex<Option<VmError>>> = OnceLock::new();
+
+fn generic_bridge_error_cell() -> &'static Mutex<Option<VmError>> {
+    GENERIC_BRIDGE_ERROR.get_or_init(|| Mutex::new(None))
+}
+
+pub(crate) fn store_bridge_error(error: VmError) {
+    if let Ok(mut guard) = generic_bridge_error_cell().lock() {
+        *guard = Some(error);
+    }
+}
+
+pub(crate) fn clear_bridge_error() {
+    if let Ok(mut guard) = generic_bridge_error_cell().lock() {
+        *guard = None;
+    }
+}
+
+pub(crate) fn take_bridge_error() -> Option<VmError> {
+    if let Ok(mut guard) = generic_bridge_error_cell().lock() {
+        return guard.take();
+    }
+    None
+}
 
 fn run_step<F>(vm: *mut Vm, helper_name: &str, f: F) -> i32
 where
@@ -6,7 +96,7 @@ where
 {
     let Some(vm_ref) = (unsafe { vm.as_mut() }) else {
         store_bridge_error(VmError::JitNative(format!(
-            "cranelift trace {helper_name} helper received null vm pointer"
+            "native {helper_name} helper received null vm pointer"
         )));
         return STATUS_ERROR;
     };
@@ -52,7 +142,55 @@ fn bridge_name_for_op(op: i64) -> Option<&'static str> {
     }
 }
 
-pub(super) extern "C" fn pd_vm_cranelift_step(vm: *mut Vm, op: i64, a: i64, b: i64, c: i64) -> i32 {
+pub(crate) fn helper_entry_address() -> usize {
+    pd_vm_native_step as *const () as usize
+}
+
+pub(crate) fn interrupt_helper_entry_address() -> usize {
+    pd_vm_native_interrupt_tick as *const () as usize
+}
+
+pub(crate) fn string_concat_helper_entry_address() -> usize {
+    pd_vm_native_sconcat as *const () as usize
+}
+
+pub(crate) fn helper_entry_offset() -> i32 {
+    i32::try_from(std::mem::offset_of!(Vm, native_helper_fn))
+        .expect("Vm::native_helper_fn offset must fit i32")
+}
+
+pub(crate) fn interrupt_helper_entry_offset() -> i32 {
+    i32::try_from(std::mem::offset_of!(Vm, native_interrupt_helper_fn))
+        .expect("Vm::native_interrupt_helper_fn offset must fit i32")
+}
+
+pub(crate) extern "C" fn pd_vm_native_interrupt_tick(vm: *mut Vm) -> i32 {
+    let Some(vm_ref) = (unsafe { vm.as_mut() }) else {
+        store_bridge_error(VmError::JitNative(
+            "native interrupt helper received null vm pointer".to_string(),
+        ));
+        return STATUS_ERROR;
+    };
+
+    match vm_ref.charge_interrupt_tick() {
+        Ok(()) => STATUS_CONTINUE,
+        Err(VmError::OutOfFuel { .. } | VmError::EpochDeadlineReached { .. }) => STATUS_OUT_OF_FUEL,
+        Err(err) => {
+            store_bridge_error(err);
+            STATUS_ERROR
+        }
+    }
+}
+
+pub(crate) extern "C" fn pd_vm_native_sconcat(vm: *mut Vm) -> i32 {
+    run_step(vm, "sconcat", |vm| {
+        vm.record_native_bridge_hit("sconcat");
+        vm.string_concat_op()?;
+        Ok(STATUS_CONTINUE)
+    })
+}
+
+pub(crate) extern "C" fn pd_vm_native_step(vm: *mut Vm, op: i64, a: i64, b: i64, c: i64) -> i32 {
     run_step(vm, "step", |vm| {
         if op == OP_BUILTIN_CALL {
             let bridge_name = u16::try_from(a)
@@ -60,9 +198,9 @@ pub(super) extern "C" fn pd_vm_cranelift_step(vm: *mut Vm, op: i64, a: i64, b: i
                 .and_then(BuiltinFunction::from_call_index)
                 .map(BuiltinFunction::name)
                 .unwrap_or("builtin_call");
-            vm.record_jit_native_bridge_hit(bridge_name);
+            vm.record_native_bridge_hit(bridge_name);
         } else if let Some(name) = bridge_name_for_op(op) {
-            vm.record_jit_native_bridge_hit(name);
+            vm.record_native_bridge_hit(name);
         }
 
         match op {
@@ -122,9 +260,7 @@ pub(super) extern "C" fn pd_vm_cranelift_step(vm: *mut Vm, op: i64, a: i64, b: i
                 let rhs = vm.pop_shift_amount()?;
                 let lhs = vm.pop_int()?;
                 vm.stack
-                    .push(crate::bytecode::Value::Int(crate::vm::logical_shr_i64(
-                        lhs, rhs,
-                    )));
+                    .push(crate::bytecode::Value::Int(logical_shr_i64(lhs, rhs)));
                 Ok(STATUS_CONTINUE)
             }
             OP_AND => {
@@ -263,16 +399,8 @@ pub(super) extern "C" fn pd_vm_cranelift_step(vm: *mut Vm, op: i64, a: i64, b: i
                 Ok(STATUS_TRACE_EXIT)
             }
             _ => Err(VmError::JitNative(format!(
-                "cranelift step helper received unsupported op id {op}"
+                "native step helper received unsupported op id {op}"
             ))),
         }
-    })
-}
-
-pub(super) extern "C" fn pd_vm_cranelift_sconcat(vm: *mut Vm) -> i32 {
-    run_step(vm, "sconcat", |vm| {
-        vm.record_jit_native_bridge_hit("sconcat");
-        vm.string_concat_op()?;
-        Ok(STATUS_CONTINUE)
     })
 }

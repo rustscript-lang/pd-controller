@@ -1,59 +1,19 @@
-use super::super::super::{VmError, VmResult};
-use std::sync::{Mutex, OnceLock};
+#[cfg(not(feature = "cranelift-jit"))]
+use super::super::super::VmError;
+use super::super::super::VmResult;
+
+pub(crate) use crate::vm::native::{
+    NativeInterruptMode, NativeInterruptSettings, STATUS_CONTINUE, STATUS_ERROR, STATUS_HALTED,
+    STATUS_OUT_OF_FUEL, STATUS_TRACE_EXIT, STATUS_WAITING, STATUS_YIELDED, clear_bridge_error,
+    selected_codegen_backend, take_bridge_error,
+};
 
 #[cfg(feature = "cranelift-jit")]
 mod cranelift;
-mod exec;
-
-pub(super) const STATUS_CONTINUE: i32 = 0;
-pub(super) const STATUS_HALTED: i32 = 1;
-pub(super) const STATUS_TRACE_EXIT: i32 = 2;
-pub(super) const STATUS_YIELDED: i32 = 3;
-pub(super) const STATUS_WAITING: i32 = 4;
-pub(super) const STATUS_OUT_OF_FUEL: i32 = 5;
-pub(super) const STATUS_ERROR: i32 = -1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(super) enum NativeCompileProfile {
     Jit,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(super) enum NativeInterruptMode {
-    Fuel,
-    Epoch,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(super) struct NativeInterruptSettings {
-    pub(super) mode: NativeInterruptMode,
-    pub(super) check_interval: u32,
-}
-
-impl NativeInterruptSettings {
-    pub(super) const fn fuel(check_interval: u32) -> Self {
-        Self {
-            mode: NativeInterruptMode::Fuel,
-            check_interval,
-        }
-    }
-
-    pub(super) const fn epoch(check_interval: u32) -> Self {
-        Self {
-            mode: NativeInterruptMode::Epoch,
-            check_interval,
-        }
-    }
-}
-
-#[cfg(feature = "cranelift-jit")]
-pub(super) fn selected_codegen_backend() -> &'static str {
-    "native"
-}
-
-#[cfg(not(feature = "cranelift-jit"))]
-pub(super) fn selected_codegen_backend() -> &'static str {
-    "native-disabled"
 }
 
 #[cfg(feature = "cranelift-jit")]
@@ -94,42 +54,6 @@ pub(super) fn compile_native_trace(
     Err(VmError::JitNative(
         "native JIT backend is disabled (feature 'cranelift-jit' is not enabled)".to_string(),
     ))
-}
-
-#[cfg(feature = "cranelift-jit")]
-pub(crate) fn helper_entry_address() -> usize {
-    cranelift::helper_entry_address()
-}
-
-#[cfg(not(feature = "cranelift-jit"))]
-pub(crate) fn helper_entry_address() -> usize {
-    0
-}
-
-static GENERIC_BRIDGE_ERROR: OnceLock<Mutex<Option<VmError>>> = OnceLock::new();
-
-fn generic_bridge_error_cell() -> &'static Mutex<Option<VmError>> {
-    GENERIC_BRIDGE_ERROR.get_or_init(|| Mutex::new(None))
-}
-
-#[allow(dead_code)]
-pub(super) fn store_bridge_error(error: VmError) {
-    if let Ok(mut guard) = generic_bridge_error_cell().lock() {
-        *guard = Some(error);
-    }
-}
-
-pub(super) fn clear_bridge_error() {
-    if let Ok(mut guard) = generic_bridge_error_cell().lock() {
-        *guard = None;
-    }
-}
-
-pub(super) fn take_bridge_error() -> Option<VmError> {
-    if let Ok(mut guard) = generic_bridge_error_cell().lock() {
-        return guard.take();
-    }
-    None
 }
 
 #[cfg(test)]

@@ -5,6 +5,7 @@ use std::task::{Context, Poll};
 use crate::builtins::BuiltinFunction;
 use crate::vm::{CallOutcome, HostOpId, Value, Vm, VmResult};
 
+mod aot;
 mod bytes;
 mod core;
 mod host;
