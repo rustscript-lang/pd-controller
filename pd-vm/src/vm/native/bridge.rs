@@ -10,6 +10,7 @@ pub(crate) const STATUS_TRACE_EXIT: i32 = 2;
 pub(crate) const STATUS_YIELDED: i32 = 3;
 pub(crate) const STATUS_WAITING: i32 = 4;
 pub(crate) const STATUS_OUT_OF_FUEL: i32 = 5;
+pub(crate) const STATUS_LINKED_CONTINUE: i32 = 6;
 pub(crate) const STATUS_ERROR: i32 = -1;
 
 pub(crate) const OP_LDC: i64 = 1;

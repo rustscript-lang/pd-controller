@@ -168,7 +168,158 @@ fn should_fallback_to_interpreter(err: &VmError) -> bool {
         if detail.contains("SSA native lowering does not support"))
 }
 
+pub(crate) fn resume_linked_trace_entry_address() -> usize {
+    pd_vm_native_resume_linked_trace as *const () as usize
+}
+
+pub(crate) extern "C" fn pd_vm_native_resume_linked_trace(vm: *mut Vm) -> i32 {
+    let Some(vm_ref) = (unsafe { vm.as_mut() }) else {
+        native::store_bridge_error(VmError::JitNative(
+            "native linked-trace helper received null vm pointer".to_string(),
+        ));
+        return native::STATUS_ERROR;
+    };
+
+    if vm_ref.jit_native_link_dispatch_depth > 0 {
+        return native::STATUS_TRACE_EXIT;
+    }
+
+    vm_ref.jit_native_link_dispatch_depth = vm_ref.jit_native_link_dispatch_depth.saturating_add(1);
+    match vm_ref.continue_linked_native_trace_from_exit() {
+        Ok(status) => {
+            vm_ref.jit_native_link_dispatch_depth =
+                vm_ref.jit_native_link_dispatch_depth.saturating_sub(1);
+            status
+        }
+        Err(err) => {
+            vm_ref.jit_native_link_dispatch_depth =
+                vm_ref.jit_native_link_dispatch_depth.saturating_sub(1);
+            native::store_bridge_error(err);
+            native::STATUS_ERROR
+        }
+    }
+}
+
 impl Vm {
+    fn continue_linked_native_trace_from_exit(&mut self) -> VmResult<i32> {
+        self.jit_trace_exit_count = self.jit_trace_exit_count.saturating_add(1);
+        let mut current_trace_id = {
+            let ip = self.ip;
+            let mut next_trace_id = self.jit.compiled_trace_for_ip(ip);
+            if next_trace_id.is_none() {
+                let program = &self.program;
+                next_trace_id = self.jit.observe_exit_ip(ip, program);
+            }
+            let Some(next_trace_id) = next_trace_id else {
+                return Ok(native::STATUS_LINKED_CONTINUE);
+            };
+            next_trace_id
+        };
+
+        self.record_jit_link_handoff();
+        if let Err(err) =
+            self.ensure_native_trace(current_trace_id, native::NativeCompileProfile::Jit)
+        {
+            if should_fallback_to_interpreter(&err) {
+                self.record_jit_helper_fallback();
+                self.jit.block_trace(current_trace_id);
+                return Ok(native::STATUS_LINKED_CONTINUE);
+            }
+            return Err(err);
+        }
+
+        let (mut entry, mut root_ip, mut terminal, mut has_call, mut has_yielding_call) =
+            self.native_trace_state(current_trace_id)?;
+
+        loop {
+            native::clear_bridge_error();
+            let status = unsafe { entry(self as *mut Vm) };
+            self.native_trace_exec_count = self.native_trace_exec_count.saturating_add(1);
+            self.jit.mark_trace_executed(current_trace_id);
+
+            match status {
+                native::STATUS_CONTINUE => {
+                    if !has_yielding_call
+                        && let Some(next_trace_id) = self.jit.compiled_trace_for_ip(self.ip)
+                        && next_trace_id != current_trace_id
+                    {
+                        self.record_jit_link_handoff();
+                        current_trace_id = next_trace_id;
+                        if let Err(err) = self.ensure_native_trace(
+                            current_trace_id,
+                            native::NativeCompileProfile::Jit,
+                        ) {
+                            if should_fallback_to_interpreter(&err) {
+                                self.record_jit_helper_fallback();
+                                self.jit.block_trace(current_trace_id);
+                                return Ok(native::STATUS_LINKED_CONTINUE);
+                            }
+                            return Err(err);
+                        }
+                        (entry, root_ip, terminal, has_call, has_yielding_call) =
+                            self.native_trace_state(current_trace_id)?;
+                        continue;
+                    }
+                    return Ok(native::STATUS_LINKED_CONTINUE);
+                }
+                native::STATUS_TRACE_EXIT => {
+                    self.jit_trace_exit_count = self.jit_trace_exit_count.saturating_add(1);
+                    if has_call {
+                        return Ok(native::STATUS_LINKED_CONTINUE);
+                    }
+                    if !has_yielding_call
+                        && terminal == JitTraceTerminal::LoopBack
+                        && self.ip == root_ip
+                    {
+                        self.jit_native_loop_back_count =
+                            self.jit_native_loop_back_count.saturating_add(1);
+                        continue;
+                    }
+                    if !has_yielding_call {
+                        let ip = self.ip;
+                        let mut next_trace_id = self.jit.compiled_trace_for_ip(ip);
+                        if next_trace_id.is_none() {
+                            let program = &self.program;
+                            next_trace_id = self.jit.observe_exit_ip(ip, program);
+                        }
+                        if let Some(next_trace_id) = next_trace_id
+                            && next_trace_id != current_trace_id
+                        {
+                            self.record_jit_link_handoff();
+                            current_trace_id = next_trace_id;
+                            if let Err(err) = self.ensure_native_trace(
+                                current_trace_id,
+                                native::NativeCompileProfile::Jit,
+                            ) {
+                                if should_fallback_to_interpreter(&err) {
+                                    self.record_jit_helper_fallback();
+                                    self.jit.block_trace(current_trace_id);
+                                    return Ok(native::STATUS_LINKED_CONTINUE);
+                                }
+                                return Err(err);
+                            }
+                            (entry, root_ip, terminal, has_call, has_yielding_call) =
+                                self.native_trace_state(current_trace_id)?;
+                            continue;
+                        }
+                    }
+                    return Ok(native::STATUS_LINKED_CONTINUE);
+                }
+                native::STATUS_HALTED
+                | native::STATUS_YIELDED
+                | native::STATUS_WAITING
+                | native::STATUS_OUT_OF_FUEL
+                | native::STATUS_ERROR => return Ok(status),
+                other => {
+                    return Err(VmError::JitNative(format!(
+                        "unexpected linked native trace return status {}",
+                        other
+                    )));
+                }
+            }
+        }
+    }
+
     fn active_native_interrupt_settings(&self) -> Option<native::NativeInterruptSettings> {
         match self.interrupt_mode {
             super::super::InterruptMode::None => None,
@@ -189,6 +340,8 @@ impl Vm {
         self.native_trace_exec_count = 0;
         self.jit_trace_exit_count = 0;
         self.jit_native_loop_back_count = 0;
+        self.jit_native_link_handoff_count = 0;
+        self.jit_native_link_dispatch_depth = 0;
         self.jit_helper_fallback_count = 0;
         self.jit.set_config(config);
     }
@@ -216,6 +369,10 @@ impl Vm {
         out.push_str(&format!(
             "  native trace executions: {}\n",
             self.native_trace_exec_count
+        ));
+        out.push_str(&format!(
+            "  native trace handoffs: {}\n",
+            self.jit_native_link_handoff_count
         ));
         if self.jit_native_bridge_stats_enabled {
             let mut bridge_entries: Vec<(&'static str, u64)> = self
@@ -396,6 +553,7 @@ impl Vm {
                     return Ok(ExecOutcome::Continue);
                 }
                 native::STATUS_HALTED => return Ok(ExecOutcome::Halted),
+                native::STATUS_LINKED_CONTINUE => return Ok(ExecOutcome::Continue),
                 native::STATUS_YIELDED => {
                     self.last_yield_reason = Some(super::super::VmYieldReason::Host);
                     return Ok(ExecOutcome::Yielded);
@@ -606,6 +764,10 @@ impl Vm {
         self.native_trace_exec_count
     }
 
+    pub fn jit_native_link_handoff_count(&self) -> u64 {
+        self.jit_native_link_handoff_count
+    }
+
     fn jit_runtime_metrics(&self) -> JitMetrics {
         JitMetrics {
             boxed_load_site_count: 0,
@@ -619,6 +781,10 @@ impl Vm {
 
     fn record_jit_helper_fallback(&mut self) {
         self.jit_helper_fallback_count = self.jit_helper_fallback_count.saturating_add(1);
+    }
+
+    fn record_jit_link_handoff(&mut self) {
+        self.jit_native_link_handoff_count = self.jit_native_link_handoff_count.saturating_add(1);
     }
 }
 

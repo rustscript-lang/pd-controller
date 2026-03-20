@@ -1,5 +1,6 @@
 use super::super::super::{Value, VmError, VmResult};
 use super::super::JitTrace;
+use super::super::runtime::resume_linked_trace_entry_address;
 use super::{NativeCompileProfile, TraceLoweringKind};
 use crate::vm::jit::deopt::exit_inputs;
 use crate::vm::jit::ir::{
@@ -84,6 +85,7 @@ fn try_compile_ssa_trace(
     let clone_value_sig = clone_value_signature(pointer_type, call_conv);
     let box_heap_value_sig = box_heap_value_signature(pointer_type, call_conv);
     let restore_exit_sig = restore_exit_signature(pointer_type, call_conv);
+    let resume_linked_trace_sig = entry_signature(pointer_type, call_conv);
 
     let trace_id = CRANELIFT_TRACE_ID.fetch_add(1, Ordering::Relaxed);
     let func_name = format!("pd_vm_trace_ssa_{trace_id}");
@@ -103,12 +105,15 @@ fn try_compile_ssa_trace(
             clone_value_ref: b.import_signature(clone_value_sig),
             box_heap_value_ref: b.import_signature(box_heap_value_sig),
             restore_exit_ref: b.import_signature(restore_exit_sig),
+            resume_linked_trace_ref: b.import_signature(resume_linked_trace_sig),
         };
         let deopt_addrs = SsaDeoptHelperAddrs {
             clone_value: clone_value_to_slot_entry_address(),
             box_heap_value: write_heap_value_to_slot_entry_address(),
             restore_exit: restore_exit_state_entry_address(),
+            resume_linked_trace: resume_linked_trace_entry_address(),
         };
+        let allow_exit_link_handoff = !trace.has_call && !trace.has_yielding_call;
 
         let mut value_reprs = HashMap::new();
         for block in &ssa.blocks {
@@ -221,7 +226,6 @@ fn try_compile_ssa_trace(
                     pointer_type,
                     layout,
                     offsets,
-                    block.id == ssa.entry,
                     inst,
                     &tagged_constant_addrs,
                     &mut values,
@@ -258,6 +262,7 @@ fn try_compile_ssa_trace(
                 exit,
                 spec,
                 false,
+                allow_exit_link_handoff,
             )?;
             lower_ssa_exit_block(
                 &mut b,
@@ -270,6 +275,7 @@ fn try_compile_ssa_trace(
                 exit,
                 spec,
                 true,
+                false,
             )?;
         }
 
@@ -323,6 +329,7 @@ struct SsaDeoptHelperRefs {
     clone_value_ref: cranelift_codegen::ir::SigRef,
     box_heap_value_ref: cranelift_codegen::ir::SigRef,
     restore_exit_ref: cranelift_codegen::ir::SigRef,
+    resume_linked_trace_ref: cranelift_codegen::ir::SigRef,
 }
 
 #[derive(Clone, Copy)]
@@ -330,6 +337,7 @@ struct SsaDeoptHelperAddrs {
     clone_value: usize,
     box_heap_value: usize,
     restore_exit: usize,
+    resume_linked_trace: usize,
 }
 
 fn ssa_trace_supported(ssa: &SsaTrace) -> bool {
@@ -369,15 +377,6 @@ fn ssa_trace_supported(ssa: &SsaTrace) -> bool {
                     | SsaInstKind::IntCmpGt { .. }
                     | SsaInstKind::IntCmpGtImm { .. }
             ) {
-                return false;
-            }
-            if matches!(
-                inst.kind,
-                SsaInstKind::UnboxInt { .. }
-                    | SsaInstKind::UnboxFloat { .. }
-                    | SsaInstKind::UnboxBool { .. }
-            ) && block.id != ssa.entry
-            {
                 return false;
             }
         }
@@ -523,7 +522,6 @@ fn lower_ssa_inst(
     pointer_type: cranelift_codegen::ir::Type,
     layout: crate::vm::native::NativeStackLayout,
     offsets: ResolvedOffsets,
-    is_entry_block: bool,
     inst: &crate::vm::jit::ir::SsaInst,
     tagged_constant_addrs: &HashMap<SsaValueId, usize>,
     values: &mut HashMap<SsaValueId, cranelift_codegen::ir::Value>,
@@ -552,11 +550,6 @@ fn lower_ssa_inst(
             iconst_ptr_from_addr(b, pointer_type, addr)?
         }
         SsaInstKind::UnboxInt { input } => {
-            if !is_entry_block {
-                return Err(VmError::JitNative(
-                    "SSA int unbox outside entry block requires snapshots".to_string(),
-                ));
-            }
             let input = *values
                 .get(input)
                 .ok_or_else(|| VmError::JitNative("SSA int unbox input missing".to_string()))?;
@@ -585,11 +578,6 @@ fn lower_ssa_inst(
             out
         }
         SsaInstKind::UnboxFloat { input } => {
-            if !is_entry_block {
-                return Err(VmError::JitNative(
-                    "SSA float unbox outside entry block requires snapshots".to_string(),
-                ));
-            }
             let input = *values
                 .get(input)
                 .ok_or_else(|| VmError::JitNative("SSA float unbox input missing".to_string()))?;
@@ -618,11 +606,6 @@ fn lower_ssa_inst(
             out
         }
         SsaInstKind::UnboxBool { input } => {
-            if !is_entry_block {
-                return Err(VmError::JitNative(
-                    "SSA bool unbox outside entry block requires snapshots".to_string(),
-                ));
-            }
             let input = *values
                 .get(input)
                 .ok_or_else(|| VmError::JitNative("SSA bool unbox input missing".to_string()))?;
@@ -956,6 +939,7 @@ fn lower_ssa_exit_block(
     exit: &crate::vm::jit::ir::SsaExit,
     spec: &SsaExitLowering,
     halted: bool,
+    allow_link_handoff: bool,
 ) -> VmResult<()> {
     let block = if halted {
         spec.halted_block
@@ -1046,6 +1030,12 @@ fn lower_ssa_exit_block(
     )?;
     let status = if halted {
         b.ins().iconst(types::I32, STATUS_HALTED as i64)
+    } else if allow_link_handoff {
+        let helper_ptr = iconst_ptr_from_addr(b, pointer_type, deopt_addrs.resume_linked_trace)?;
+        let call = b
+            .ins()
+            .call_indirect(deopt_refs.resume_linked_trace_ref, helper_ptr, &[vm_ptr]);
+        b.inst_results(call)[0]
     } else {
         b.ins().iconst(types::I32, STATUS_TRACE_EXIT as i64)
     };

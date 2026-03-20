@@ -8,15 +8,16 @@ pub(crate) use bridge::{
     NativeInterruptMode, NativeInterruptSettings, OP_ADD, OP_AND, OP_BUILTIN_CALL, OP_CALL, OP_CEQ,
     OP_CGT, OP_CLT, OP_DIV, OP_DUP, OP_GUARD_FALSE, OP_JUMP, OP_LDC, OP_LDLOC, OP_LSHR, OP_MOD,
     OP_MUL, OP_NEG, OP_NOT, OP_OR, OP_POP, OP_SHL, OP_SHR, OP_STLOC, OP_SUB, STATUS_CONTINUE,
-    STATUS_ERROR, STATUS_HALTED, STATUS_OUT_OF_FUEL, STATUS_TRACE_EXIT, STATUS_WAITING,
-    STATUS_YIELDED, alloc_byte_buffer_entry_address, alloc_value_buffer_entry_address,
-    clear_bridge_error, clone_value_to_slot_entry_address, copy_bytes_entry_address,
-    drop_shared_array_entry_address, drop_shared_bytes_entry_address,
+    STATUS_ERROR, STATUS_HALTED, STATUS_LINKED_CONTINUE, STATUS_OUT_OF_FUEL, STATUS_TRACE_EXIT,
+    STATUS_WAITING, STATUS_YIELDED, alloc_byte_buffer_entry_address,
+    alloc_value_buffer_entry_address, clear_bridge_error, clone_value_to_slot_entry_address,
+    copy_bytes_entry_address, drop_shared_array_entry_address, drop_shared_bytes_entry_address,
     drop_shared_string_entry_address, helper_entry_address, helper_entry_offset,
     interrupt_helper_entry_address, interrupt_helper_entry_offset,
     restore_exit_state_entry_address, shared_array_from_buffer_entry_address,
     shared_bytes_from_buffer_entry_address, shared_string_from_buffer_entry_address,
-    take_bridge_error, write_heap_value_to_slot_entry_address, zero_bytes_entry_address,
+    store_bridge_error, take_bridge_error, write_heap_value_to_slot_entry_address,
+    zero_bytes_entry_address,
 };
 #[cfg(feature = "cranelift-jit")]
 pub(crate) use codegen::{
