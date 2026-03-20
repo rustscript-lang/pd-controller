@@ -9,11 +9,12 @@ use crate::vm::jit::ir::{
 };
 use crate::vm::native::{
     ExecutableBuffer, NativeInterruptMode, NativeInterruptSettings, NativeStackLayout,
-    STATUS_CONTINUE, STATUS_HALTED, STATUS_OUT_OF_FUEL, STATUS_TRACE_EXIT,
+    STATUS_CONTINUE, STATUS_ERROR, STATUS_HALTED, STATUS_OUT_OF_FUEL, STATUS_TRACE_EXIT,
     box_heap_value_signature, checked_add_i32, clone_value_signature,
-    clone_value_to_slot_entry_address, detect_native_stack_layout, entry_signature,
-    jump_with_status, restore_exit_signature, restore_exit_state_entry_address,
-    write_heap_value_to_slot_entry_address,
+    clone_value_to_slot_entry_address, collection_get_signature, collection_predicate_signature,
+    detect_native_stack_layout, entry_signature, heap_len_signature, jump_with_status,
+    map_get_entry_address, map_has_entry_address, map_len_entry_address, restore_exit_signature,
+    restore_exit_state_entry_address, write_heap_value_to_slot_entry_address,
 };
 use cranelift_codegen::ir::condcodes::{FloatCC, IntCC};
 use cranelift_codegen::ir::immediates::Ieee64;
@@ -84,6 +85,9 @@ fn try_compile_ssa_trace(
     ctx.func.signature = entry_signature(pointer_type, call_conv);
     let clone_value_sig = clone_value_signature(pointer_type, call_conv);
     let box_heap_value_sig = box_heap_value_signature(pointer_type, call_conv);
+    let map_len_sig = heap_len_signature(pointer_type, call_conv);
+    let map_has_sig = collection_predicate_signature(pointer_type, call_conv);
+    let map_get_sig = collection_get_signature(pointer_type, call_conv);
     let restore_exit_sig = restore_exit_signature(pointer_type, call_conv);
     let resume_linked_trace_sig = entry_signature(pointer_type, call_conv);
 
@@ -104,12 +108,18 @@ fn try_compile_ssa_trace(
         let deopt_refs = SsaDeoptHelperRefs {
             clone_value_ref: b.import_signature(clone_value_sig),
             box_heap_value_ref: b.import_signature(box_heap_value_sig),
+            map_len_ref: b.import_signature(map_len_sig),
+            map_has_ref: b.import_signature(map_has_sig),
+            map_get_ref: b.import_signature(map_get_sig),
             restore_exit_ref: b.import_signature(restore_exit_sig),
             resume_linked_trace_ref: b.import_signature(resume_linked_trace_sig),
         };
         let deopt_addrs = SsaDeoptHelperAddrs {
             clone_value: clone_value_to_slot_entry_address(),
             box_heap_value: write_heap_value_to_slot_entry_address(),
+            map_len: map_len_entry_address(),
+            map_has: map_has_entry_address(),
+            map_get: map_get_entry_address(),
             restore_exit: restore_exit_state_entry_address(),
             resume_linked_trace: resume_linked_trace_entry_address(),
         };
@@ -226,7 +236,10 @@ fn try_compile_ssa_trace(
                     pointer_type,
                     layout,
                     offsets,
+                    deopt_refs,
+                    deopt_addrs,
                     inst,
+                    &value_reprs,
                     &tagged_constant_addrs,
                     &mut values,
                 )?;
@@ -328,6 +341,9 @@ struct SsaExitLowering {
 struct SsaDeoptHelperRefs {
     clone_value_ref: cranelift_codegen::ir::SigRef,
     box_heap_value_ref: cranelift_codegen::ir::SigRef,
+    map_len_ref: cranelift_codegen::ir::SigRef,
+    map_has_ref: cranelift_codegen::ir::SigRef,
+    map_get_ref: cranelift_codegen::ir::SigRef,
     restore_exit_ref: cranelift_codegen::ir::SigRef,
     resume_linked_trace_ref: cranelift_codegen::ir::SigRef,
 }
@@ -336,6 +352,9 @@ struct SsaDeoptHelperRefs {
 struct SsaDeoptHelperAddrs {
     clone_value: usize,
     box_heap_value: usize,
+    map_len: usize,
+    map_has: usize,
+    map_get: usize,
     restore_exit: usize,
     resume_linked_trace: usize,
 }
@@ -346,9 +365,16 @@ fn ssa_trace_supported(ssa: &SsaTrace) -> bool {
             if !matches!(
                 inst.kind,
                 SsaInstKind::Constant(_)
+                    | SsaInstKind::UnboxHeapPtr { .. }
                     | SsaInstKind::UnboxInt { .. }
                     | SsaInstKind::UnboxFloat { .. }
                     | SsaInstKind::UnboxBool { .. }
+                    | SsaInstKind::ArrayLen { .. }
+                    | SsaInstKind::ArrayGet { .. }
+                    | SsaInstKind::ArrayHas { .. }
+                    | SsaInstKind::MapLen { .. }
+                    | SsaInstKind::MapGet { .. }
+                    | SsaInstKind::MapHas { .. }
                     | SsaInstKind::IntNeg { .. }
                     | SsaInstKind::IntAdd { .. }
                     | SsaInstKind::IntAddImm { .. }
@@ -522,7 +548,10 @@ fn lower_ssa_inst(
     pointer_type: cranelift_codegen::ir::Type,
     layout: crate::vm::native::NativeStackLayout,
     offsets: ResolvedOffsets,
+    helper_refs: SsaDeoptHelperRefs,
+    helper_addrs: SsaDeoptHelperAddrs,
     inst: &crate::vm::jit::ir::SsaInst,
+    value_reprs: &HashMap<SsaValueId, SsaValueRepr>,
     tagged_constant_addrs: &HashMap<SsaValueId, usize>,
     values: &mut HashMap<SsaValueId, cranelift_codegen::ir::Value>,
 ) -> VmResult<()> {
@@ -633,6 +662,182 @@ fn lower_ssa_inst(
 
             b.switch_to_block(cont);
             out
+        }
+        SsaInstKind::UnboxHeapPtr { input, tag } => {
+            let input = *values
+                .get(input)
+                .ok_or_else(|| VmError::JitNative("SSA heap unbox input missing".to_string()))?;
+            let expected_tag = ssa_heap_tag(layout.value, *tag)?;
+            let type_ok = b.create_block();
+            let fail = b.create_block();
+            let cont = b.create_block();
+            let tag = ssa_load_tag_i32(b, layout.value, input);
+            let is_heap = b.ins().icmp_imm(IntCC::Equal, tag, i64::from(expected_tag));
+            b.ins().brif(is_heap, type_ok, &[], fail, &[]);
+
+            b.switch_to_block(type_ok);
+            let out = ssa_load_heap_ptr(b, layout.value, input, pointer_type);
+            b.ins().jump(cont, &[]);
+
+            b.switch_to_block(fail);
+            ssa_emit_trace_exit_status(b, vm_ptr, exit_block, pointer_type, offsets, inst.ip)?;
+
+            b.switch_to_block(cont);
+            out
+        }
+        SsaInstKind::ArrayLen { array } => {
+            let array = values[array];
+            let vec_ptr = ssa_load_heap_data_ptr(b, layout.value, array);
+            b.ins().load(
+                pointer_type,
+                MemFlags::new(),
+                vec_ptr,
+                layout.stack_vec.len_offset,
+            )
+        }
+        SsaInstKind::ArrayGet { array, index } => {
+            let array = values[array];
+            let index = values[index];
+            let vec_ptr = ssa_load_heap_data_ptr(b, layout.value, array);
+            let len = b.ins().load(
+                pointer_type,
+                MemFlags::new(),
+                vec_ptr,
+                layout.stack_vec.len_offset,
+            );
+            let in_range = ssa_index_in_range(b, index, len);
+            let ok = b.create_block();
+            let fail = b.create_block();
+            let cont = b.create_block();
+            b.ins().brif(in_range, ok, &[], fail, &[]);
+
+            b.switch_to_block(ok);
+            let data_ptr = b.ins().load(
+                pointer_type,
+                MemFlags::new(),
+                vec_ptr,
+                layout.stack_vec.ptr_offset,
+            );
+            let element_addr = ssa_value_addr(b, pointer_type, data_ptr, index, layout.value.size);
+            let out = ssa_alloc_single_value_slot(b, pointer_type, layout.value.size)?;
+            ssa_call_status_helper(
+                b,
+                exit_block,
+                pointer_type,
+                helper_refs.clone_value_ref,
+                helper_addrs.clone_value,
+                &[out, element_addr],
+            )?;
+            b.ins().jump(cont, &[]);
+
+            b.switch_to_block(fail);
+            ssa_emit_trace_exit_status(b, vm_ptr, exit_block, pointer_type, offsets, inst.ip)?;
+
+            b.switch_to_block(cont);
+            out
+        }
+        SsaInstKind::ArrayHas { array, index } => {
+            let array = values[array];
+            let index = values[index];
+            let vec_ptr = ssa_load_heap_data_ptr(b, layout.value, array);
+            let len = b.ins().load(
+                pointer_type,
+                MemFlags::new(),
+                vec_ptr,
+                layout.stack_vec.len_offset,
+            );
+            ssa_index_in_range(b, index, len)
+        }
+        SsaInstKind::MapLen { map } => {
+            let helper_ptr = iconst_ptr_from_addr(b, pointer_type, helper_addrs.map_len)?;
+            let call = b
+                .ins()
+                .call_indirect(helper_refs.map_len_ref, helper_ptr, &[values[map]]);
+            b.inst_results(call)[0]
+        }
+        SsaInstKind::MapGet { map, key } => {
+            let key_addr = ssa_ensure_boxed_value_addr(
+                b,
+                exit_block,
+                pointer_type,
+                layout.value,
+                helper_refs,
+                helper_addrs,
+                *value_reprs.get(key).ok_or_else(|| {
+                    VmError::JitNative("SSA map-get key representation missing".to_string())
+                })?,
+                values[key],
+            )?;
+            let out = ssa_alloc_single_value_slot(b, pointer_type, layout.value.size)?;
+            let helper_ptr = iconst_ptr_from_addr(b, pointer_type, helper_addrs.map_get)?;
+            let call = b.ins().call_indirect(
+                helper_refs.map_get_ref,
+                helper_ptr,
+                &[out, values[map], key_addr],
+            );
+            let status = b.inst_results(call)[0];
+            let ok = b.create_block();
+            let fail = b.create_block();
+            let cont = b.create_block();
+            let is_error = b
+                .ins()
+                .icmp_imm(IntCC::Equal, status, i64::from(STATUS_ERROR));
+            let is_found = b.ins().icmp_imm(IntCC::Equal, status, 1);
+            b.ins().brif(is_error, fail, &[], ok, &[]);
+
+            b.switch_to_block(ok);
+            b.ins().brif(is_found, cont, &[], fail, &[]);
+
+            b.switch_to_block(fail);
+            let is_status_error = b
+                .ins()
+                .icmp_imm(IntCC::Equal, status, i64::from(STATUS_ERROR));
+            let error_block = b.create_block();
+            let miss_block = b.create_block();
+            b.ins()
+                .brif(is_status_error, error_block, &[], miss_block, &[]);
+
+            b.switch_to_block(error_block);
+            jump_with_status(b, exit_block, status);
+
+            b.switch_to_block(miss_block);
+            ssa_emit_trace_exit_status(b, vm_ptr, exit_block, pointer_type, offsets, inst.ip)?;
+
+            b.switch_to_block(cont);
+            out
+        }
+        SsaInstKind::MapHas { map, key } => {
+            let key_addr = ssa_ensure_boxed_value_addr(
+                b,
+                exit_block,
+                pointer_type,
+                layout.value,
+                helper_refs,
+                helper_addrs,
+                *value_reprs.get(key).ok_or_else(|| {
+                    VmError::JitNative("SSA map-has key representation missing".to_string())
+                })?,
+                values[key],
+            )?;
+            let helper_ptr = iconst_ptr_from_addr(b, pointer_type, helper_addrs.map_has)?;
+            let call = b.ins().call_indirect(
+                helper_refs.map_has_ref,
+                helper_ptr,
+                &[values[map], key_addr],
+            );
+            let status = b.inst_results(call)[0];
+            let fail = b.create_block();
+            let cont = b.create_block();
+            let is_error = b
+                .ins()
+                .icmp_imm(IntCC::Equal, status, i64::from(STATUS_ERROR));
+            b.ins().brif(is_error, fail, &[], cont, &[]);
+
+            b.switch_to_block(fail);
+            jump_with_status(b, exit_block, status);
+
+            b.switch_to_block(cont);
+            b.ins().icmp_imm(IntCC::NotEqual, status, 0)
         }
         SsaInstKind::IntNeg { input } => b.ins().ineg(values[input]),
         SsaInstKind::IntAdd { lhs, rhs } => b.ins().iadd(values[lhs], values[rhs]),
@@ -1182,6 +1387,139 @@ fn ssa_call_status_helper(
     b.ins().brif(is_continue, cont, &[], exit_block, &else_args);
     b.switch_to_block(cont);
     Ok(())
+}
+
+fn ssa_heap_tag(layout: crate::vm::native::ValueLayout, tag: crate::ValueType) -> VmResult<u32> {
+    match tag {
+        crate::ValueType::String => Ok(layout.string_tag),
+        crate::ValueType::Bytes => Ok(layout.bytes_tag),
+        crate::ValueType::Array => Ok(layout.array_tag),
+        crate::ValueType::Map => Ok(layout.map_tag),
+        other => Err(VmError::JitNative(format!(
+            "unsupported SSA heap unbox tag {other:?}"
+        ))),
+    }
+}
+
+fn ssa_load_heap_ptr(
+    b: &mut FunctionBuilder,
+    layout: crate::vm::native::ValueLayout,
+    value_addr: cranelift_codegen::ir::Value,
+    pointer_type: cranelift_codegen::ir::Type,
+) -> cranelift_codegen::ir::Value {
+    b.ins().load(
+        pointer_type,
+        MemFlags::new(),
+        value_addr,
+        layout.heap_payload_offset,
+    )
+}
+
+fn ssa_load_heap_data_ptr(
+    b: &mut FunctionBuilder,
+    layout: crate::vm::native::ValueLayout,
+    heap_ptr: cranelift_codegen::ir::Value,
+) -> cranelift_codegen::ir::Value {
+    if layout.arc_data_offset == 0 {
+        heap_ptr
+    } else {
+        b.ins()
+            .iadd_imm(heap_ptr, i64::from(layout.arc_data_offset))
+    }
+}
+
+fn ssa_index_in_range(
+    b: &mut FunctionBuilder,
+    index: cranelift_codegen::ir::Value,
+    len: cranelift_codegen::ir::Value,
+) -> cranelift_codegen::ir::Value {
+    let ge_zero = b.ins().icmp_imm(IntCC::SignedGreaterThanOrEqual, index, 0);
+    let lt_len = b.ins().icmp(IntCC::UnsignedLessThan, index, len);
+    b.ins().band(ge_zero, lt_len)
+}
+
+fn ssa_alloc_single_value_slot(
+    b: &mut FunctionBuilder,
+    pointer_type: cranelift_codegen::ir::Type,
+    value_size: i32,
+) -> VmResult<cranelift_codegen::ir::Value> {
+    ssa_alloc_value_buffer(b, pointer_type, 1, value_size)?.ok_or_else(|| {
+        VmError::JitNative("SSA single-value temp slot allocation failed".to_string())
+    })
+}
+
+fn ssa_materialize_runtime_value_to_slot(
+    b: &mut FunctionBuilder,
+    exit_block: Block,
+    pointer_type: cranelift_codegen::ir::Type,
+    value_layout: crate::vm::native::ValueLayout,
+    helper_refs: SsaDeoptHelperRefs,
+    helper_addrs: SsaDeoptHelperAddrs,
+    repr: SsaValueRepr,
+    value: cranelift_codegen::ir::Value,
+    dst_addr: cranelift_codegen::ir::Value,
+) -> VmResult<()> {
+    match repr {
+        SsaValueRepr::Tagged => ssa_call_status_helper(
+            b,
+            exit_block,
+            pointer_type,
+            helper_refs.clone_value_ref,
+            helper_addrs.clone_value,
+            &[dst_addr, value],
+        ),
+        SsaValueRepr::I64 => {
+            ssa_store_int_in_value(b, value_layout, dst_addr, value);
+            Ok(())
+        }
+        SsaValueRepr::F64 => {
+            ssa_store_float_in_value(b, value_layout, dst_addr, value);
+            Ok(())
+        }
+        SsaValueRepr::Bool => {
+            ssa_store_bool_in_value(b, value_layout, dst_addr, value);
+            Ok(())
+        }
+        SsaValueRepr::HeapPtr(tag) => {
+            let tag = b.ins().iconst(types::I64, tag as i64);
+            ssa_call_status_helper(
+                b,
+                exit_block,
+                pointer_type,
+                helper_refs.box_heap_value_ref,
+                helper_addrs.box_heap_value,
+                &[dst_addr, value, tag],
+            )
+        }
+    }
+}
+
+fn ssa_ensure_boxed_value_addr(
+    b: &mut FunctionBuilder,
+    exit_block: Block,
+    pointer_type: cranelift_codegen::ir::Type,
+    value_layout: crate::vm::native::ValueLayout,
+    helper_refs: SsaDeoptHelperRefs,
+    helper_addrs: SsaDeoptHelperAddrs,
+    repr: SsaValueRepr,
+    value: cranelift_codegen::ir::Value,
+) -> VmResult<cranelift_codegen::ir::Value> {
+    if repr == SsaValueRepr::Tagged {
+        return Ok(value);
+    }
+    let slot = ssa_alloc_single_value_slot(b, pointer_type, value_layout.size)?;
+    ssa_materialize_runtime_value_to_slot(
+        b,
+        exit_block,
+        pointer_type,
+        value_layout,
+        helper_refs,
+        helper_addrs,
+        repr,
+        value,
+        slot,
+    )?;
+    Ok(slot)
 }
 
 fn ssa_value_addr(

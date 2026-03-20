@@ -25,6 +25,7 @@ pub(crate) struct ValueLayout {
     pub(crate) string_tag: u32,
     pub(crate) bytes_tag: u32,
     pub(crate) array_tag: u32,
+    pub(crate) map_tag: u32,
     pub(crate) int_payload_offset: i32,
     pub(crate) float_payload_offset: i32,
     pub(crate) bool_payload_offset: i32,
@@ -233,6 +234,7 @@ fn detect_value_layout() -> VmResult<ValueLayout> {
     let string_tag = decode_tag(&string_a_bytes, tag_offset, tag_size);
     let bytes_tag = decode_tag(&bytes_a_bytes, tag_offset, tag_size);
     let array_tag = decode_tag(&array_a_bytes, tag_offset, tag_size);
+    let map_tag = decode_tag(&map_a_bytes, tag_offset, tag_size);
 
     let payload_match_a = int_a.to_le_bytes();
     let payload_match_b = int_b.to_le_bytes();
@@ -359,6 +361,7 @@ fn detect_value_layout() -> VmResult<ValueLayout> {
         string_tag,
         bytes_tag,
         array_tag,
+        map_tag,
         int_payload_offset: usize_to_i32(int_payload_offset, "Value::Int payload offset")?,
         float_payload_offset: usize_to_i32(float_payload_offset, "Value::Float payload offset")?,
         bool_payload_offset: usize_to_i32(bool_payload_offset, "Value::Bool payload offset")?,

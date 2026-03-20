@@ -94,36 +94,147 @@ pub(crate) struct SsaBlockParam {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum SsaInstKind {
     Constant(Value),
-    UnboxInt { input: SsaValueId },
-    UnboxFloat { input: SsaValueId },
-    UnboxBool { input: SsaValueId },
-    IntNeg { input: SsaValueId },
-    IntAdd { lhs: SsaValueId, rhs: SsaValueId },
-    IntAddImm { lhs: SsaValueId, imm: i64 },
-    IntSub { lhs: SsaValueId, rhs: SsaValueId },
-    IntSubImm { lhs: SsaValueId, imm: i64 },
-    IntMul { lhs: SsaValueId, rhs: SsaValueId },
-    IntMulImm { lhs: SsaValueId, imm: i64 },
-    IntDiv { lhs: SsaValueId, rhs: SsaValueId },
-    IntDivImm { lhs: SsaValueId, imm: i64 },
-    IntMod { lhs: SsaValueId, rhs: SsaValueId },
-    IntModImm { lhs: SsaValueId, imm: i64 },
-    IntShl { lhs: SsaValueId, rhs: SsaValueId },
-    IntShlImm { lhs: SsaValueId, amount: u32 },
-    FloatNeg { input: SsaValueId },
-    FloatAdd { lhs: SsaValueId, rhs: SsaValueId },
-    FloatSub { lhs: SsaValueId, rhs: SsaValueId },
-    FloatMul { lhs: SsaValueId, rhs: SsaValueId },
-    FloatDiv { lhs: SsaValueId, rhs: SsaValueId },
-    FloatMod { lhs: SsaValueId, rhs: SsaValueId },
-    FloatCmpEq { lhs: SsaValueId, rhs: SsaValueId },
-    FloatCmpLt { lhs: SsaValueId, rhs: SsaValueId },
-    FloatCmpGt { lhs: SsaValueId, rhs: SsaValueId },
-    IntCmpEq { lhs: SsaValueId, rhs: SsaValueId },
-    IntCmpLt { lhs: SsaValueId, rhs: SsaValueId },
-    IntCmpLtImm { lhs: SsaValueId, imm: i64 },
-    IntCmpGt { lhs: SsaValueId, rhs: SsaValueId },
-    IntCmpGtImm { lhs: SsaValueId, imm: i64 },
+    UnboxInt {
+        input: SsaValueId,
+    },
+    UnboxFloat {
+        input: SsaValueId,
+    },
+    UnboxBool {
+        input: SsaValueId,
+    },
+    UnboxHeapPtr {
+        input: SsaValueId,
+        tag: ValueType,
+    },
+    ArrayLen {
+        array: SsaValueId,
+    },
+    ArrayGet {
+        array: SsaValueId,
+        index: SsaValueId,
+    },
+    ArrayHas {
+        array: SsaValueId,
+        index: SsaValueId,
+    },
+    MapLen {
+        map: SsaValueId,
+    },
+    MapGet {
+        map: SsaValueId,
+        key: SsaValueId,
+    },
+    MapHas {
+        map: SsaValueId,
+        key: SsaValueId,
+    },
+    IntNeg {
+        input: SsaValueId,
+    },
+    IntAdd {
+        lhs: SsaValueId,
+        rhs: SsaValueId,
+    },
+    IntAddImm {
+        lhs: SsaValueId,
+        imm: i64,
+    },
+    IntSub {
+        lhs: SsaValueId,
+        rhs: SsaValueId,
+    },
+    IntSubImm {
+        lhs: SsaValueId,
+        imm: i64,
+    },
+    IntMul {
+        lhs: SsaValueId,
+        rhs: SsaValueId,
+    },
+    IntMulImm {
+        lhs: SsaValueId,
+        imm: i64,
+    },
+    IntDiv {
+        lhs: SsaValueId,
+        rhs: SsaValueId,
+    },
+    IntDivImm {
+        lhs: SsaValueId,
+        imm: i64,
+    },
+    IntMod {
+        lhs: SsaValueId,
+        rhs: SsaValueId,
+    },
+    IntModImm {
+        lhs: SsaValueId,
+        imm: i64,
+    },
+    IntShl {
+        lhs: SsaValueId,
+        rhs: SsaValueId,
+    },
+    IntShlImm {
+        lhs: SsaValueId,
+        amount: u32,
+    },
+    FloatNeg {
+        input: SsaValueId,
+    },
+    FloatAdd {
+        lhs: SsaValueId,
+        rhs: SsaValueId,
+    },
+    FloatSub {
+        lhs: SsaValueId,
+        rhs: SsaValueId,
+    },
+    FloatMul {
+        lhs: SsaValueId,
+        rhs: SsaValueId,
+    },
+    FloatDiv {
+        lhs: SsaValueId,
+        rhs: SsaValueId,
+    },
+    FloatMod {
+        lhs: SsaValueId,
+        rhs: SsaValueId,
+    },
+    FloatCmpEq {
+        lhs: SsaValueId,
+        rhs: SsaValueId,
+    },
+    FloatCmpLt {
+        lhs: SsaValueId,
+        rhs: SsaValueId,
+    },
+    FloatCmpGt {
+        lhs: SsaValueId,
+        rhs: SsaValueId,
+    },
+    IntCmpEq {
+        lhs: SsaValueId,
+        rhs: SsaValueId,
+    },
+    IntCmpLt {
+        lhs: SsaValueId,
+        rhs: SsaValueId,
+    },
+    IntCmpLtImm {
+        lhs: SsaValueId,
+        imm: i64,
+    },
+    IntCmpGt {
+        lhs: SsaValueId,
+        rhs: SsaValueId,
+    },
+    IntCmpGtImm {
+        lhs: SsaValueId,
+        imm: i64,
+    },
 }
 
 impl SsaInstKind {
@@ -133,8 +244,15 @@ impl SsaInstKind {
             Self::UnboxInt { input }
             | Self::UnboxFloat { input }
             | Self::UnboxBool { input }
+            | Self::UnboxHeapPtr { input, .. }
+            | Self::ArrayLen { array: input }
+            | Self::MapLen { map: input }
             | Self::IntNeg { input }
             | Self::FloatNeg { input } => vec![*input],
+            Self::ArrayGet { array, index } => vec![*array, *index],
+            Self::ArrayHas { array, index } => vec![*array, *index],
+            Self::MapGet { map, key } => vec![*map, *key],
+            Self::MapHas { map, key } => vec![*map, *key],
             Self::IntAdd { lhs, rhs }
             | Self::IntSub { lhs, rhs }
             | Self::IntMul { lhs, rhs }
@@ -632,6 +750,13 @@ fn render_inst_kind(kind: &SsaInstKind) -> String {
         SsaInstKind::UnboxInt { input } => format!("unbox_int {input}"),
         SsaInstKind::UnboxFloat { input } => format!("unbox_float {input}"),
         SsaInstKind::UnboxBool { input } => format!("unbox_bool {input}"),
+        SsaInstKind::UnboxHeapPtr { input, tag } => format!("unbox_ptr {input}, {tag:?}"),
+        SsaInstKind::ArrayLen { array } => format!("array_len {array}"),
+        SsaInstKind::ArrayGet { array, index } => format!("array_get {array}, {index}"),
+        SsaInstKind::ArrayHas { array, index } => format!("array_has {array}, {index}"),
+        SsaInstKind::MapLen { map } => format!("map_len {map}"),
+        SsaInstKind::MapGet { map, key } => format!("map_get {map}, {key}"),
+        SsaInstKind::MapHas { map, key } => format!("map_has {map}, {key}"),
         SsaInstKind::IntNeg { input } => format!("ineg {input}"),
         SsaInstKind::IntAdd { lhs, rhs } => format!("iadd {lhs}, {rhs}"),
         SsaInstKind::IntAddImm { lhs, imm } => format!("iadd_imm {lhs}, {imm}"),

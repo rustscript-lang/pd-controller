@@ -1,7 +1,7 @@
 use vm::{
     BytecodeBuilder, CallOutcome, HostFunction, JitConfig, JitTraceTerminal, OpCode, Program,
-    SourceFlavor, Value, Vm, VmStatus, VmYieldReason, compile_source, compile_source_with_flavor,
-    disassemble_program,
+    SourceFlavor, TypeMap, Value, ValueType, Vm, VmStatus, VmYieldReason, compile_source,
+    compile_source_with_flavor, disassemble_program,
 };
 
 fn native_jit_supported() -> bool {
@@ -86,6 +86,19 @@ fn first_native_code_hex(dump: &str) -> Option<String> {
 fn patch_branch_target(code: &mut [u8], instr_ip: u32, target: u32) {
     let start = instr_ip as usize + 1;
     code[start..start + 4].copy_from_slice(&target.to_le_bytes());
+}
+
+fn force_local_types(program: Program, hints: &[(usize, ValueType)]) -> Program {
+    let mut type_map = program.type_map.clone().unwrap_or_else(TypeMap::default);
+    if type_map.local_types.len() < program.local_count {
+        type_map
+            .local_types
+            .resize(program.local_count, ValueType::Unknown);
+    }
+    for (slot, ty) in hints {
+        type_map.local_types[*slot] = *ty;
+    }
+    program.with_type_map(type_map)
 }
 
 struct PrintNoReturn;
@@ -1740,6 +1753,138 @@ fn trace_jit_restores_array_and_map_locals_on_ssa_exit() {
     assert_eq!(
         snapshot.metrics.helper_fallback_count, 0,
         "array/map restore loop should not need interpreter fallback, dump:\n{dump}"
+    );
+}
+
+#[test]
+fn trace_jit_supports_array_len_get_has_in_ssa() {
+    if !native_jit_supported() {
+        return;
+    }
+
+    let source = r#"
+        let arr = [10, 20, 30];
+        let mut i = 0;
+        let mut sum = 0;
+        while i < arr.length {
+            if arr.has(i) {
+                sum = sum + arr[i];
+            }
+            i = i + 1;
+        }
+        sum;
+    "#;
+
+    let compiled = compile_source(source).expect("array trace compile should succeed");
+    let program = force_local_types(
+        compiled.program,
+        &[
+            (0, ValueType::Array),
+            (1, ValueType::Int),
+            (2, ValueType::Int),
+        ],
+    );
+    let mut vm = Vm::new(program);
+    vm.set_jit_config(JitConfig {
+        enabled: true,
+        hot_loop_threshold: 1,
+        max_trace_len: 512,
+    });
+
+    let status = vm.run().expect("array trace vm should run");
+    assert_eq!(status, VmStatus::Halted);
+    assert_eq!(vm.stack(), &[Value::Int(60)]);
+
+    let dump = vm.dump_jit_info();
+    let snapshot = vm.jit_snapshot();
+    assert!(
+        vm.jit_native_exec_count() > 0,
+        "expected native execution for array builtin loop, dump:\n{dump}"
+    );
+    assert!(
+        dump.contains("lowering=ssa"),
+        "expected array builtin loop to lower through SSA, dump:\n{dump}"
+    );
+    assert!(
+        any_trace_op(&snapshot, "array_len")
+            && any_trace_op(&snapshot, "array_has")
+            && any_trace_op(&snapshot, "array_get"),
+        "expected array builtin loop to record specialized array ops, dump:\n{dump}"
+    );
+    assert_eq!(
+        snapshot.metrics.helper_fallback_count, 0,
+        "array builtin loop should not need interpreter fallback, dump:\n{dump}"
+    );
+}
+
+#[test]
+fn trace_jit_supports_map_len_get_has_in_ssa() {
+    if !native_jit_supported() {
+        return;
+    }
+
+    let source = r#"
+        let data = {"a": 7, "b": 11, "c": 13};
+        let mut i = 0;
+        let mut sum = 0;
+        while i < data.length {
+            if i == 0 {
+                if data.has("a") {
+                    sum = sum + data["a"];
+                }
+            } else if i == 1 {
+                if data.has("b") {
+                    sum = sum + data["b"];
+                }
+            } else {
+                if data.has("c") {
+                    sum = sum + data["c"];
+                }
+            }
+            i = i + 1;
+        }
+        sum;
+    "#;
+
+    let compiled = compile_source(source).expect("map trace compile should succeed");
+    let program = force_local_types(
+        compiled.program,
+        &[
+            (0, ValueType::Map),
+            (1, ValueType::Int),
+            (2, ValueType::Int),
+        ],
+    );
+    let mut vm = Vm::new(program);
+    vm.set_jit_config(JitConfig {
+        enabled: true,
+        hot_loop_threshold: 1,
+        max_trace_len: 512,
+    });
+
+    let status = vm.run().expect("map trace vm should run");
+    assert_eq!(status, VmStatus::Halted);
+    assert_eq!(vm.stack(), &[Value::Int(31)]);
+
+    let dump = vm.dump_jit_info();
+    let snapshot = vm.jit_snapshot();
+    assert!(
+        vm.jit_native_exec_count() > 0,
+        "expected native execution for map builtin loop, dump:\n{dump}"
+    );
+    assert!(
+        dump.contains("lowering=ssa"),
+        "expected map builtin loop to lower through SSA, dump:\n{dump}"
+    );
+    assert!(
+        any_trace_op(&snapshot, "map_len")
+            && any_trace_op(&snapshot, "map_has")
+            && any_trace_op(&snapshot, "map_get"),
+        "expected map builtin loop to record specialized map ops, dump:\n{dump}"
+    );
+    assert_eq!(
+        snapshot.metrics.helper_fallback_count, 0,
+        "map builtin loop should not need interpreter fallback, dump:\n{dump}"
     );
 }
 

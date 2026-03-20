@@ -11,6 +11,7 @@ pub(crate) fn boxed_load_site_count(trace: &SsaTrace) -> u64 {
                 SsaInstKind::UnboxInt { .. }
                     | SsaInstKind::UnboxFloat { .. }
                     | SsaInstKind::UnboxBool { .. }
+                    | SsaInstKind::UnboxHeapPtr { .. }
             )
         })
         .count() as u64

@@ -233,6 +233,18 @@ pub(crate) fn restore_exit_state_entry_address() -> usize {
     pd_vm_native_restore_exit_state as *const () as usize
 }
 
+pub(crate) fn map_len_entry_address() -> usize {
+    pd_vm_native_map_len as *const () as usize
+}
+
+pub(crate) fn map_has_entry_address() -> usize {
+    pd_vm_native_map_has as *const () as usize
+}
+
+pub(crate) fn map_get_entry_address() -> usize {
+    pd_vm_native_map_get as *const () as usize
+}
+
 pub(crate) fn helper_entry_offset() -> i32 {
     i32::try_from(std::mem::offset_of!(Vm, native_helper_fn))
         .expect("Vm::native_helper_fn offset must fit i32")
@@ -441,6 +453,58 @@ pub(crate) extern "C" fn pd_vm_native_restore_exit_state(
         vm.jump_to(ip)?;
         Ok(STATUS_CONTINUE)
     })
+}
+
+pub(crate) extern "C" fn pd_vm_native_map_len(repr_ptr: *mut u8) -> i64 {
+    if repr_ptr.is_null() {
+        store_bridge_error(VmError::JitNative(
+            "native map-len helper received null repr pointer".to_string(),
+        ));
+        return 0;
+    }
+
+    let entries = unsafe { arc_from_repr_ptr::<VmMap>(repr_ptr) };
+    let len = entries.len() as i64;
+    std::mem::forget(entries);
+    len
+}
+
+pub(crate) extern "C" fn pd_vm_native_map_has(repr_ptr: *mut u8, key: *const Value) -> i32 {
+    if repr_ptr.is_null() || key.is_null() {
+        store_bridge_error(VmError::JitNative(
+            "native map-has helper received null pointer".to_string(),
+        ));
+        return STATUS_ERROR;
+    }
+
+    let entries = unsafe { arc_from_repr_ptr::<VmMap>(repr_ptr) };
+    let present = entries.get(unsafe { &*key }).is_some();
+    std::mem::forget(entries);
+    i32::from(present)
+}
+
+pub(crate) extern "C" fn pd_vm_native_map_get(
+    dst: *mut Value,
+    repr_ptr: *mut u8,
+    key: *const Value,
+) -> i32 {
+    if dst.is_null() || repr_ptr.is_null() || key.is_null() {
+        store_bridge_error(VmError::JitNative(
+            "native map-get helper received null pointer".to_string(),
+        ));
+        return STATUS_ERROR;
+    }
+
+    let entries = unsafe { arc_from_repr_ptr::<VmMap>(repr_ptr) };
+    let Some(value) = entries.get(unsafe { &*key }) else {
+        std::mem::forget(entries);
+        return 0;
+    };
+    unsafe {
+        std::ptr::write(dst, value.clone());
+    }
+    std::mem::forget(entries);
+    1
 }
 
 pub(crate) extern "C" fn pd_vm_native_step(vm: *mut Vm, op: i64, a: i64, b: i64, c: i64) -> i32 {

@@ -85,6 +85,7 @@ struct ValueInfo {
     const_int: Option<i64>,
     const_float: Option<f64>,
     const_bool: Option<bool>,
+    known_type: Option<ValueType>,
 }
 
 impl ValueInfo {
@@ -94,6 +95,17 @@ impl ValueInfo {
             const_int: None,
             const_float: None,
             const_bool: None,
+            known_type: None,
+        }
+    }
+
+    fn tagged_typed(known_type: ValueType) -> Self {
+        Self {
+            repr: SsaValueRepr::Tagged,
+            const_int: None,
+            const_float: None,
+            const_bool: None,
+            known_type: Some(known_type),
         }
     }
 
@@ -103,6 +115,7 @@ impl ValueInfo {
             const_int: value,
             const_float: None,
             const_bool: None,
+            known_type: Some(ValueType::Int),
         }
     }
 
@@ -112,6 +125,7 @@ impl ValueInfo {
             const_int: None,
             const_float: value,
             const_bool: None,
+            known_type: Some(ValueType::Float),
         }
     }
 
@@ -121,6 +135,17 @@ impl ValueInfo {
             const_int: None,
             const_float: None,
             const_bool: value,
+            known_type: Some(ValueType::Bool),
+        }
+    }
+
+    fn heap(tag: ValueType) -> Self {
+        Self {
+            repr: SsaValueRepr::HeapPtr(tag),
+            const_int: None,
+            const_float: None,
+            const_bool: None,
+            known_type: Some(tag),
         }
     }
 
@@ -129,9 +154,11 @@ impl ValueInfo {
             Value::Int(value) => Self::int(Some(*value)),
             Value::Bool(value) => Self::bool(Some(*value)),
             Value::Float(value) => Self::float(Some(*value)),
-            Value::Null | Value::String(_) | Value::Bytes(_) | Value::Array(_) | Value::Map(_) => {
-                Self::tagged()
-            }
+            Value::Null => Self::tagged_typed(ValueType::Null),
+            Value::String(_) => Self::tagged_typed(ValueType::String),
+            Value::Bytes(_) => Self::tagged_typed(ValueType::Bytes),
+            Value::Array(_) => Self::tagged_typed(ValueType::Array),
+            Value::Map(_) => Self::tagged_typed(ValueType::Map),
         }
     }
 }
@@ -143,10 +170,12 @@ struct AnalysisFrame {
 }
 
 impl AnalysisFrame {
-    fn new(local_count: usize) -> Self {
+    fn new(program: &Program) -> Self {
         Self {
             stack: Vec::new(),
-            locals: vec![ValueInfo::tagged(); local_count],
+            locals: (0..program.local_count)
+                .map(|local| entry_local_info(program, local))
+                .collect(),
         }
     }
 
@@ -175,6 +204,16 @@ impl AnalysisFrame {
     }
 }
 
+fn entry_local_info(program: &Program, local: usize) -> ValueInfo {
+    let known_type = program
+        .type_map
+        .as_ref()
+        .and_then(|type_map| type_map.local_types.get(local))
+        .copied()
+        .filter(|ty| *ty != ValueType::Unknown);
+    known_type.map_or_else(ValueInfo::tagged, ValueInfo::tagged_typed)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct SymbolicValue {
     value: SsaValue,
@@ -190,6 +229,7 @@ struct SymbolicFrame {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct LoopHeaderPlan {
     local_reprs: Vec<SsaValueRepr>,
+    local_known_types: Vec<Option<ValueType>>,
     entry_seed: Vec<LoopSeed>,
 }
 
@@ -290,6 +330,8 @@ enum DecodedOp {
     },
     Call {
         ip: usize,
+        builtin: Option<BuiltinFunction>,
+        argc: u8,
         yields: bool,
     },
 }
@@ -343,6 +385,22 @@ enum NumericCompareKind {
 enum NumericUnaryKind {
     Int,
     Float,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CollectionContainerKind {
+    Array,
+    Map,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SpecializedBuiltinKind {
+    ArrayLen,
+    ArrayGet,
+    ArrayHas,
+    MapLen,
+    MapGet,
+    MapHas,
 }
 
 struct TraceCursor<'a> {
@@ -489,11 +547,15 @@ impl<'a> TraceCursor<'a> {
                 }
                 DecodedOp::Call {
                     ip: instr_ip,
+                    builtin: Some(builtin),
+                    argc,
                     yields: false,
                 }
             } else {
                 DecodedOp::Call {
                     ip: instr_ip,
+                    builtin: None,
+                    argc,
                     yields: true,
                 }
             }
@@ -520,7 +582,7 @@ pub(crate) fn record_trace(
                 .append_param(entry, SsaValueRepr::Tagged, format!("local{local}"))
                 .map(|value| SymbolicValue {
                     value,
-                    info: ValueInfo::tagged(),
+                    info: entry_local_info(program, local),
                 })
                 .map_err(|err| TraceRecordError::InvalidIr(err.to_string()))
         })
@@ -585,6 +647,7 @@ pub(crate) fn record_trace(
                     const_int: None,
                     const_float: None,
                     const_bool: None,
+                    known_type: loop_plan.local_known_types[local],
                 },
             });
             entry_args.push(entry_arg);
@@ -862,7 +925,29 @@ pub(crate) fn record_trace(
                 }
                 cursor.jump_to(target)?;
             }
-            DecodedOp::Call { ip, yields } => {
+            DecodedOp::Call {
+                ip,
+                builtin,
+                argc,
+                yields,
+            } => {
+                if let Some(builtin) = builtin
+                    && argc > 0
+                {
+                    let args = call_arg_slice(&frame.stack, usize::from(argc))?;
+                    if let Some(kind) = select_specialized_builtin_kind(builtin, args[0].info) {
+                        let (name, out) = emit_specialized_builtin_call(
+                            &mut builder,
+                            current_block,
+                            ip,
+                            &mut frame,
+                            kind,
+                        )?;
+                        op_names.push(name.to_string());
+                        frame.push(out);
+                        continue;
+                    }
+                }
                 has_call = true;
                 has_yielding_call |= yields;
                 op_names.push("call".to_string());
@@ -900,7 +985,7 @@ fn infer_loop_header_plan(
     max_trace_len: usize,
 ) -> Result<Option<LoopHeaderPlan>, TraceRecordError> {
     let mut cursor = TraceCursor::new(program, root_ip, max_trace_len);
-    let mut frame = AnalysisFrame::new(program.local_count);
+    let mut frame = AnalysisFrame::new(program);
     let mut entry_use = vec![EntryUseState::Untouched; program.local_count];
 
     loop {
@@ -910,7 +995,7 @@ fn infer_loop_header_plan(
 
         match decoded {
             DecodedOp::Nop { .. } => {}
-            DecodedOp::Ret { .. } | DecodedOp::Call { .. } => return Ok(None),
+            DecodedOp::Ret { .. } => return Ok(None),
             DecodedOp::Ldc { index, .. } => {
                 let constant = program.constants.get(index as usize).ok_or_else(|| {
                     TraceRecordError::UnsupportedTrace(format!(
@@ -992,6 +1077,21 @@ fn infer_loop_header_plan(
                 }
                 frame.push(ValueInfo::bool(None));
             }
+            DecodedOp::Call {
+                builtin: Some(builtin),
+                argc,
+                ..
+            } => {
+                if argc == 0 {
+                    return Ok(None);
+                }
+                let args = call_arg_slice(&frame.stack, usize::from(argc))?;
+                let Some(kind) = select_specialized_builtin_kind(builtin, args[0]) else {
+                    return Ok(None);
+                };
+                let _ = analyze_specialized_builtin_call(&mut frame, kind)?;
+            }
+            DecodedOp::Call { .. } => return Ok(None),
             DecodedOp::Brfalse {
                 target,
                 fallthrough_ip,
@@ -1797,6 +1897,272 @@ fn emit_float_compare(
     ))
 }
 
+impl CollectionContainerKind {
+    fn value_type(self) -> ValueType {
+        match self {
+            Self::Array => ValueType::Array,
+            Self::Map => ValueType::Map,
+        }
+    }
+}
+
+fn call_arg_slice<'a, T>(stack: &'a [T], argc: usize) -> Result<&'a [T], TraceRecordError> {
+    if stack.len() < argc {
+        return Err(TraceRecordError::StackUnderflow);
+    }
+    Ok(&stack[stack.len() - argc..])
+}
+
+fn observed_collection_kind(info: ValueInfo) -> Option<CollectionContainerKind> {
+    match info.repr {
+        SsaValueRepr::HeapPtr(ValueType::Array) => Some(CollectionContainerKind::Array),
+        SsaValueRepr::HeapPtr(ValueType::Map) => Some(CollectionContainerKind::Map),
+        _ => match info.known_type {
+            Some(ValueType::Array) => Some(CollectionContainerKind::Array),
+            Some(ValueType::Map) => Some(CollectionContainerKind::Map),
+            _ => None,
+        },
+    }
+}
+
+fn select_specialized_builtin_kind(
+    builtin: BuiltinFunction,
+    container: ValueInfo,
+) -> Option<SpecializedBuiltinKind> {
+    match (builtin, observed_collection_kind(container)?) {
+        (BuiltinFunction::Len, CollectionContainerKind::Array) => {
+            Some(SpecializedBuiltinKind::ArrayLen)
+        }
+        (BuiltinFunction::Get, CollectionContainerKind::Array) => {
+            Some(SpecializedBuiltinKind::ArrayGet)
+        }
+        (BuiltinFunction::Has, CollectionContainerKind::Array) => {
+            Some(SpecializedBuiltinKind::ArrayHas)
+        }
+        (BuiltinFunction::Len, CollectionContainerKind::Map) => {
+            Some(SpecializedBuiltinKind::MapLen)
+        }
+        (BuiltinFunction::Get, CollectionContainerKind::Map) => {
+            Some(SpecializedBuiltinKind::MapGet)
+        }
+        (BuiltinFunction::Has, CollectionContainerKind::Map) => {
+            Some(SpecializedBuiltinKind::MapHas)
+        }
+        _ => None,
+    }
+}
+
+fn analyze_specialized_builtin_call(
+    frame: &mut AnalysisFrame,
+    kind: SpecializedBuiltinKind,
+) -> Result<&'static str, TraceRecordError> {
+    match kind {
+        SpecializedBuiltinKind::ArrayLen => {
+            let _ = frame.pop()?;
+            frame.push(ValueInfo::int(None));
+            Ok("array_len")
+        }
+        SpecializedBuiltinKind::ArrayGet => {
+            let _ = frame.pop()?;
+            let _ = frame.pop()?;
+            frame.push(ValueInfo::tagged());
+            Ok("array_get")
+        }
+        SpecializedBuiltinKind::ArrayHas => {
+            let _ = frame.pop()?;
+            let _ = frame.pop()?;
+            frame.push(ValueInfo::bool(None));
+            Ok("array_has")
+        }
+        SpecializedBuiltinKind::MapLen => {
+            let _ = frame.pop()?;
+            frame.push(ValueInfo::int(None));
+            Ok("map_len")
+        }
+        SpecializedBuiltinKind::MapGet => {
+            let _ = frame.pop()?;
+            let _ = frame.pop()?;
+            frame.push(ValueInfo::tagged());
+            Ok("map_get")
+        }
+        SpecializedBuiltinKind::MapHas => {
+            let _ = frame.pop()?;
+            let _ = frame.pop()?;
+            frame.push(ValueInfo::bool(None));
+            Ok("map_has")
+        }
+    }
+}
+
+fn emit_specialized_builtin_call(
+    builder: &mut SsaTraceBuilder,
+    block: super::ir::SsaBlockId,
+    ip: usize,
+    frame: &mut SymbolicFrame,
+    kind: SpecializedBuiltinKind,
+) -> Result<(&'static str, SymbolicValue), TraceRecordError> {
+    match kind {
+        SpecializedBuiltinKind::ArrayLen => {
+            let array = frame.pop()?;
+            let array = ensure_heap_ptr(
+                builder,
+                block,
+                ip,
+                array,
+                CollectionContainerKind::Array.value_type(),
+            )?;
+            let out = builder
+                .append_value_inst(
+                    block,
+                    ip,
+                    SsaValueRepr::I64,
+                    SsaInstKind::ArrayLen {
+                        array: array.value.id,
+                    },
+                )
+                .map(|value| SymbolicValue {
+                    value,
+                    info: ValueInfo::int(None),
+                })
+                .map_err(|err| TraceRecordError::InvalidIr(err.to_string()))?;
+            Ok(("array_len", out))
+        }
+        SpecializedBuiltinKind::ArrayGet => {
+            let index = frame.pop()?;
+            let array = frame.pop()?;
+            let array = ensure_heap_ptr(
+                builder,
+                block,
+                ip,
+                array,
+                CollectionContainerKind::Array.value_type(),
+            )?;
+            let index = ensure_int(builder, block, ip, index)?;
+            let out = builder
+                .append_value_inst(
+                    block,
+                    ip,
+                    SsaValueRepr::Tagged,
+                    SsaInstKind::ArrayGet {
+                        array: array.value.id,
+                        index: index.value.id,
+                    },
+                )
+                .map(|value| SymbolicValue {
+                    value,
+                    info: ValueInfo::tagged(),
+                })
+                .map_err(|err| TraceRecordError::InvalidIr(err.to_string()))?;
+            Ok(("array_get", out))
+        }
+        SpecializedBuiltinKind::ArrayHas => {
+            let index = frame.pop()?;
+            let array = frame.pop()?;
+            let array = ensure_heap_ptr(
+                builder,
+                block,
+                ip,
+                array,
+                CollectionContainerKind::Array.value_type(),
+            )?;
+            let index = ensure_int(builder, block, ip, index)?;
+            let out = builder
+                .append_value_inst(
+                    block,
+                    ip,
+                    SsaValueRepr::Bool,
+                    SsaInstKind::ArrayHas {
+                        array: array.value.id,
+                        index: index.value.id,
+                    },
+                )
+                .map(|value| SymbolicValue {
+                    value,
+                    info: ValueInfo::bool(None),
+                })
+                .map_err(|err| TraceRecordError::InvalidIr(err.to_string()))?;
+            Ok(("array_has", out))
+        }
+        SpecializedBuiltinKind::MapLen => {
+            let map = frame.pop()?;
+            let map = ensure_heap_ptr(
+                builder,
+                block,
+                ip,
+                map,
+                CollectionContainerKind::Map.value_type(),
+            )?;
+            let out = builder
+                .append_value_inst(
+                    block,
+                    ip,
+                    SsaValueRepr::I64,
+                    SsaInstKind::MapLen { map: map.value.id },
+                )
+                .map(|value| SymbolicValue {
+                    value,
+                    info: ValueInfo::int(None),
+                })
+                .map_err(|err| TraceRecordError::InvalidIr(err.to_string()))?;
+            Ok(("map_len", out))
+        }
+        SpecializedBuiltinKind::MapGet => {
+            let key = frame.pop()?;
+            let map = frame.pop()?;
+            let map = ensure_heap_ptr(
+                builder,
+                block,
+                ip,
+                map,
+                CollectionContainerKind::Map.value_type(),
+            )?;
+            let out = builder
+                .append_value_inst(
+                    block,
+                    ip,
+                    SsaValueRepr::Tagged,
+                    SsaInstKind::MapGet {
+                        map: map.value.id,
+                        key: key.value.id,
+                    },
+                )
+                .map(|value| SymbolicValue {
+                    value,
+                    info: ValueInfo::tagged(),
+                })
+                .map_err(|err| TraceRecordError::InvalidIr(err.to_string()))?;
+            Ok(("map_get", out))
+        }
+        SpecializedBuiltinKind::MapHas => {
+            let key = frame.pop()?;
+            let map = frame.pop()?;
+            let map = ensure_heap_ptr(
+                builder,
+                block,
+                ip,
+                map,
+                CollectionContainerKind::Map.value_type(),
+            )?;
+            let out = builder
+                .append_value_inst(
+                    block,
+                    ip,
+                    SsaValueRepr::Bool,
+                    SsaInstKind::MapHas {
+                        map: map.value.id,
+                        key: key.value.id,
+                    },
+                )
+                .map(|value| SymbolicValue {
+                    value,
+                    info: ValueInfo::bool(None),
+                })
+                .map_err(|err| TraceRecordError::InvalidIr(err.to_string()))?;
+            Ok(("map_has", out))
+        }
+    }
+}
+
 fn ensure_entry_repr(
     builder: &mut SsaTraceBuilder,
     block: super::ir::SsaBlockId,
@@ -1811,6 +2177,9 @@ fn ensure_entry_repr(
         (SsaValueRepr::Tagged, SsaValueRepr::I64) => ensure_int(builder, block, ip, value),
         (SsaValueRepr::Tagged, SsaValueRepr::F64) => ensure_float(builder, block, ip, value),
         (SsaValueRepr::Tagged, SsaValueRepr::Bool) => ensure_bool(builder, block, ip, value),
+        (SsaValueRepr::Tagged, SsaValueRepr::HeapPtr(tag)) => {
+            ensure_heap_ptr(builder, block, ip, value, tag)
+        }
         (_, repr) => Err(TraceRecordError::TypeMismatch {
             expected: match repr {
                 SsaValueRepr::Tagged => "tagged",
@@ -1912,6 +2281,39 @@ fn ensure_bool(
         }
         other => Err(TraceRecordError::TypeMismatch {
             expected: "bool",
+            actual: other,
+        }),
+    }
+}
+
+fn ensure_heap_ptr(
+    builder: &mut SsaTraceBuilder,
+    block: super::ir::SsaBlockId,
+    ip: usize,
+    value: SymbolicValue,
+    tag: ValueType,
+) -> Result<SymbolicValue, TraceRecordError> {
+    match value.info.repr {
+        SsaValueRepr::HeapPtr(actual) if actual == tag => Ok(value),
+        SsaValueRepr::Tagged => {
+            let unboxed = builder
+                .append_value_inst(
+                    block,
+                    ip,
+                    SsaValueRepr::HeapPtr(tag),
+                    SsaInstKind::UnboxHeapPtr {
+                        input: value.value.id,
+                        tag,
+                    },
+                )
+                .map_err(|err| TraceRecordError::InvalidIr(err.to_string()))?;
+            Ok(SymbolicValue {
+                value: unboxed,
+                info: ValueInfo::heap(tag),
+            })
+        }
+        other => Err(TraceRecordError::TypeMismatch {
+            expected: "heap-ptr",
             actual: other,
         }),
     }
@@ -2215,6 +2617,7 @@ fn continue_with_frame(
                 const_int: None,
                 const_float: None,
                 const_bool: None,
+                known_type: value.info.known_type,
             },
         });
     }
@@ -2235,6 +2638,7 @@ fn continue_with_frame(
                 const_int: None,
                 const_float: None,
                 const_bool: None,
+                known_type: value.info.known_type,
             },
         });
     }
@@ -2259,10 +2663,12 @@ fn materialize_locals(locals: &[SymbolicValue]) -> Vec<SsaMaterialization> {
 
 fn build_loop_header_plan(locals: &[ValueInfo], entry_use: &[EntryUseState]) -> LoopHeaderPlan {
     let mut local_reprs = Vec::with_capacity(locals.len());
+    let mut local_known_types = Vec::with_capacity(locals.len());
     let mut entry_seed = Vec::with_capacity(locals.len());
     for (local, state) in locals.iter().zip(entry_use.iter()) {
         if matches!(state, EntryUseState::WrittenBeforeRead) {
             local_reprs.push(local.repr);
+            local_known_types.push(local.known_type);
             entry_seed.push(match local.repr {
                 SsaValueRepr::I64 => LoopSeed::ZeroI64,
                 SsaValueRepr::F64 => LoopSeed::ZeroF64,
@@ -2271,11 +2677,13 @@ fn build_loop_header_plan(locals: &[ValueInfo], entry_use: &[EntryUseState]) -> 
             });
         } else {
             local_reprs.push(local.repr);
+            local_known_types.push(local.known_type);
             entry_seed.push(LoopSeed::Entry);
         }
     }
     LoopHeaderPlan {
         local_reprs,
+        local_known_types,
         entry_seed,
     }
 }
