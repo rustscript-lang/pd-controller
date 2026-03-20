@@ -15,8 +15,8 @@ use crate::vm::native::{
     clear_value_slot_entry_address, clone_value_signature, clone_value_to_slot_entry_address,
     collection_get_signature, collection_predicate_signature, copy_bytes_entry_address,
     copy_bytes_signature, detect_native_stack_layout, entry_signature, free_buffer_signature,
-    init_null_value_slot_entry_address, jump_with_status,
-    map_get_entry_address, map_has_entry_address, pack_shared_signature, restore_exit_signature,
+    init_null_value_slot_entry_address, jump_with_status, map_get_entry_address,
+    map_has_entry_address, pack_shared_signature, restore_exit_signature,
     restore_exit_state_entry_address, shared_array_from_buffer_entry_address,
     shared_bytes_from_buffer_entry_address, shared_string_from_buffer_entry_address,
     value_slot_signature, write_heap_value_to_slot_entry_address, zero_bytes_entry_address,
@@ -306,14 +306,7 @@ fn try_compile_ssa_trace(
                 false,
                 allow_exit_link_handoff,
             )?;
-            lower_ssa_exit_block(
-                &mut b,
-                lower_ctx,
-                exit,
-                spec,
-                true,
-                false,
-            )?;
+            lower_ssa_exit_block(&mut b, lower_ctx, exit, spec, true, false)?;
         }
 
         b.switch_to_block(exit_block);
@@ -2707,13 +2700,7 @@ fn ssa_ensure_boxed_value_addr(
     } else {
         ssa_alloc_single_value_slot(b, pointer_type, value_layout.size)?
     };
-    ssa_materialize_runtime_value_to_slot(
-        b,
-        ctx,
-        repr,
-        value,
-        slot,
-    )?;
+    ssa_materialize_runtime_value_to_slot(b, ctx, repr, value, slot)?;
     Ok(slot)
 }
 

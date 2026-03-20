@@ -4,11 +4,11 @@ use std::sync::Arc;
 #[cfg(feature = "cranelift-jit")]
 use std::collections::HashMap;
 #[cfg(feature = "cranelift-jit")]
-use std::time::Instant;
-#[cfg(feature = "cranelift-jit")]
 use std::sync::OnceLock;
 #[cfg(feature = "cranelift-jit")]
 use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(feature = "cranelift-jit")]
+use std::time::Instant;
 
 use crate::vm::native::ExecutableBuffer;
 #[cfg(feature = "cranelift-jit")]
@@ -157,9 +157,17 @@ fn compile_program_inner(program: &Program) -> Result<CompiledProgram, AotCompil
     let ssa = build_aot_ssa(program)?;
     let build_elapsed = build_started.elapsed();
     if trace_enabled {
-        let total_insts = ssa.blocks.iter().map(|block| block.insts.len()).sum::<usize>();
+        let total_insts = ssa
+            .blocks
+            .iter()
+            .map(|block| block.insts.len())
+            .sum::<usize>();
         let external_checkpoints = ssa.checkpoints.iter().filter(|cp| cp.external).count();
-        let total_block_params = ssa.blocks.iter().map(|block| block.params.len()).sum::<usize>();
+        let total_block_params = ssa
+            .blocks
+            .iter()
+            .map(|block| block.params.len())
+            .sum::<usize>();
         let max_block_params = ssa
             .blocks
             .iter()
@@ -1549,7 +1557,9 @@ fn aot_lower_string_len(
     operand: AotTaggedValueOp,
 ) -> Result<cranelift_codegen::ir::Value, AotCompileError> {
     let AotLowerCtx {
-        pointer_type, layout, ..
+        pointer_type,
+        layout,
+        ..
     } = ctx;
     let string_raw = aot_load_checked_heap_ptr(b, ctx, operand, layout.value.string_tag)?;
     let string_data = ssa_load_heap_data_ptr(b, layout.value, string_raw);
@@ -1613,7 +1623,9 @@ fn aot_lower_bytes_len(
     operand: AotTaggedValueOp,
 ) -> Result<cranelift_codegen::ir::Value, AotCompileError> {
     let AotLowerCtx {
-        pointer_type, layout, ..
+        pointer_type,
+        layout,
+        ..
     } = ctx;
     let bytes_raw = aot_load_checked_heap_ptr(b, ctx, operand, layout.value.bytes_tag)?;
     let vec_ptr = ssa_load_heap_data_ptr(b, layout.value, bytes_raw);
@@ -1800,21 +1812,15 @@ fn aot_lower_tagged_bytes_eq(
     expected_tag: u32,
 ) -> Result<cranelift_codegen::ir::Value, AotCompileError> {
     let AotLowerCtx {
-        pointer_type, layout, ..
+        pointer_type,
+        layout,
+        ..
     } = ctx;
     let AotBinaryOp { ip, lhs, rhs } = op;
-    let lhs_raw = aot_load_checked_heap_ptr(
-        b,
-        ctx,
-        AotTaggedValueOp { ip, value: lhs },
-        expected_tag,
-    )?;
-    let rhs_raw = aot_load_checked_heap_ptr(
-        b,
-        ctx,
-        AotTaggedValueOp { ip, value: rhs },
-        expected_tag,
-    )?;
+    let lhs_raw =
+        aot_load_checked_heap_ptr(b, ctx, AotTaggedValueOp { ip, value: lhs }, expected_tag)?;
+    let rhs_raw =
+        aot_load_checked_heap_ptr(b, ctx, AotTaggedValueOp { ip, value: rhs }, expected_tag)?;
     let lhs_data = ssa_load_heap_data_ptr(b, layout.value, lhs_raw);
     let rhs_data = ssa_load_heap_data_ptr(b, layout.value, rhs_raw);
     let lhs_ptr = b.ins().load(
@@ -2085,18 +2091,10 @@ fn aot_lower_concat(
         result_tag,
         pack_addr,
     } = op;
-    let lhs_raw = aot_load_checked_heap_ptr(
-        b,
-        ctx,
-        AotTaggedValueOp { ip, value: lhs },
-        result_tag,
-    )?;
-    let rhs_raw = aot_load_checked_heap_ptr(
-        b,
-        ctx,
-        AotTaggedValueOp { ip, value: rhs },
-        result_tag,
-    )?;
+    let lhs_raw =
+        aot_load_checked_heap_ptr(b, ctx, AotTaggedValueOp { ip, value: lhs }, result_tag)?;
+    let rhs_raw =
+        aot_load_checked_heap_ptr(b, ctx, AotTaggedValueOp { ip, value: rhs }, result_tag)?;
     let lhs_data = ssa_load_heap_data_ptr(b, layout.value, lhs_raw);
     let rhs_data = ssa_load_heap_data_ptr(b, layout.value, rhs_raw);
     let lhs_bytes_ptr = b.ins().load(
@@ -2217,7 +2215,9 @@ fn aot_lower_string_slice(
         length,
     } = op;
     let AotLowerCtx {
-        pointer_type, layout, ..
+        pointer_type,
+        layout,
+        ..
     } = ctx;
     let string_raw = aot_load_checked_heap_ptr(
         b,
@@ -2406,7 +2406,9 @@ fn aot_lower_bytes_slice(
         length,
     } = op;
     let AotLowerCtx {
-        pointer_type, layout, ..
+        pointer_type,
+        layout,
+        ..
     } = ctx;
     let bytes_raw = aot_load_checked_heap_ptr(
         b,

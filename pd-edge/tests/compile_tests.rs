@@ -149,7 +149,8 @@ fn compile_edge_source_file_supports_console_http3_client_example() {
     let program_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("examples/console/sample_console_http3_client.rss");
 
-    let compiled = compile_edge_source_file(program_path.as_path()).expect("example should compile");
+    let compiled =
+        compile_edge_source_file(program_path.as_path()).expect("example should compile");
     let import_names = compiled
         .program
         .imports

@@ -22,9 +22,8 @@ pub(crate) use bridge::{
 pub(crate) use codegen::{
     alloc_buffer_signature, box_heap_value_signature, clone_value_signature,
     collection_get_signature, collection_predicate_signature, copy_bytes_signature,
-    entry_signature, free_buffer_signature, helper_signature,
-    jump_with_status, pack_shared_signature, restore_exit_signature, value_eq_signature,
-    value_slot_signature,
+    entry_signature, free_buffer_signature, helper_signature, jump_with_status,
+    pack_shared_signature, restore_exit_signature, value_eq_signature, value_slot_signature,
 };
 pub(crate) use exec::{ExecutableBuffer, prepare_for_execution};
 pub(crate) use layout::{

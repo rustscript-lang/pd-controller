@@ -910,12 +910,9 @@ async fn connection_send_binary(
             "webrtc data channel is unavailable before the connection opens".to_string(),
         )
     })?;
-    let sent = data_channel
-        .send(&payload)
-        .await
-        .map_err(|err| {
-            VmError::HostError(format!("failed to send webrtc binary message: {err}"))
-        })?;
+    let sent = data_channel.send(&payload).await.map_err(|err| {
+        VmError::HostError(format!("failed to send webrtc binary message: {err}"))
+    })?;
     Ok(CallOutcome::Return(vec![Value::Int(sent as i64)]))
 }
 

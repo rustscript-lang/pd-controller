@@ -1487,7 +1487,8 @@ fn compile_source_file_supports_rss_modules_from_js_lua_and_scheme() {
     "#,
     )
     .expect("scheme source should write");
-    let scm_compiled = compile_source_file(scm_path.as_path()).expect("scheme compile should succeed");
+    let scm_compiled =
+        compile_source_file(scm_path.as_path()).expect("scheme compile should succeed");
     let mut scm_vm = Vm::new(scm_compiled.program);
     for func in &scm_compiled.functions {
         match func.name.as_str() {
