@@ -631,6 +631,24 @@ impl Vm {
         }
     }
 
+    #[inline(always)]
+    pub(in crate::vm) fn charge_aot_call_boundary_interrupt(&mut self) -> VmResult<()> {
+        match self.interrupt_mode {
+            InterruptMode::None => Ok(()),
+            InterruptMode::Fuel => self.charge_fuel(1),
+            InterruptMode::Epoch => {
+                let current = self.current_epoch();
+                if current >= self.epoch_deadline {
+                    return Err(VmError::EpochDeadlineReached {
+                        current,
+                        deadline: self.epoch_deadline,
+                    });
+                }
+                Ok(())
+            }
+        }
+    }
+
     pub(super) fn peek_value(&self) -> VmResult<&Value> {
         self.stack.last().ok_or(VmError::StackUnderflow)
     }
@@ -1293,7 +1311,7 @@ impl Vm {
                 active_debugger.on_instruction(self);
             }
 
-            if allow_jit && self.has_aot_program() {
+            if allow_jit && self.has_aot_program() && !self.drop_contract_events_enabled() {
                 let outcome = match self.execute_aot_entry() {
                     Ok(outcome) => outcome,
                     Err(err) => {

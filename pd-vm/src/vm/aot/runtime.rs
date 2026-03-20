@@ -1,7 +1,7 @@
 use super::compile::{CompiledProgram, compile_program};
 use crate::vm::native::{
-    STATUS_ERROR, STATUS_HALTED, STATUS_OUT_OF_FUEL, STATUS_TRACE_EXIT, STATUS_WAITING,
-    STATUS_YIELDED, clear_bridge_error, selected_codegen_backend, take_bridge_error,
+    STATUS_CONTINUE, STATUS_ERROR, STATUS_HALTED, STATUS_OUT_OF_FUEL, STATUS_TRACE_EXIT,
+    STATUS_WAITING, STATUS_YIELDED, clear_bridge_error, selected_codegen_backend, take_bridge_error,
 };
 use crate::vm::{ExecOutcome, Vm, VmError, VmResult};
 
@@ -44,6 +44,7 @@ impl Vm {
         ));
         out.push_str(&format!("  aot executions: {}\n", self.aot_exec_count));
         out.push_str(&format!("  code_bytes={}\n", program.code.len()));
+        out.push_str("  lowering=ssa\n");
         out.push_str(&format!("  resume ips: {}\n", format_resume_ips(program)));
         out
     }
@@ -59,6 +60,7 @@ impl Vm {
         self.aot_exec_count = self.aot_exec_count.saturating_add(1);
 
         match status {
+            STATUS_CONTINUE => Ok(ExecOutcome::Continue),
             STATUS_HALTED => Ok(ExecOutcome::Halted),
             STATUS_YIELDED => {
                 self.last_yield_reason = Some(super::super::VmYieldReason::Host);

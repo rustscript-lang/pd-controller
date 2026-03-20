@@ -198,6 +198,37 @@ fn install_aot(vm: &mut Vm) {
     assert!(vm.has_aot_program(), "aot program should be installed");
 }
 
+fn counting_loop_program(limit: i64, host_call_each_iteration: bool) -> Program {
+    let mut bc = BytecodeBuilder::new();
+    bc.ldc(0);
+    bc.stloc(0);
+
+    let loop_ip = bc.position();
+    bc.ldloc(0);
+    bc.ldc(2);
+    bc.clt();
+    let exit_branch_ip = bc.position();
+    bc.brfalse(0);
+
+    if host_call_each_iteration {
+        bc.call(0, 0);
+    }
+
+    bc.ldloc(0);
+    bc.ldc(1);
+    bc.add();
+    bc.stloc(0);
+    bc.br(loop_ip);
+
+    let exit_ip = bc.position();
+    bc.ldloc(0);
+    bc.ret();
+
+    let mut code = bc.finish();
+    patch_branch_target(&mut code, exit_branch_ip, exit_ip);
+    Program::new(vec![Value::Int(0), Value::Int(1), Value::Int(limit)], code).with_local_count(1)
+}
+
 #[test]
 fn aot_compiles_whole_non_loop_program() {
     if !native_jit_supported() {
@@ -266,6 +297,32 @@ fn aot_handles_string_equality_paths() {
 }
 
 #[test]
+fn aot_handles_structural_array_equality_paths() {
+    if !native_jit_supported() {
+        return;
+    }
+
+    let source = r#"
+        let lhs = [1, 2];
+        let rhs = [1, 2];
+        if lhs == rhs {
+            7;
+        } else {
+            9;
+        }
+    "#;
+
+    let compiled = compile_source(source).expect("compile should succeed");
+    let mut vm = Vm::new(compiled.program.with_local_count(compiled.locals));
+    install_aot(&mut vm);
+
+    let status = vm.run().expect("aot vm should run");
+    assert_eq!(status, VmStatus::Halted);
+    assert_eq!(vm.stack(), &[Value::Int(7)]);
+    assert!(vm.aot_exec_count() > 0, "aot should execute natively");
+}
+
+#[test]
 fn aot_inlines_typed_numeric_steps_without_bridge_fallback() {
     if !native_jit_supported() {
         return;
@@ -291,6 +348,160 @@ fn aot_inlines_typed_numeric_steps_without_bridge_fallback() {
         bridge_hits.iter().all(|(name, _)| *name == "ldc"),
         "typed aot arithmetic should only fall back for initial stack growth, not math ops: {bridge_hits:?}"
     );
+}
+
+#[test]
+fn aot_handles_scalar_local_clear_sequences() {
+    if !native_jit_supported() {
+        return;
+    }
+
+    let source = r#"
+        let mut outer = 0;
+        let mut sum = 0;
+        while outer < 4 {
+            let mut i = 0;
+            while i < 64 {
+                let a = i + 7;
+                let b = a - 3;
+                sum = sum + b;
+                i = i + 1;
+            }
+            outer = outer + 1;
+        }
+        sum;
+    "#;
+
+    let compiled = compile_source(source).expect("compile should succeed");
+    let mut vm = Vm::new(compiled.program.with_local_count(compiled.locals));
+    install_aot(&mut vm);
+
+    let status = vm.run().expect("aot vm should run");
+    assert_eq!(status, VmStatus::Halted);
+    assert_eq!(vm.stack(), &[Value::Int(9088)]);
+    assert!(vm.aot_exec_count() > 0, "aot should execute natively");
+}
+
+#[test]
+fn aot_handles_mixed_numeric_less_than_loops() {
+    if !native_jit_supported() {
+        return;
+    }
+
+    let source = r#"
+        let mut i = 0;
+        let mut count = 0;
+        while i < 5.5 {
+            count = count + 1;
+            i = i + 1;
+        }
+        count;
+    "#;
+
+    let compiled = compile_source(source).expect("compile should succeed");
+    let mut vm = Vm::new(compiled.program.with_local_count(compiled.locals));
+    install_aot(&mut vm);
+
+    let status = vm.run().expect("aot vm should run");
+    assert_eq!(status, VmStatus::Halted);
+    assert_eq!(vm.stack(), &[Value::Int(6)]);
+    assert!(vm.aot_exec_count() > 0, "aot should execute natively");
+}
+
+#[test]
+fn aot_handles_dynamic_numeric_builtin_results_in_compares() {
+    if !native_jit_supported() {
+        return;
+    }
+
+    let source = r#"
+        use math;
+        let delta = math::abs(10.0 - 12.5);
+        let mut out = 0;
+        if delta < 3.0 {
+            out = 1;
+        }
+        out;
+    "#;
+
+    let compiled = compile_source(source).expect("compile should succeed");
+    let mut vm = Vm::new(compiled.program.with_local_count(compiled.locals));
+    install_aot(&mut vm);
+
+    let status = vm.run().expect("aot vm should run");
+    assert_eq!(status, VmStatus::Halted);
+    assert_eq!(vm.stack(), &[Value::Int(1)]);
+    assert!(vm.aot_exec_count() > 0, "aot should execute natively");
+}
+
+#[test]
+fn aot_handles_mixed_numeric_arithmetic_promotions() {
+    if !native_jit_supported() {
+        return;
+    }
+
+    let source = r#"
+        let value = 2.0 * 3 + 1;
+        let scaled = value / 2;
+        scaled;
+    "#;
+
+    let compiled = compile_source(source).expect("compile should succeed");
+    let mut vm = Vm::new(compiled.program.with_local_count(compiled.locals));
+    install_aot(&mut vm);
+
+    let status = vm.run().expect("aot vm should run");
+    assert_eq!(status, VmStatus::Halted);
+    assert_eq!(vm.stack(), &[Value::Float(3.5)]);
+    assert!(vm.aot_exec_count() > 0, "aot should execute natively");
+}
+
+#[test]
+fn aot_handles_tagged_array_elements_in_float_arithmetic() {
+    if !native_jit_supported() {
+        return;
+    }
+
+    let source = r#"
+        let values = [1.5, 2.0, 4.0];
+        let scale = 0.5;
+        let out = values[2] * scale + values[0];
+        out;
+    "#;
+
+    let compiled = compile_source(source).expect("compile should succeed");
+    let mut vm = Vm::new(compiled.program.with_local_count(compiled.locals));
+        install_aot(&mut vm);
+
+    let status = vm.run().expect("aot vm should run");
+    assert_eq!(status, VmStatus::Halted);
+    assert_eq!(vm.stack(), &[Value::Float(3.5)]);
+    assert!(vm.aot_exec_count() > 0, "aot should execute natively");
+}
+
+#[test]
+fn aot_handles_zero_result_assert_calls_in_loops() {
+    if !native_jit_supported() {
+        return;
+    }
+
+    let source = r#"
+        let mut i = 0;
+        while i < 8 {
+            assert(i >= 0);
+            i = i + 1;
+        }
+        i;
+    "#;
+
+    let compiled = compile_source(source).expect("compile should succeed");
+    let mut vm = Vm::new(compiled.program.with_local_count(compiled.locals));
+    install_aot(&mut vm);
+
+    let status = vm.run().expect("aot vm should run");
+    assert_eq!(status, VmStatus::Halted);
+    assert_eq!(vm.stack(), &[Value::Int(8)]);
+    assert!(vm.aot_exec_count() > 0, "aot should execute natively");
 }
 
 #[test]
@@ -565,25 +776,17 @@ fn aot_waits_for_pending_host_and_resumes_without_replay() {
 }
 
 #[test]
-fn aot_honors_fuel_metering_and_resume() {
+fn aot_honors_fuel_metering_at_host_call_boundaries_only() {
     if !native_jit_supported() {
         return;
     }
 
-    let source = r#"
-        let mut i = 0;
-        while i < 20 {
-            i = i + 1;
-        }
-        i;
-    "#;
-
-    let compiled = compile_source(source).expect("compile should succeed");
-    let mut vm = Vm::new(compiled.program.with_local_count(compiled.locals));
+    let mut vm = Vm::new(counting_loop_program(4, true));
+    vm.register_function(Box::new(PrintNoReturn));
     install_aot(&mut vm);
-    vm.set_fuel_check_interval(1)
+    vm.set_fuel_check_interval(100)
         .expect("fuel interval update should succeed");
-    vm.set_fuel(5);
+    vm.set_fuel(1);
 
     let mut yielded = 0u64;
     loop {
@@ -592,14 +795,14 @@ fn aot_honors_fuel_metering_and_resume() {
             VmStatus::Yielded => {
                 yielded = yielded.saturating_add(1);
                 assert_eq!(vm.last_yield_reason(), Some(VmYieldReason::Fuel));
-                vm.recharge_fuel(5).expect("recharge should succeed");
+                vm.recharge_fuel(1).expect("recharge should succeed");
             }
             VmStatus::Waiting(op_id) => panic!("unexpected host wait on op {op_id}"),
         }
     }
 
-    assert!(yielded > 0, "expected at least one fuel yield");
-    assert_eq!(vm.stack().last(), Some(&Value::Int(20)));
+    assert_eq!(yielded, 3, "fuel should only yield before the next host call");
+    assert_eq!(vm.stack().last(), Some(&Value::Int(4)));
     assert!(
         vm.aot_exec_count() > 1,
         "aot should resume after fuel yields"
@@ -607,23 +810,15 @@ fn aot_honors_fuel_metering_and_resume() {
 }
 
 #[test]
-fn aot_honors_epoch_interruption_and_resume() {
+fn aot_honors_epoch_interruption_at_host_call_boundaries_only() {
     if !native_jit_supported() {
         return;
     }
 
-    let source = r#"
-        let mut i = 0;
-        while i < 8 {
-            i = i + 1;
-        }
-        i;
-    "#;
-
-    let compiled = compile_source(source).expect("compile should succeed");
-    let mut vm = Vm::new(compiled.program.with_local_count(compiled.locals));
+    let mut vm = Vm::new(counting_loop_program(2, true));
+    vm.register_function(Box::new(PrintNoReturn));
     install_aot(&mut vm);
-    vm.set_epoch_check_interval(1)
+    vm.set_epoch_check_interval(100)
         .expect("epoch interval update should succeed");
     vm.set_epoch_deadline(0)
         .expect("setting epoch deadline should succeed");
@@ -639,7 +834,29 @@ fn aot_honors_epoch_interruption_and_resume() {
     vm.clear_epoch_deadline();
     let halted = vm.run().expect("run should halt after clearing epoch");
     assert_eq!(halted, VmStatus::Halted);
-    assert_eq!(vm.stack().last(), Some(&Value::Int(8)));
+    assert_eq!(vm.stack().last(), Some(&Value::Int(2)));
+}
+
+#[test]
+fn aot_ignores_fuel_interval_inside_no_call_loops() {
+    if !native_jit_supported() {
+        return;
+    }
+
+    let mut vm = Vm::new(counting_loop_program(20, false));
+    install_aot(&mut vm);
+    vm.set_fuel_check_interval(1)
+        .expect("fuel interval update should succeed");
+    vm.set_fuel(1);
+
+    let status = vm.run().expect("aot run should succeed");
+    assert_eq!(status, VmStatus::Halted);
+    assert_eq!(vm.stack().last(), Some(&Value::Int(20)));
+    assert_eq!(
+        vm.get_fuel(),
+        Some(1),
+        "no-call aot loops should not consume fuel inside native execution"
+    );
 }
 
 #[test]

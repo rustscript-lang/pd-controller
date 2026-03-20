@@ -181,6 +181,10 @@ pub(crate) fn interrupt_helper_entry_address() -> usize {
     pd_vm_native_interrupt_tick as *const () as usize
 }
 
+pub(crate) fn aot_call_boundary_interrupt_entry_address() -> usize {
+    pd_vm_native_aot_call_boundary_interrupt as *const () as usize
+}
+
 pub(crate) fn alloc_byte_buffer_entry_address() -> usize {
     pd_vm_native_alloc_byte_buffer as *const () as usize
 }
@@ -233,6 +237,10 @@ pub(crate) fn clear_value_slot_entry_address() -> usize {
     pd_vm_native_clear_value_slot as *const () as usize
 }
 
+pub(crate) fn value_eq_entry_address() -> usize {
+    pd_vm_native_value_eq as *const () as usize
+}
+
 pub(crate) fn write_heap_value_to_slot_entry_address() -> usize {
     pd_vm_native_write_heap_value_to_slot as *const () as usize
 }
@@ -268,6 +276,24 @@ pub(crate) extern "C" fn pd_vm_native_interrupt_tick(vm: *mut Vm) -> i32 {
     };
 
     match vm_ref.charge_interrupt_tick() {
+        Ok(()) => STATUS_CONTINUE,
+        Err(VmError::OutOfFuel { .. } | VmError::EpochDeadlineReached { .. }) => STATUS_OUT_OF_FUEL,
+        Err(err) => {
+            store_bridge_error(err);
+            STATUS_ERROR
+        }
+    }
+}
+
+pub(crate) extern "C" fn pd_vm_native_aot_call_boundary_interrupt(vm: *mut Vm) -> i32 {
+    let Some(vm_ref) = (unsafe { vm.as_mut() }) else {
+        store_bridge_error(VmError::JitNative(
+            "native aot call-boundary interrupt helper received null vm pointer".to_string(),
+        ));
+        return STATUS_ERROR;
+    };
+
+    match vm_ref.charge_aot_call_boundary_interrupt() {
         Ok(()) => STATUS_CONTINUE,
         Err(VmError::OutOfFuel { .. } | VmError::EpochDeadlineReached { .. }) => STATUS_OUT_OF_FUEL,
         Err(err) => {
@@ -400,6 +426,17 @@ pub(crate) extern "C" fn pd_vm_native_clear_value_slot(dst: *mut Value) -> i32 {
         drop(old);
     }
     STATUS_CONTINUE
+}
+
+pub(crate) extern "C" fn pd_vm_native_value_eq(lhs: *const Value, rhs: *const Value) -> i32 {
+    if lhs.is_null() || rhs.is_null() {
+        store_bridge_error(VmError::JitNative(
+            "native value-eq helper received null pointer".to_string(),
+        ));
+        return STATUS_ERROR;
+    }
+
+    i32::from(unsafe { &*lhs == &*rhs })
 }
 
 pub(crate) extern "C" fn pd_vm_native_write_heap_value_to_slot(
