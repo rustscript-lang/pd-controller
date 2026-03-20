@@ -557,7 +557,7 @@ fn render_builtin_catalog(
 
     writeln!(
         &mut out,
-        "#[cfg(feature = \"runtime\")]\npub(crate) fn resolve_namespaced_builtin(name: &str) -> Option<BuiltinFunction> {{"
+        "pub(crate) fn resolve_namespaced_builtin(name: &str) -> Option<BuiltinFunction> {{"
     )
     .unwrap();
     writeln!(&mut out, "    let mut parts = name.trim().split(\"::\");").unwrap();
@@ -588,7 +588,7 @@ fn render_builtin_catalog(
     render_builtin_signature_method(&mut out, &builtin_variant_order);
     writeln!(
         &mut out,
-        "    #[cfg(feature = \"runtime\")]\n    pub(crate) fn from_namespaced_name(name: &str) -> Option<Self> {{"
+        "    pub(crate) fn from_namespaced_name(name: &str) -> Option<Self> {{"
     )
     .unwrap();
     writeln!(&mut out, "        resolve_namespaced_builtin(name)").unwrap();
