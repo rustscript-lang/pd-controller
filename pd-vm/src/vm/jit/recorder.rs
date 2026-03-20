@@ -359,6 +359,7 @@ enum FloatBinOpKind {
 enum NumericBinOpKind {
     Int(IntBinOpKind),
     Float(FloatBinOpKind),
+    Concat(ConcatBinOpKind),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -388,13 +389,29 @@ enum NumericUnaryKind {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum CollectionContainerKind {
+enum ConcatBinOpKind {
+    String,
+    Bytes,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HeapContainerKind {
+    String,
+    Bytes,
     Array,
     Map,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SpecializedBuiltinKind {
+    StringLen,
+    BytesLen,
+    StringSlice,
+    BytesSlice,
+    StringGet,
+    BytesGet,
+    StringConcat,
+    BytesConcat,
     ArrayLen,
     ArrayGet,
     ArrayHas,
@@ -745,6 +762,9 @@ pub(crate) fn record_trace(
                             let rhs = ensure_float(&mut builder, current_block, ip, rhs)?;
                             emit_float_binop(&mut builder, current_block, ip, kind, lhs, rhs)?
                         }
+                        NumericBinOpKind::Concat(kind) => {
+                            emit_concat_binop(&mut builder, current_block, ip, kind, lhs, rhs)?
+                        }
                     };
                 op_names.push(name.to_string());
                 frame.push(out);
@@ -987,6 +1007,7 @@ fn infer_loop_header_plan(
     let mut cursor = TraceCursor::new(program, root_ip, max_trace_len);
     let mut frame = AnalysisFrame::new(program);
     let mut entry_use = vec![EntryUseState::Untouched; program.local_count];
+    let mut local_written = vec![false; program.local_count];
 
     loop {
         let Some(decoded) = cursor.next()? else {
@@ -1013,6 +1034,9 @@ fn infer_loop_header_plan(
                 frame.push(frame.local(index)?)
             }
             DecodedOp::Stloc { index, .. } => {
+                if let Some(written) = local_written.get_mut(index as usize) {
+                    *written = true;
+                }
                 if let Some(state) = entry_use.get_mut(index as usize)
                     && matches!(*state, EntryUseState::Untouched)
                 {
@@ -1058,6 +1082,9 @@ fn infer_loop_header_plan(
                         validate_float_operands(program, ip, kind, lhs, rhs)?;
                         frame.push(result_info_for_float_binop(kind, lhs, rhs));
                     }
+                    NumericBinOpKind::Concat(kind) => {
+                        frame.push(result_info_for_concat_binop(kind));
+                    }
                 }
             }
             DecodedOp::Compare { ip, opcode } => {
@@ -1068,14 +1095,15 @@ fn infer_loop_header_plan(
                         let lhs = expect_int_info(lhs)?;
                         let rhs = expect_int_info(rhs)?;
                         validate_int_compare_operands(program, ip, kind, lhs, rhs)?;
+                        frame.push(result_info_for_int_compare(kind, lhs, rhs));
                     }
                     NumericCompareKind::Float(kind) => {
                         let lhs = expect_float_info(lhs)?;
                         let rhs = expect_float_info(rhs)?;
                         validate_float_compare_operands(program, ip, kind, lhs, rhs)?;
+                        frame.push(result_info_for_float_compare(kind, lhs, rhs));
                     }
                 }
-                frame.push(ValueInfo::bool(None));
             }
             DecodedOp::Call {
                 builtin: Some(builtin),
@@ -1109,7 +1137,11 @@ fn infer_loop_header_plan(
                             depth: frame.stack.len(),
                         });
                     }
-                    return Ok(Some(build_loop_header_plan(&frame.locals, &entry_use)));
+                    return Ok(Some(build_loop_header_plan(
+                        &frame.locals,
+                        &entry_use,
+                        &local_written,
+                    )));
                 }
                 if condition.const_bool == Some(false) {
                     cursor.jump_to(target)?;
@@ -1122,7 +1154,11 @@ fn infer_loop_header_plan(
                             depth: frame.stack.len(),
                         });
                     }
-                    return Ok(Some(build_loop_header_plan(&frame.locals, &entry_use)));
+                    return Ok(Some(build_loop_header_plan(
+                        &frame.locals,
+                        &entry_use,
+                        &local_written,
+                    )));
                 }
                 if target < cursor.ip() {
                     return Ok(None);
@@ -1145,6 +1181,21 @@ fn select_numeric_neg(value: ValueInfo) -> Result<NumericUnaryKind, TraceRecordE
     }
 }
 
+fn observed_concat_binop_kind(lhs: ValueInfo, rhs: ValueInfo) -> Option<ConcatBinOpKind> {
+    match (
+        observed_heap_container_kind(lhs),
+        observed_heap_container_kind(rhs),
+    ) {
+        (Some(HeapContainerKind::String), Some(HeapContainerKind::String)) => {
+            Some(ConcatBinOpKind::String)
+        }
+        (Some(HeapContainerKind::Bytes), Some(HeapContainerKind::Bytes)) => {
+            Some(ConcatBinOpKind::Bytes)
+        }
+        _ => None,
+    }
+}
+
 fn select_numeric_binop(
     program: &Program,
     ip: usize,
@@ -1153,6 +1204,7 @@ fn select_numeric_binop(
     rhs: ValueInfo,
 ) -> Result<NumericBinOpKind, TraceRecordError> {
     let operand_types = operand_types(program, ip);
+    let observed_concat = observed_concat_binop_kind(lhs, rhs);
     let int_like = matches!(lhs.repr, SsaValueRepr::I64 | SsaValueRepr::Tagged)
         && matches!(rhs.repr, SsaValueRepr::I64 | SsaValueRepr::Tagged);
     let float_like = matches!(lhs.repr, SsaValueRepr::F64 | SsaValueRepr::Tagged)
@@ -1172,11 +1224,25 @@ fn select_numeric_binop(
             (ValueType::Float, ValueType::Float) => {
                 Ok(NumericBinOpKind::Float(FloatBinOpKind::Add))
             }
-            (ValueType::String, ValueType::String) | (ValueType::Bytes, ValueType::Bytes) => {
-                Err(TraceRecordError::UnsupportedTrace(
-                    "SSA recorder does not support string/bytes concat traces yet".to_string(),
-                ))
+            (ValueType::String, ValueType::String) => {
+                Ok(NumericBinOpKind::Concat(ConcatBinOpKind::String))
             }
+            (ValueType::Bytes, ValueType::Bytes) => {
+                Ok(NumericBinOpKind::Concat(ConcatBinOpKind::Bytes))
+            }
+            (ValueType::String, ValueType::Unknown) | (ValueType::Unknown, ValueType::String)
+                if observed_concat == Some(ConcatBinOpKind::String) =>
+            {
+                Ok(NumericBinOpKind::Concat(ConcatBinOpKind::String))
+            }
+            (ValueType::Bytes, ValueType::Unknown) | (ValueType::Unknown, ValueType::Bytes)
+                if observed_concat == Some(ConcatBinOpKind::Bytes) =>
+            {
+                Ok(NumericBinOpKind::Concat(ConcatBinOpKind::Bytes))
+            }
+            (ValueType::Unknown, ValueType::Unknown) if observed_concat.is_some() => Ok(
+                NumericBinOpKind::Concat(observed_concat.expect("concat kind checked above")),
+            ),
             (ValueType::Unknown, ValueType::Unknown)
             | (ValueType::Int, ValueType::Unknown)
             | (ValueType::Unknown, ValueType::Int)
@@ -1788,13 +1854,8 @@ fn emit_int_compare(
     let value = builder
         .append_value_inst(block, ip, SsaValueRepr::Bool, inst_kind)
         .map_err(|err| TraceRecordError::InvalidIr(err.to_string()))?;
-    Ok((
-        name,
-        SymbolicValue {
-            value,
-            info: ValueInfo::bool(None),
-        },
-    ))
+    let info = result_info_for_int_compare(kind, lhs.info, rhs.info);
+    Ok((name, SymbolicValue { value, info }))
 }
 
 fn emit_float_binop(
@@ -1854,6 +1915,46 @@ fn emit_float_binop(
     ))
 }
 
+fn emit_concat_binop(
+    builder: &mut SsaTraceBuilder,
+    block: super::ir::SsaBlockId,
+    ip: usize,
+    kind: ConcatBinOpKind,
+    lhs: SymbolicValue,
+    rhs: SymbolicValue,
+) -> Result<(&'static str, SymbolicValue), TraceRecordError> {
+    let (name, inst_kind, info) = match kind {
+        ConcatBinOpKind::String => {
+            let lhs = ensure_heap_ptr(builder, block, ip, lhs, ValueType::String)?;
+            let rhs = ensure_heap_ptr(builder, block, ip, rhs, ValueType::String)?;
+            (
+                "string_concat",
+                SsaInstKind::StringConcat {
+                    lhs: lhs.value.id,
+                    rhs: rhs.value.id,
+                },
+                ValueInfo::tagged_typed(ValueType::String),
+            )
+        }
+        ConcatBinOpKind::Bytes => {
+            let lhs = ensure_heap_ptr(builder, block, ip, lhs, ValueType::Bytes)?;
+            let rhs = ensure_heap_ptr(builder, block, ip, rhs, ValueType::Bytes)?;
+            (
+                "bytes_concat",
+                SsaInstKind::BytesConcat {
+                    lhs: lhs.value.id,
+                    rhs: rhs.value.id,
+                },
+                ValueInfo::tagged_typed(ValueType::Bytes),
+            )
+        }
+    };
+    let value = builder
+        .append_value_inst(block, ip, SsaValueRepr::Tagged, inst_kind)
+        .map_err(|err| TraceRecordError::InvalidIr(err.to_string()))?;
+    Ok((name, SymbolicValue { value, info }))
+}
+
 fn emit_float_compare(
     builder: &mut SsaTraceBuilder,
     block: super::ir::SsaBlockId,
@@ -1888,18 +1989,15 @@ fn emit_float_compare(
     let value = builder
         .append_value_inst(block, ip, SsaValueRepr::Bool, inst_kind)
         .map_err(|err| TraceRecordError::InvalidIr(err.to_string()))?;
-    Ok((
-        name,
-        SymbolicValue {
-            value,
-            info: ValueInfo::bool(None),
-        },
-    ))
+    let info = result_info_for_float_compare(kind, lhs.info, rhs.info);
+    Ok((name, SymbolicValue { value, info }))
 }
 
-impl CollectionContainerKind {
+impl HeapContainerKind {
     fn value_type(self) -> ValueType {
         match self {
+            Self::String => ValueType::String,
+            Self::Bytes => ValueType::Bytes,
             Self::Array => ValueType::Array,
             Self::Map => ValueType::Map,
         }
@@ -1913,13 +2011,17 @@ fn call_arg_slice<'a, T>(stack: &'a [T], argc: usize) -> Result<&'a [T], TraceRe
     Ok(&stack[stack.len() - argc..])
 }
 
-fn observed_collection_kind(info: ValueInfo) -> Option<CollectionContainerKind> {
+fn observed_heap_container_kind(info: ValueInfo) -> Option<HeapContainerKind> {
     match info.repr {
-        SsaValueRepr::HeapPtr(ValueType::Array) => Some(CollectionContainerKind::Array),
-        SsaValueRepr::HeapPtr(ValueType::Map) => Some(CollectionContainerKind::Map),
+        SsaValueRepr::HeapPtr(ValueType::String) => Some(HeapContainerKind::String),
+        SsaValueRepr::HeapPtr(ValueType::Bytes) => Some(HeapContainerKind::Bytes),
+        SsaValueRepr::HeapPtr(ValueType::Array) => Some(HeapContainerKind::Array),
+        SsaValueRepr::HeapPtr(ValueType::Map) => Some(HeapContainerKind::Map),
         _ => match info.known_type {
-            Some(ValueType::Array) => Some(CollectionContainerKind::Array),
-            Some(ValueType::Map) => Some(CollectionContainerKind::Map),
+            Some(ValueType::String) => Some(HeapContainerKind::String),
+            Some(ValueType::Bytes) => Some(HeapContainerKind::Bytes),
+            Some(ValueType::Array) => Some(HeapContainerKind::Array),
+            Some(ValueType::Map) => Some(HeapContainerKind::Map),
             _ => None,
         },
     }
@@ -1929,25 +2031,33 @@ fn select_specialized_builtin_kind(
     builtin: BuiltinFunction,
     container: ValueInfo,
 ) -> Option<SpecializedBuiltinKind> {
-    match (builtin, observed_collection_kind(container)?) {
-        (BuiltinFunction::Len, CollectionContainerKind::Array) => {
-            Some(SpecializedBuiltinKind::ArrayLen)
+    match (builtin, observed_heap_container_kind(container)?) {
+        (BuiltinFunction::Len, HeapContainerKind::String) => {
+            Some(SpecializedBuiltinKind::StringLen)
         }
-        (BuiltinFunction::Get, CollectionContainerKind::Array) => {
-            Some(SpecializedBuiltinKind::ArrayGet)
+        (BuiltinFunction::Len, HeapContainerKind::Bytes) => Some(SpecializedBuiltinKind::BytesLen),
+        (BuiltinFunction::Slice, HeapContainerKind::String) => {
+            Some(SpecializedBuiltinKind::StringSlice)
         }
-        (BuiltinFunction::Has, CollectionContainerKind::Array) => {
-            Some(SpecializedBuiltinKind::ArrayHas)
+        (BuiltinFunction::Slice, HeapContainerKind::Bytes) => {
+            Some(SpecializedBuiltinKind::BytesSlice)
         }
-        (BuiltinFunction::Len, CollectionContainerKind::Map) => {
-            Some(SpecializedBuiltinKind::MapLen)
+        (BuiltinFunction::Get, HeapContainerKind::String) => {
+            Some(SpecializedBuiltinKind::StringGet)
         }
-        (BuiltinFunction::Get, CollectionContainerKind::Map) => {
-            Some(SpecializedBuiltinKind::MapGet)
+        (BuiltinFunction::Get, HeapContainerKind::Bytes) => Some(SpecializedBuiltinKind::BytesGet),
+        (BuiltinFunction::Concat, HeapContainerKind::String) => {
+            Some(SpecializedBuiltinKind::StringConcat)
         }
-        (BuiltinFunction::Has, CollectionContainerKind::Map) => {
-            Some(SpecializedBuiltinKind::MapHas)
+        (BuiltinFunction::Concat, HeapContainerKind::Bytes) => {
+            Some(SpecializedBuiltinKind::BytesConcat)
         }
+        (BuiltinFunction::Len, HeapContainerKind::Array) => Some(SpecializedBuiltinKind::ArrayLen),
+        (BuiltinFunction::Get, HeapContainerKind::Array) => Some(SpecializedBuiltinKind::ArrayGet),
+        (BuiltinFunction::Has, HeapContainerKind::Array) => Some(SpecializedBuiltinKind::ArrayHas),
+        (BuiltinFunction::Len, HeapContainerKind::Map) => Some(SpecializedBuiltinKind::MapLen),
+        (BuiltinFunction::Get, HeapContainerKind::Map) => Some(SpecializedBuiltinKind::MapGet),
+        (BuiltinFunction::Has, HeapContainerKind::Map) => Some(SpecializedBuiltinKind::MapHas),
         _ => None,
     }
 }
@@ -1957,6 +2067,54 @@ fn analyze_specialized_builtin_call(
     kind: SpecializedBuiltinKind,
 ) -> Result<&'static str, TraceRecordError> {
     match kind {
+        SpecializedBuiltinKind::StringLen => {
+            let _ = frame.pop()?;
+            frame.push(ValueInfo::int(None));
+            Ok("string_len")
+        }
+        SpecializedBuiltinKind::BytesLen => {
+            let _ = frame.pop()?;
+            frame.push(ValueInfo::int(None));
+            Ok("bytes_len")
+        }
+        SpecializedBuiltinKind::StringSlice => {
+            let _ = frame.pop()?;
+            let _ = frame.pop()?;
+            let _ = frame.pop()?;
+            frame.push(ValueInfo::tagged_typed(ValueType::String));
+            Ok("string_slice")
+        }
+        SpecializedBuiltinKind::BytesSlice => {
+            let _ = frame.pop()?;
+            let _ = frame.pop()?;
+            let _ = frame.pop()?;
+            frame.push(ValueInfo::tagged_typed(ValueType::Bytes));
+            Ok("bytes_slice")
+        }
+        SpecializedBuiltinKind::StringGet => {
+            let _ = frame.pop()?;
+            let _ = frame.pop()?;
+            frame.push(ValueInfo::tagged_typed(ValueType::String));
+            Ok("string_get")
+        }
+        SpecializedBuiltinKind::BytesGet => {
+            let _ = frame.pop()?;
+            let _ = frame.pop()?;
+            frame.push(ValueInfo::int(None));
+            Ok("bytes_get")
+        }
+        SpecializedBuiltinKind::StringConcat => {
+            let _ = frame.pop()?;
+            let _ = frame.pop()?;
+            frame.push(ValueInfo::tagged_typed(ValueType::String));
+            Ok("string_concat")
+        }
+        SpecializedBuiltinKind::BytesConcat => {
+            let _ = frame.pop()?;
+            let _ = frame.pop()?;
+            frame.push(ValueInfo::tagged_typed(ValueType::Bytes));
+            Ok("bytes_concat")
+        }
         SpecializedBuiltinKind::ArrayLen => {
             let _ = frame.pop()?;
             frame.push(ValueInfo::int(None));
@@ -2002,6 +2160,174 @@ fn emit_specialized_builtin_call(
     kind: SpecializedBuiltinKind,
 ) -> Result<(&'static str, SymbolicValue), TraceRecordError> {
     match kind {
+        SpecializedBuiltinKind::StringLen => {
+            let text = frame.pop()?;
+            let text = ensure_heap_ptr(
+                builder,
+                block,
+                ip,
+                text,
+                HeapContainerKind::String.value_type(),
+            )?;
+            let out = builder
+                .append_value_inst(
+                    block,
+                    ip,
+                    SsaValueRepr::I64,
+                    SsaInstKind::StringLen {
+                        text: text.value.id,
+                    },
+                )
+                .map(|value| SymbolicValue {
+                    value,
+                    info: ValueInfo::int(None),
+                })
+                .map_err(|err| TraceRecordError::InvalidIr(err.to_string()))?;
+            Ok(("string_len", out))
+        }
+        SpecializedBuiltinKind::BytesLen => {
+            let bytes = frame.pop()?;
+            let bytes = ensure_heap_ptr(
+                builder,
+                block,
+                ip,
+                bytes,
+                HeapContainerKind::Bytes.value_type(),
+            )?;
+            let out = builder
+                .append_value_inst(
+                    block,
+                    ip,
+                    SsaValueRepr::I64,
+                    SsaInstKind::BytesLen {
+                        bytes: bytes.value.id,
+                    },
+                )
+                .map(|value| SymbolicValue {
+                    value,
+                    info: ValueInfo::int(None),
+                })
+                .map_err(|err| TraceRecordError::InvalidIr(err.to_string()))?;
+            Ok(("bytes_len", out))
+        }
+        SpecializedBuiltinKind::StringSlice => {
+            let length = ensure_int(builder, block, ip, frame.pop()?)?;
+            let start = ensure_int(builder, block, ip, frame.pop()?)?;
+            let text = ensure_heap_ptr(
+                builder,
+                block,
+                ip,
+                frame.pop()?,
+                HeapContainerKind::String.value_type(),
+            )?;
+            let out = builder
+                .append_value_inst(
+                    block,
+                    ip,
+                    SsaValueRepr::Tagged,
+                    SsaInstKind::StringSlice {
+                        text: text.value.id,
+                        start: start.value.id,
+                        length: length.value.id,
+                    },
+                )
+                .map(|value| SymbolicValue {
+                    value,
+                    info: ValueInfo::tagged_typed(ValueType::String),
+                })
+                .map_err(|err| TraceRecordError::InvalidIr(err.to_string()))?;
+            Ok(("string_slice", out))
+        }
+        SpecializedBuiltinKind::BytesSlice => {
+            let length = ensure_int(builder, block, ip, frame.pop()?)?;
+            let start = ensure_int(builder, block, ip, frame.pop()?)?;
+            let bytes = ensure_heap_ptr(
+                builder,
+                block,
+                ip,
+                frame.pop()?,
+                HeapContainerKind::Bytes.value_type(),
+            )?;
+            let out = builder
+                .append_value_inst(
+                    block,
+                    ip,
+                    SsaValueRepr::Tagged,
+                    SsaInstKind::BytesSlice {
+                        bytes: bytes.value.id,
+                        start: start.value.id,
+                        length: length.value.id,
+                    },
+                )
+                .map(|value| SymbolicValue {
+                    value,
+                    info: ValueInfo::tagged_typed(ValueType::Bytes),
+                })
+                .map_err(|err| TraceRecordError::InvalidIr(err.to_string()))?;
+            Ok(("bytes_slice", out))
+        }
+        SpecializedBuiltinKind::StringGet => {
+            let index = ensure_int(builder, block, ip, frame.pop()?)?;
+            let text = ensure_heap_ptr(
+                builder,
+                block,
+                ip,
+                frame.pop()?,
+                HeapContainerKind::String.value_type(),
+            )?;
+            let out = builder
+                .append_value_inst(
+                    block,
+                    ip,
+                    SsaValueRepr::Tagged,
+                    SsaInstKind::StringGet {
+                        text: text.value.id,
+                        index: index.value.id,
+                    },
+                )
+                .map(|value| SymbolicValue {
+                    value,
+                    info: ValueInfo::tagged_typed(ValueType::String),
+                })
+                .map_err(|err| TraceRecordError::InvalidIr(err.to_string()))?;
+            Ok(("string_get", out))
+        }
+        SpecializedBuiltinKind::BytesGet => {
+            let index = ensure_int(builder, block, ip, frame.pop()?)?;
+            let bytes = ensure_heap_ptr(
+                builder,
+                block,
+                ip,
+                frame.pop()?,
+                HeapContainerKind::Bytes.value_type(),
+            )?;
+            let out = builder
+                .append_value_inst(
+                    block,
+                    ip,
+                    SsaValueRepr::I64,
+                    SsaInstKind::BytesGet {
+                        bytes: bytes.value.id,
+                        index: index.value.id,
+                    },
+                )
+                .map(|value| SymbolicValue {
+                    value,
+                    info: ValueInfo::int(None),
+                })
+                .map_err(|err| TraceRecordError::InvalidIr(err.to_string()))?;
+            Ok(("bytes_get", out))
+        }
+        SpecializedBuiltinKind::StringConcat => {
+            let rhs = frame.pop()?;
+            let lhs = frame.pop()?;
+            emit_concat_binop(builder, block, ip, ConcatBinOpKind::String, lhs, rhs)
+        }
+        SpecializedBuiltinKind::BytesConcat => {
+            let rhs = frame.pop()?;
+            let lhs = frame.pop()?;
+            emit_concat_binop(builder, block, ip, ConcatBinOpKind::Bytes, lhs, rhs)
+        }
         SpecializedBuiltinKind::ArrayLen => {
             let array = frame.pop()?;
             let array = ensure_heap_ptr(
@@ -2009,7 +2335,7 @@ fn emit_specialized_builtin_call(
                 block,
                 ip,
                 array,
-                CollectionContainerKind::Array.value_type(),
+                HeapContainerKind::Array.value_type(),
             )?;
             let out = builder
                 .append_value_inst(
@@ -2035,7 +2361,7 @@ fn emit_specialized_builtin_call(
                 block,
                 ip,
                 array,
-                CollectionContainerKind::Array.value_type(),
+                HeapContainerKind::Array.value_type(),
             )?;
             let index = ensure_int(builder, block, ip, index)?;
             let out = builder
@@ -2063,7 +2389,7 @@ fn emit_specialized_builtin_call(
                 block,
                 ip,
                 array,
-                CollectionContainerKind::Array.value_type(),
+                HeapContainerKind::Array.value_type(),
             )?;
             let index = ensure_int(builder, block, ip, index)?;
             let out = builder
@@ -2085,13 +2411,8 @@ fn emit_specialized_builtin_call(
         }
         SpecializedBuiltinKind::MapLen => {
             let map = frame.pop()?;
-            let map = ensure_heap_ptr(
-                builder,
-                block,
-                ip,
-                map,
-                CollectionContainerKind::Map.value_type(),
-            )?;
+            let map =
+                ensure_heap_ptr(builder, block, ip, map, HeapContainerKind::Map.value_type())?;
             let out = builder
                 .append_value_inst(
                     block,
@@ -2109,13 +2430,8 @@ fn emit_specialized_builtin_call(
         SpecializedBuiltinKind::MapGet => {
             let key = frame.pop()?;
             let map = frame.pop()?;
-            let map = ensure_heap_ptr(
-                builder,
-                block,
-                ip,
-                map,
-                CollectionContainerKind::Map.value_type(),
-            )?;
+            let map =
+                ensure_heap_ptr(builder, block, ip, map, HeapContainerKind::Map.value_type())?;
             let out = builder
                 .append_value_inst(
                     block,
@@ -2136,13 +2452,8 @@ fn emit_specialized_builtin_call(
         SpecializedBuiltinKind::MapHas => {
             let key = frame.pop()?;
             let map = frame.pop()?;
-            let map = ensure_heap_ptr(
-                builder,
-                block,
-                ip,
-                map,
-                CollectionContainerKind::Map.value_type(),
-            )?;
+            let map =
+                ensure_heap_ptr(builder, block, ip, map, HeapContainerKind::Map.value_type())?;
             let out = builder
                 .append_value_inst(
                     block,
@@ -2561,6 +2872,41 @@ fn result_info_for_float_binop(kind: FloatBinOpKind, lhs: ValueInfo, rhs: ValueI
     }
 }
 
+fn result_info_for_int_compare(kind: IntCompareKind, lhs: ValueInfo, rhs: ValueInfo) -> ValueInfo {
+    let const_bool = lhs
+        .const_int
+        .zip(rhs.const_int)
+        .map(|(lhs, rhs)| match kind {
+            IntCompareKind::Eq => lhs == rhs,
+            IntCompareKind::Lt => lhs < rhs,
+            IntCompareKind::Gt => lhs > rhs,
+        });
+    ValueInfo::bool(const_bool)
+}
+
+fn result_info_for_float_compare(
+    kind: FloatCompareKind,
+    lhs: ValueInfo,
+    rhs: ValueInfo,
+) -> ValueInfo {
+    let const_bool = lhs
+        .const_float
+        .zip(rhs.const_float)
+        .map(|(lhs, rhs)| match kind {
+            FloatCompareKind::Eq => lhs == rhs,
+            FloatCompareKind::Lt => lhs < rhs,
+            FloatCompareKind::Gt => lhs > rhs,
+        });
+    ValueInfo::bool(const_bool)
+}
+
+fn result_info_for_concat_binop(kind: ConcatBinOpKind) -> ValueInfo {
+    match kind {
+        ConcatBinOpKind::String => ValueInfo::tagged_typed(ValueType::String),
+        ConcatBinOpKind::Bytes => ValueInfo::tagged_typed(ValueType::Bytes),
+    }
+}
+
 fn load_constant(
     builder: &mut SsaTraceBuilder,
     block: super::ir::SsaBlockId,
@@ -2661,22 +3007,31 @@ fn materialize_locals(locals: &[SymbolicValue]) -> Vec<SsaMaterialization> {
     materialize_ssa_values(locals.iter().map(|value| value.value))
 }
 
-fn build_loop_header_plan(locals: &[ValueInfo], entry_use: &[EntryUseState]) -> LoopHeaderPlan {
+fn build_loop_header_plan(
+    locals: &[ValueInfo],
+    entry_use: &[EntryUseState],
+    local_written: &[bool],
+) -> LoopHeaderPlan {
     let mut local_reprs = Vec::with_capacity(locals.len());
     let mut local_known_types = Vec::with_capacity(locals.len());
     let mut entry_seed = Vec::with_capacity(locals.len());
-    for (local, state) in locals.iter().zip(entry_use.iter()) {
+    for ((local, state), written) in locals
+        .iter()
+        .zip(entry_use.iter())
+        .zip(local_written.iter().copied())
+    {
+        let repr = planned_loop_local_repr(*local, *state, written);
         if matches!(state, EntryUseState::WrittenBeforeRead) {
-            local_reprs.push(local.repr);
+            local_reprs.push(repr);
             local_known_types.push(local.known_type);
-            entry_seed.push(match local.repr {
+            entry_seed.push(match repr {
                 SsaValueRepr::I64 => LoopSeed::ZeroI64,
                 SsaValueRepr::F64 => LoopSeed::ZeroF64,
                 SsaValueRepr::Bool => LoopSeed::FalseBool,
                 _ => LoopSeed::Entry,
             });
         } else {
-            local_reprs.push(local.repr);
+            local_reprs.push(repr);
             local_known_types.push(local.known_type);
             entry_seed.push(LoopSeed::Entry);
         }
@@ -2693,12 +3048,23 @@ fn loop_backedge_args(locals: &[SymbolicValue]) -> Vec<super::ir::SsaValueId> {
 }
 
 fn validate_loop_carrier_repr(local: usize, repr: SsaValueRepr) -> Result<(), TraceRecordError> {
-    match repr {
-        SsaValueRepr::Tagged | SsaValueRepr::I64 | SsaValueRepr::F64 | SsaValueRepr::Bool => Ok(()),
-        other => Err(TraceRecordError::UnsupportedTrace(format!(
-            "unsupported loop-carried local {local} representation {other}"
-        ))),
+    let _ = (local, repr);
+    Ok(())
+}
+
+fn planned_loop_local_repr(
+    local: ValueInfo,
+    state: EntryUseState,
+    written_on_trace: bool,
+) -> SsaValueRepr {
+    if matches!(state, EntryUseState::ReadBeforeWrite) && !written_on_trace {
+        return match local.known_type {
+            Some(ValueType::String) => SsaValueRepr::HeapPtr(ValueType::String),
+            Some(ValueType::Bytes) => SsaValueRepr::HeapPtr(ValueType::Bytes),
+            _ => local.repr,
+        };
     }
+    local.repr
 }
 
 fn operand_types(program: &Program, ip: usize) -> (ValueType, ValueType) {

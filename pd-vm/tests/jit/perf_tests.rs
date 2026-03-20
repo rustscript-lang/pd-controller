@@ -2,8 +2,8 @@ use std::hint::black_box;
 use std::time::Instant;
 
 use vm::{
-    CallOutcome, HostFunction, HostFunctionRegistry, JitConfig, OpCode, Program, Value, Vm,
-    VmStatus, compile_source, compile_source_file,
+    CallOutcome, HostFunction, HostFunctionRegistry, JitConfig, OpCode, Program, TypeMap, Value,
+    ValueType, Vm, VmStatus, compile_source, compile_source_file,
 };
 
 struct PerfNoopHost {
@@ -18,6 +18,19 @@ impl HostFunction for PerfNoopHost {
 
 fn perf_noop_host_static(_vm: &mut Vm, _args: &[Value]) -> Result<CallOutcome, vm::VmError> {
     Ok(CallOutcome::Return(Vec::new()))
+}
+
+fn force_local_types(program: Program, hints: &[(usize, ValueType)]) -> Program {
+    let mut type_map = program.type_map.clone().unwrap_or_else(TypeMap::default);
+    if type_map.local_types.len() < program.local_count {
+        type_map
+            .local_types
+            .resize(program.local_count, ValueType::Unknown);
+    }
+    for (slot, ty) in hints {
+        type_map.local_types[*slot] = *ty;
+    }
+    program.with_type_map(type_map)
 }
 
 #[test]
@@ -470,6 +483,199 @@ fn perf_jit_native_reduces_tight_loop_latency() {
         "expected JIT median latency to be lower (interpreter={:?}, jit={:?})",
         interpreter_median,
         jit_median
+    );
+}
+
+#[test]
+#[ignore = "performance characterization test; run manually"]
+fn perf_jit_native_reduces_array_builtin_loop_latency() {
+    if !native_jit_supported() {
+        println!("skipping array builtin perf on unsupported native JIT target");
+        return;
+    }
+
+    const OUTER_LOOPS: i64 = 8_192;
+    const TRIALS: usize = 7;
+    let elements = [3_i64, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41];
+    let source = build_array_builtin_perf_source(&elements, OUTER_LOOPS);
+    let compiled = compile_source(&source).expect("array builtin perf compile should succeed");
+    let program = force_local_types(
+        compiled.program,
+        &[
+            (0, ValueType::Array),
+            (1, ValueType::Int),
+            (2, ValueType::Int),
+            (3, ValueType::Int),
+        ],
+    );
+    let expected = OUTER_LOOPS * elements.iter().sum::<i64>();
+    let expected_stack = vec![Value::Int(expected)];
+
+    let mut interpreter_vm = Vm::new(program.clone());
+    interpreter_vm.set_jit_config(JitConfig {
+        enabled: false,
+        hot_loop_threshold: 1,
+        max_trace_len: 2_048,
+    });
+    let interpreter_warmup = warm_reusable_vm_once(&mut interpreter_vm, &expected_stack);
+    let mut interpreter_times =
+        sample_reused_vm_latencies(&mut interpreter_vm, &expected_stack, TRIALS);
+
+    let mut jit_vm = Vm::new(program);
+    jit_vm.set_jit_config(JitConfig {
+        enabled: true,
+        hot_loop_threshold: 1,
+        max_trace_len: 2_048,
+    });
+    let jit_warmup = warm_reusable_vm_once(&mut jit_vm, &expected_stack);
+    assert!(
+        jit_vm.jit_native_trace_count() > 0,
+        "expected array builtin perf warmup to install native traces"
+    );
+    assert!(
+        jit_vm.jit_native_exec_count() > 0,
+        "expected array builtin perf warmup to execute native traces"
+    );
+    let mut jit_times = sample_reused_vm_latencies(&mut jit_vm, &expected_stack, TRIALS);
+    let snapshot = jit_vm.jit_snapshot();
+    assert!(
+        snapshot
+            .traces
+            .iter()
+            .any(|trace| trace.op_names().iter().any(|op| op == "array_len")),
+        "expected array perf trace to include array_len, dump:\n{}",
+        jit_vm.dump_jit_info()
+    );
+    assert!(
+        snapshot
+            .traces
+            .iter()
+            .any(|trace| trace.op_names().iter().any(|op| op == "array_get")),
+        "expected array perf trace to include array_get, dump:\n{}",
+        jit_vm.dump_jit_info()
+    );
+    assert!(
+        snapshot
+            .traces
+            .iter()
+            .any(|trace| trace.op_names().iter().any(|op| op == "array_has")),
+        "expected array perf trace to include array_has, dump:\n{}",
+        jit_vm.dump_jit_info()
+    );
+
+    let interpreter_median = median_duration(&mut interpreter_times);
+    let jit_median = median_duration(&mut jit_times);
+    let jit_speedup =
+        interpreter_median.as_secs_f64() / jit_median.as_secs_f64().max(f64::MIN_POSITIVE);
+    println!(
+        "array builtin warmed latency: interpreter={}us jit={}us jit_speedup={:.2}x interpreter_warmup_us={} jit_warmup_us={} jit_traces={} jit_native_execs={}",
+        interpreter_median.as_micros(),
+        jit_median.as_micros(),
+        jit_speedup,
+        interpreter_warmup.as_micros(),
+        jit_warmup.as_micros(),
+        jit_vm.jit_native_trace_count(),
+        jit_vm.jit_native_exec_count()
+    );
+
+    assert!(
+        jit_median < interpreter_median,
+        "expected warmed array builtin JIT latency to be lower (interpreter={:?}, jit={:?})",
+        interpreter_median,
+        jit_median
+    );
+}
+
+#[test]
+#[ignore = "performance characterization test; run manually"]
+fn perf_jit_native_characterizes_map_builtin_loop_latency() {
+    if !native_jit_supported() {
+        println!("skipping map builtin perf on unsupported native JIT target");
+        return;
+    }
+
+    const OUTER_LOOPS: i64 = 32_768;
+    const TRIALS: usize = 7;
+    let entries = [("a", 7_i64), ("b", 11), ("c", 13), ("d", 17)];
+    let source = build_map_builtin_perf_source(&entries, OUTER_LOOPS);
+    let compiled = compile_source(&source).expect("map builtin perf compile should succeed");
+    let program = force_local_types(
+        compiled.program,
+        &[
+            (0, ValueType::Map),
+            (1, ValueType::Int),
+            (2, ValueType::Int),
+        ],
+    );
+    let per_iter = entries.iter().map(|(_, value)| *value).sum::<i64>() + entries.len() as i64;
+    let expected = OUTER_LOOPS * per_iter;
+    let expected_stack = vec![Value::Int(expected)];
+
+    let mut interpreter_vm = Vm::new(program.clone());
+    interpreter_vm.set_jit_config(JitConfig {
+        enabled: false,
+        hot_loop_threshold: 1,
+        max_trace_len: 2_048,
+    });
+    let interpreter_warmup = warm_reusable_vm_once(&mut interpreter_vm, &expected_stack);
+    let mut interpreter_times =
+        sample_reused_vm_latencies(&mut interpreter_vm, &expected_stack, TRIALS);
+
+    let mut jit_vm = Vm::new(program);
+    jit_vm.set_jit_config(JitConfig {
+        enabled: true,
+        hot_loop_threshold: 1,
+        max_trace_len: 2_048,
+    });
+    let jit_warmup = warm_reusable_vm_once(&mut jit_vm, &expected_stack);
+    assert!(
+        jit_vm.jit_native_trace_count() > 0,
+        "expected map builtin perf warmup to install native traces"
+    );
+    assert!(
+        jit_vm.jit_native_exec_count() > 0,
+        "expected map builtin perf warmup to execute native traces"
+    );
+    let mut jit_times = sample_reused_vm_latencies(&mut jit_vm, &expected_stack, TRIALS);
+    let snapshot = jit_vm.jit_snapshot();
+    assert!(
+        snapshot
+            .traces
+            .iter()
+            .any(|trace| trace.op_names().iter().any(|op| op == "map_len")),
+        "expected map perf trace to include map_len, dump:\n{}",
+        jit_vm.dump_jit_info()
+    );
+    assert!(
+        snapshot
+            .traces
+            .iter()
+            .any(|trace| trace.op_names().iter().any(|op| op == "map_get")),
+        "expected map perf trace to include map_get, dump:\n{}",
+        jit_vm.dump_jit_info()
+    );
+    assert!(
+        snapshot
+            .traces
+            .iter()
+            .any(|trace| trace.op_names().iter().any(|op| op == "map_has")),
+        "expected map perf trace to include map_has, dump:\n{}",
+        jit_vm.dump_jit_info()
+    );
+
+    let interpreter_median = median_duration(&mut interpreter_times);
+    let jit_median = median_duration(&mut jit_times);
+    let jit_speedup =
+        interpreter_median.as_secs_f64() / jit_median.as_secs_f64().max(f64::MIN_POSITIVE);
+    println!(
+        "map builtin warmed latency: interpreter={}us jit={}us jit_speedup={:.2}x interpreter_warmup_us={} jit_warmup_us={} jit_traces={} jit_native_execs={}",
+        interpreter_median.as_micros(),
+        jit_median.as_micros(),
+        jit_speedup,
+        interpreter_warmup.as_micros(),
+        jit_warmup.as_micros(),
+        jit_vm.jit_native_trace_count(),
+        jit_vm.jit_native_exec_count()
     );
 }
 
@@ -1023,6 +1229,62 @@ iteration;
         prefix.trim_end(),
         program_repeats,
         program_repeats
+    )
+}
+
+fn build_array_builtin_perf_source(elements: &[i64], outer_loops: i64) -> String {
+    let values = elements
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        r#"
+        let arr = [{values}];
+        let mut outer = 0;
+        let mut sum = 0;
+        while outer < {outer_loops} {{
+            let mut i = 0;
+            while i < arr.length {{
+                if arr.has(i) {{
+                    sum = sum + arr[i];
+                }}
+                i = i + 1;
+            }}
+            outer = outer + 1;
+        }}
+        sum;
+    "#
+    )
+}
+
+fn build_map_builtin_perf_source(entries: &[(&str, i64)], outer_loops: i64) -> String {
+    let map_literal = entries
+        .iter()
+        .map(|(key, value)| format!("\"{key}\": {value}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let body = entries
+        .iter()
+        .map(|(key, _)| {
+            format!(
+                "            if data.has(\"{key}\") {{\n                sum = sum + data[\"{key}\"];\n            }}\n"
+            )
+        })
+        .collect::<String>();
+
+    format!(
+        r#"
+        let data = {{{map_literal}}};
+        let mut outer = 0;
+        let mut sum = 0;
+        while outer < {outer_loops} {{
+            let len = data.length;
+{body}            sum = sum + len;
+            outer = outer + 1;
+        }}
+        sum;
+    "#
     )
 }
 

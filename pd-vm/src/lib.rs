@@ -28,6 +28,20 @@ pub use builtins::{
     language_builtin_specs,
 };
 pub use bytecode::{HostImport, OpCode, Program, TypeMap, Value, ValueType};
+pub fn builtin_call_index(name: &str) -> Option<u16> {
+    use builtins::BuiltinFunction;
+
+    match name {
+        "len" => Some(BuiltinFunction::Len.call_index()),
+        "slice" => Some(BuiltinFunction::Slice.call_index()),
+        "concat" => Some(BuiltinFunction::Concat.call_index()),
+        "get" => Some(BuiltinFunction::Get.call_index()),
+        "has" => Some(BuiltinFunction::Has.call_index()),
+        "set" => Some(BuiltinFunction::Set.call_index()),
+        "keys" => Some(BuiltinFunction::Keys.call_index()),
+        _ => BuiltinFunction::from_namespaced_name(name).map(|builtin| builtin.call_index()),
+    }
+}
 pub use compiler::diagnostics::{render_compile_error, render_source_error};
 pub use compiler::source_map::{LineSpanMapping, LoweredSource, SourceId, SourceMap, Span};
 pub use compiler::{

@@ -10,16 +10,20 @@ use crate::vm::jit::ir::{
 use crate::vm::native::{
     ExecutableBuffer, NativeInterruptMode, NativeInterruptSettings, NativeStackLayout,
     STATUS_CONTINUE, STATUS_ERROR, STATUS_HALTED, STATUS_OUT_OF_FUEL, STATUS_TRACE_EXIT,
-    box_heap_value_signature, checked_add_i32, clone_value_signature,
+    box_heap_value_signature, bytes_concat_entry_address, bytes_slice_entry_address,
+    checked_add_i32, clear_value_slot_entry_address, clone_value_signature,
     clone_value_to_slot_entry_address, collection_get_signature, collection_predicate_signature,
-    detect_native_stack_layout, entry_signature, heap_len_signature, jump_with_status,
-    map_get_entry_address, map_has_entry_address, map_len_entry_address, restore_exit_signature,
-    restore_exit_state_entry_address, write_heap_value_to_slot_entry_address,
+    concat_value_result_signature, detect_native_stack_layout, entry_signature, heap_len_signature,
+    indexed_value_result_signature, init_null_value_slot_entry_address, jump_with_status,
+    map_get_entry_address, map_has_entry_address, map_len_entry_address,
+    ranged_value_result_signature, restore_exit_signature, restore_exit_state_entry_address,
+    string_concat_entry_address, string_get_entry_address, string_len_entry_address,
+    string_slice_entry_address, value_slot_signature, write_heap_value_to_slot_entry_address,
 };
 use cranelift_codegen::ir::condcodes::{FloatCC, IntCC};
 use cranelift_codegen::ir::immediates::Ieee64;
 use cranelift_codegen::ir::{
-    Block, BlockArg, InstBuilder, MemFlags, StackSlotData, StackSlotKind, types,
+    Block, BlockArg, InstBuilder, MemFlags, StackSlot, StackSlotData, StackSlotKind, types,
 };
 use cranelift_codegen::isa::OwnedTargetIsa;
 use cranelift_codegen::settings::{self, Configurable};
@@ -84,10 +88,14 @@ fn try_compile_ssa_trace(
     let mut ctx = module.make_context();
     ctx.func.signature = entry_signature(pointer_type, call_conv);
     let clone_value_sig = clone_value_signature(pointer_type, call_conv);
+    let value_slot_sig = value_slot_signature(pointer_type, call_conv);
     let box_heap_value_sig = box_heap_value_signature(pointer_type, call_conv);
     let map_len_sig = heap_len_signature(pointer_type, call_conv);
     let map_has_sig = collection_predicate_signature(pointer_type, call_conv);
     let map_get_sig = collection_get_signature(pointer_type, call_conv);
+    let indexed_value_result_sig = indexed_value_result_signature(pointer_type, call_conv);
+    let ranged_value_result_sig = ranged_value_result_signature(pointer_type, call_conv);
+    let concat_value_result_sig = concat_value_result_signature(pointer_type, call_conv);
     let restore_exit_sig = restore_exit_signature(pointer_type, call_conv);
     let resume_linked_trace_sig = entry_signature(pointer_type, call_conv);
 
@@ -107,19 +115,32 @@ fn try_compile_ssa_trace(
         b.append_block_param(exit_block, types::I32);
         let deopt_refs = SsaDeoptHelperRefs {
             clone_value_ref: b.import_signature(clone_value_sig),
+            init_null_slot_ref: b.import_signature(value_slot_sig.clone()),
+            clear_value_slot_ref: b.import_signature(value_slot_sig),
             box_heap_value_ref: b.import_signature(box_heap_value_sig),
             map_len_ref: b.import_signature(map_len_sig),
             map_has_ref: b.import_signature(map_has_sig),
             map_get_ref: b.import_signature(map_get_sig),
+            indexed_value_result_ref: b.import_signature(indexed_value_result_sig),
+            ranged_value_result_ref: b.import_signature(ranged_value_result_sig),
+            concat_value_result_ref: b.import_signature(concat_value_result_sig),
             restore_exit_ref: b.import_signature(restore_exit_sig),
             resume_linked_trace_ref: b.import_signature(resume_linked_trace_sig),
         };
         let deopt_addrs = SsaDeoptHelperAddrs {
             clone_value: clone_value_to_slot_entry_address(),
+            init_null_slot: init_null_value_slot_entry_address(),
+            clear_value_slot: clear_value_slot_entry_address(),
             box_heap_value: write_heap_value_to_slot_entry_address(),
             map_len: map_len_entry_address(),
             map_has: map_has_entry_address(),
             map_get: map_get_entry_address(),
+            string_len: string_len_entry_address(),
+            string_get: string_get_entry_address(),
+            string_slice: string_slice_entry_address(),
+            bytes_slice: bytes_slice_entry_address(),
+            string_concat: string_concat_entry_address(),
+            bytes_concat: bytes_concat_entry_address(),
             restore_exit: restore_exit_state_entry_address(),
             resume_linked_trace: resume_linked_trace_entry_address(),
         };
@@ -136,6 +157,7 @@ fn try_compile_ssa_trace(
                 }
             }
         }
+        let owned_value_temps = allocate_owned_value_temps(&mut b, ssa, layout.value.size)?;
 
         let mut block_handles = HashMap::new();
         for block in &ssa.blocks {
@@ -200,6 +222,14 @@ fn try_compile_ssa_trace(
             offsets,
             entry_ssa_block.params.len(),
         )?;
+        init_owned_value_temps(
+            &mut b,
+            exit_block,
+            pointer_type,
+            deopt_refs,
+            deopt_addrs,
+            &owned_value_temps,
+        )?;
         let entry_args = ssa_block_args(entry_args);
         b.ins().jump(entry_handle, &entry_args);
 
@@ -241,6 +271,7 @@ fn try_compile_ssa_trace(
                     inst,
                     &value_reprs,
                     &tagged_constant_addrs,
+                    &owned_value_temps,
                     &mut values,
                 )?;
             }
@@ -294,6 +325,14 @@ fn try_compile_ssa_trace(
 
         b.switch_to_block(exit_block);
         let final_status = b.block_params(exit_block)[0];
+        clear_owned_value_temps(
+            &mut b,
+            exit_block,
+            pointer_type,
+            deopt_refs,
+            deopt_addrs,
+            &owned_value_temps,
+        )?;
         b.ins().return_(&[final_status]);
 
         b.seal_all_blocks();
@@ -340,10 +379,15 @@ struct SsaExitLowering {
 #[derive(Clone, Copy)]
 struct SsaDeoptHelperRefs {
     clone_value_ref: cranelift_codegen::ir::SigRef,
+    init_null_slot_ref: cranelift_codegen::ir::SigRef,
+    clear_value_slot_ref: cranelift_codegen::ir::SigRef,
     box_heap_value_ref: cranelift_codegen::ir::SigRef,
     map_len_ref: cranelift_codegen::ir::SigRef,
     map_has_ref: cranelift_codegen::ir::SigRef,
     map_get_ref: cranelift_codegen::ir::SigRef,
+    indexed_value_result_ref: cranelift_codegen::ir::SigRef,
+    ranged_value_result_ref: cranelift_codegen::ir::SigRef,
+    concat_value_result_ref: cranelift_codegen::ir::SigRef,
     restore_exit_ref: cranelift_codegen::ir::SigRef,
     resume_linked_trace_ref: cranelift_codegen::ir::SigRef,
 }
@@ -351,12 +395,32 @@ struct SsaDeoptHelperRefs {
 #[derive(Clone, Copy)]
 struct SsaDeoptHelperAddrs {
     clone_value: usize,
+    init_null_slot: usize,
+    clear_value_slot: usize,
     box_heap_value: usize,
     map_len: usize,
     map_has: usize,
     map_get: usize,
+    string_len: usize,
+    string_get: usize,
+    string_slice: usize,
+    bytes_slice: usize,
+    string_concat: usize,
+    bytes_concat: usize,
     restore_exit: usize,
     resume_linked_trace: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum SsaTempValueSlotKey {
+    Output(SsaValueId),
+    MapKeyBox(SsaValueId),
+}
+
+#[derive(Clone)]
+struct SsaOwnedValueTemps {
+    ordered: Vec<StackSlot>,
+    slots: HashMap<SsaTempValueSlotKey, StackSlot>,
 }
 
 fn ssa_trace_supported(ssa: &SsaTrace) -> bool {
@@ -369,6 +433,14 @@ fn ssa_trace_supported(ssa: &SsaTrace) -> bool {
                     | SsaInstKind::UnboxInt { .. }
                     | SsaInstKind::UnboxFloat { .. }
                     | SsaInstKind::UnboxBool { .. }
+                    | SsaInstKind::StringLen { .. }
+                    | SsaInstKind::BytesLen { .. }
+                    | SsaInstKind::StringSlice { .. }
+                    | SsaInstKind::BytesSlice { .. }
+                    | SsaInstKind::StringGet { .. }
+                    | SsaInstKind::BytesGet { .. }
+                    | SsaInstKind::StringConcat { .. }
+                    | SsaInstKind::BytesConcat { .. }
                     | SsaInstKind::ArrayLen { .. }
                     | SsaInstKind::ArrayGet { .. }
                     | SsaInstKind::ArrayHas { .. }
@@ -465,6 +537,133 @@ fn prepare_tagged_constants(
     Ok((values, out))
 }
 
+fn allocate_owned_value_temps(
+    b: &mut FunctionBuilder,
+    ssa: &SsaTrace,
+    value_size: i32,
+) -> VmResult<SsaOwnedValueTemps> {
+    let mut ordered = Vec::new();
+    let mut slots = HashMap::new();
+    for block in &ssa.blocks {
+        for inst in &block.insts {
+            let Some(output) = inst.output else {
+                continue;
+            };
+            if ssa_inst_requires_owned_value_slot(&inst.kind) {
+                let slot = ssa_create_value_stack_slot(b, value_size)?;
+                ordered.push(slot);
+                slots.insert(SsaTempValueSlotKey::Output(output.id), slot);
+            }
+            if matches!(
+                inst.kind,
+                SsaInstKind::MapGet { .. } | SsaInstKind::MapHas { .. }
+            ) {
+                let slot = ssa_create_value_stack_slot(b, value_size)?;
+                ordered.push(slot);
+                slots.insert(SsaTempValueSlotKey::MapKeyBox(output.id), slot);
+            }
+        }
+    }
+    Ok(SsaOwnedValueTemps { ordered, slots })
+}
+
+fn ssa_inst_requires_owned_value_slot(kind: &SsaInstKind) -> bool {
+    matches!(
+        kind,
+        SsaInstKind::ArrayGet { .. }
+            | SsaInstKind::MapGet { .. }
+            | SsaInstKind::StringSlice { .. }
+            | SsaInstKind::BytesSlice { .. }
+            | SsaInstKind::StringGet { .. }
+            | SsaInstKind::StringConcat { .. }
+            | SsaInstKind::BytesConcat { .. }
+    )
+}
+
+fn ssa_create_value_stack_slot(b: &mut FunctionBuilder, value_size: i32) -> VmResult<StackSlot> {
+    let bytes = u32::try_from(value_size)
+        .map_err(|_| VmError::JitNative("SSA value slot size out of range".to_string()))?;
+    let align_shift = std::mem::align_of::<Value>().trailing_zeros() as u8;
+    Ok(b.create_sized_stack_slot(StackSlotData::new(
+        StackSlotKind::ExplicitSlot,
+        bytes,
+        align_shift,
+    )))
+}
+
+fn init_owned_value_temps(
+    b: &mut FunctionBuilder,
+    exit_block: Block,
+    pointer_type: cranelift_codegen::ir::Type,
+    helper_refs: SsaDeoptHelperRefs,
+    helper_addrs: SsaDeoptHelperAddrs,
+    temps: &SsaOwnedValueTemps,
+) -> VmResult<()> {
+    let _ = exit_block;
+    for slot in &temps.ordered {
+        let addr = b.ins().stack_addr(pointer_type, *slot, 0);
+        ssa_call_infallible_helper(
+            b,
+            pointer_type,
+            helper_refs.init_null_slot_ref,
+            helper_addrs.init_null_slot,
+            &[addr],
+        )?;
+    }
+    Ok(())
+}
+
+fn clear_owned_value_temps(
+    b: &mut FunctionBuilder,
+    exit_block: Block,
+    pointer_type: cranelift_codegen::ir::Type,
+    helper_refs: SsaDeoptHelperRefs,
+    helper_addrs: SsaDeoptHelperAddrs,
+    temps: &SsaOwnedValueTemps,
+) -> VmResult<()> {
+    let _ = exit_block;
+    for slot in &temps.ordered {
+        let addr = b.ins().stack_addr(pointer_type, *slot, 0);
+        ssa_call_infallible_helper(
+            b,
+            pointer_type,
+            helper_refs.clear_value_slot_ref,
+            helper_addrs.clear_value_slot,
+            &[addr],
+        )?;
+    }
+    Ok(())
+}
+
+fn owned_value_temp_slot_addr(
+    b: &mut FunctionBuilder,
+    pointer_type: cranelift_codegen::ir::Type,
+    temps: &SsaOwnedValueTemps,
+    key: SsaTempValueSlotKey,
+) -> VmResult<cranelift_codegen::ir::Value> {
+    let slot =
+        temps.slots.get(&key).copied().ok_or_else(|| {
+            VmError::JitNative(format!("SSA temp value slot missing for {key:?}"))
+        })?;
+    Ok(b.ins().stack_addr(pointer_type, slot, 0))
+}
+
+fn clear_owned_value_temp_slot(
+    b: &mut FunctionBuilder,
+    pointer_type: cranelift_codegen::ir::Type,
+    helper_refs: SsaDeoptHelperRefs,
+    helper_addrs: SsaDeoptHelperAddrs,
+    addr: cranelift_codegen::ir::Value,
+) -> VmResult<()> {
+    ssa_call_infallible_helper(
+        b,
+        pointer_type,
+        helper_refs.clear_value_slot_ref,
+        helper_addrs.clear_value_slot,
+        &[addr],
+    )
+}
+
 fn ssa_interrupt_charge_blocks(ssa: &SsaTrace) -> BTreeSet<crate::vm::jit::ir::SsaBlockId> {
     let mut blocks = BTreeSet::new();
     for block in &ssa.blocks {
@@ -553,6 +752,7 @@ fn lower_ssa_inst(
     inst: &crate::vm::jit::ir::SsaInst,
     value_reprs: &HashMap<SsaValueId, SsaValueRepr>,
     tagged_constant_addrs: &HashMap<SsaValueId, usize>,
+    owned_value_temps: &SsaOwnedValueTemps,
     values: &mut HashMap<SsaValueId, cranelift_codegen::ir::Value>,
 ) -> VmResult<()> {
     let Some(output) = inst.output else {
@@ -685,6 +885,150 @@ fn lower_ssa_inst(
             b.switch_to_block(cont);
             out
         }
+        SsaInstKind::StringLen { text } => {
+            let helper_ptr = iconst_ptr_from_addr(b, pointer_type, helper_addrs.string_len)?;
+            let call = b
+                .ins()
+                .call_indirect(helper_refs.map_len_ref, helper_ptr, &[values[text]]);
+            b.inst_results(call)[0]
+        }
+        SsaInstKind::BytesLen { bytes } => {
+            let bytes = values[bytes];
+            let vec_ptr = ssa_load_heap_data_ptr(b, layout.value, bytes);
+            b.ins().load(
+                pointer_type,
+                MemFlags::new(),
+                vec_ptr,
+                layout.stack_vec.len_offset,
+            )
+        }
+        SsaInstKind::StringSlice {
+            text,
+            start,
+            length,
+        } => {
+            let out = owned_value_temp_slot_addr(
+                b,
+                pointer_type,
+                owned_value_temps,
+                SsaTempValueSlotKey::Output(output.id),
+            )?;
+            ssa_call_status_helper(
+                b,
+                exit_block,
+                pointer_type,
+                helper_refs.ranged_value_result_ref,
+                helper_addrs.string_slice,
+                &[out, values[text], values[start], values[length]],
+            )?;
+            out
+        }
+        SsaInstKind::BytesSlice {
+            bytes,
+            start,
+            length,
+        } => {
+            let out = owned_value_temp_slot_addr(
+                b,
+                pointer_type,
+                owned_value_temps,
+                SsaTempValueSlotKey::Output(output.id),
+            )?;
+            ssa_call_status_helper(
+                b,
+                exit_block,
+                pointer_type,
+                helper_refs.ranged_value_result_ref,
+                helper_addrs.bytes_slice,
+                &[out, values[bytes], values[start], values[length]],
+            )?;
+            out
+        }
+        SsaInstKind::StringGet { text, index } => {
+            let out = owned_value_temp_slot_addr(
+                b,
+                pointer_type,
+                owned_value_temps,
+                SsaTempValueSlotKey::Output(output.id),
+            )?;
+            ssa_call_status_helper(
+                b,
+                exit_block,
+                pointer_type,
+                helper_refs.indexed_value_result_ref,
+                helper_addrs.string_get,
+                &[out, values[text], values[index]],
+            )?;
+            out
+        }
+        SsaInstKind::BytesGet { bytes, index } => {
+            let bytes = values[bytes];
+            let index = values[index];
+            let vec_ptr = ssa_load_heap_data_ptr(b, layout.value, bytes);
+            let len = b.ins().load(
+                pointer_type,
+                MemFlags::new(),
+                vec_ptr,
+                layout.stack_vec.len_offset,
+            );
+            let in_range = ssa_index_in_range(b, index, len);
+            let ok = b.create_block();
+            let fail = b.create_block();
+            let cont = b.create_block();
+            b.ins().brif(in_range, ok, &[], fail, &[]);
+
+            b.switch_to_block(ok);
+            let data_ptr = b.ins().load(
+                pointer_type,
+                MemFlags::new(),
+                vec_ptr,
+                layout.stack_vec.ptr_offset,
+            );
+            let byte_addr = b.ins().iadd(data_ptr, index);
+            let raw = b.ins().load(types::I8, MemFlags::new(), byte_addr, 0);
+            let out = b.ins().uextend(types::I64, raw);
+            b.ins().jump(cont, &[]);
+
+            b.switch_to_block(fail);
+            ssa_emit_trace_exit_status(b, vm_ptr, exit_block, pointer_type, offsets, inst.ip)?;
+
+            b.switch_to_block(cont);
+            out
+        }
+        SsaInstKind::StringConcat { lhs, rhs } => {
+            let out = owned_value_temp_slot_addr(
+                b,
+                pointer_type,
+                owned_value_temps,
+                SsaTempValueSlotKey::Output(output.id),
+            )?;
+            ssa_call_status_helper(
+                b,
+                exit_block,
+                pointer_type,
+                helper_refs.concat_value_result_ref,
+                helper_addrs.string_concat,
+                &[out, values[lhs], values[rhs]],
+            )?;
+            out
+        }
+        SsaInstKind::BytesConcat { lhs, rhs } => {
+            let out = owned_value_temp_slot_addr(
+                b,
+                pointer_type,
+                owned_value_temps,
+                SsaTempValueSlotKey::Output(output.id),
+            )?;
+            ssa_call_status_helper(
+                b,
+                exit_block,
+                pointer_type,
+                helper_refs.concat_value_result_ref,
+                helper_addrs.bytes_concat,
+                &[out, values[lhs], values[rhs]],
+            )?;
+            out
+        }
         SsaInstKind::ArrayLen { array } => {
             let array = values[array];
             let vec_ptr = ssa_load_heap_data_ptr(b, layout.value, array);
@@ -719,7 +1063,13 @@ fn lower_ssa_inst(
                 layout.stack_vec.ptr_offset,
             );
             let element_addr = ssa_value_addr(b, pointer_type, data_ptr, index, layout.value.size);
-            let out = ssa_alloc_single_value_slot(b, pointer_type, layout.value.size)?;
+            let out = owned_value_temp_slot_addr(
+                b,
+                pointer_type,
+                owned_value_temps,
+                SsaTempValueSlotKey::Output(output.id),
+            )?;
+            clear_owned_value_temp_slot(b, pointer_type, helper_refs, helper_addrs, out)?;
             ssa_call_status_helper(
                 b,
                 exit_block,
@@ -756,6 +1106,12 @@ fn lower_ssa_inst(
             b.inst_results(call)[0]
         }
         SsaInstKind::MapGet { map, key } => {
+            let key_box_slot = owned_value_temp_slot_addr(
+                b,
+                pointer_type,
+                owned_value_temps,
+                SsaTempValueSlotKey::MapKeyBox(output.id),
+            )?;
             let key_addr = ssa_ensure_boxed_value_addr(
                 b,
                 exit_block,
@@ -763,12 +1119,19 @@ fn lower_ssa_inst(
                 layout.value,
                 helper_refs,
                 helper_addrs,
+                Some(key_box_slot),
                 *value_reprs.get(key).ok_or_else(|| {
                     VmError::JitNative("SSA map-get key representation missing".to_string())
                 })?,
                 values[key],
             )?;
-            let out = ssa_alloc_single_value_slot(b, pointer_type, layout.value.size)?;
+            let out = owned_value_temp_slot_addr(
+                b,
+                pointer_type,
+                owned_value_temps,
+                SsaTempValueSlotKey::Output(output.id),
+            )?;
+            clear_owned_value_temp_slot(b, pointer_type, helper_refs, helper_addrs, out)?;
             let helper_ptr = iconst_ptr_from_addr(b, pointer_type, helper_addrs.map_get)?;
             let call = b.ins().call_indirect(
                 helper_refs.map_get_ref,
@@ -807,6 +1170,12 @@ fn lower_ssa_inst(
             out
         }
         SsaInstKind::MapHas { map, key } => {
+            let key_box_slot = owned_value_temp_slot_addr(
+                b,
+                pointer_type,
+                owned_value_temps,
+                SsaTempValueSlotKey::MapKeyBox(output.id),
+            )?;
             let key_addr = ssa_ensure_boxed_value_addr(
                 b,
                 exit_block,
@@ -814,6 +1183,7 @@ fn lower_ssa_inst(
                 layout.value,
                 helper_refs,
                 helper_addrs,
+                Some(key_box_slot),
                 *value_reprs.get(key).ok_or_else(|| {
                     VmError::JitNative("SSA map-has key representation missing".to_string())
                 })?,
@@ -1389,6 +1759,18 @@ fn ssa_call_status_helper(
     Ok(())
 }
 
+fn ssa_call_infallible_helper(
+    b: &mut FunctionBuilder,
+    pointer_type: cranelift_codegen::ir::Type,
+    helper_ref: cranelift_codegen::ir::SigRef,
+    helper_addr: usize,
+    args: &[cranelift_codegen::ir::Value],
+) -> VmResult<()> {
+    let helper_ptr = iconst_ptr_from_addr(b, pointer_type, helper_addr)?;
+    let _ = b.ins().call_indirect(helper_ref, helper_ptr, args);
+    Ok(())
+}
+
 fn ssa_heap_tag(layout: crate::vm::native::ValueLayout, tag: crate::ValueType) -> VmResult<u32> {
     match tag {
         crate::ValueType::String => Ok(layout.string_tag),
@@ -1501,13 +1883,19 @@ fn ssa_ensure_boxed_value_addr(
     value_layout: crate::vm::native::ValueLayout,
     helper_refs: SsaDeoptHelperRefs,
     helper_addrs: SsaDeoptHelperAddrs,
+    temp_slot: Option<cranelift_codegen::ir::Value>,
     repr: SsaValueRepr,
     value: cranelift_codegen::ir::Value,
 ) -> VmResult<cranelift_codegen::ir::Value> {
     if repr == SsaValueRepr::Tagged {
         return Ok(value);
     }
-    let slot = ssa_alloc_single_value_slot(b, pointer_type, value_layout.size)?;
+    let slot = if let Some(slot) = temp_slot {
+        clear_owned_value_temp_slot(b, pointer_type, helper_refs, helper_addrs, slot)?;
+        slot
+    } else {
+        ssa_alloc_single_value_slot(b, pointer_type, value_layout.size)?
+    };
     ssa_materialize_runtime_value_to_slot(
         b,
         exit_block,

@@ -107,6 +107,38 @@ pub(crate) enum SsaInstKind {
         input: SsaValueId,
         tag: ValueType,
     },
+    StringLen {
+        text: SsaValueId,
+    },
+    BytesLen {
+        bytes: SsaValueId,
+    },
+    StringSlice {
+        text: SsaValueId,
+        start: SsaValueId,
+        length: SsaValueId,
+    },
+    BytesSlice {
+        bytes: SsaValueId,
+        start: SsaValueId,
+        length: SsaValueId,
+    },
+    StringGet {
+        text: SsaValueId,
+        index: SsaValueId,
+    },
+    BytesGet {
+        bytes: SsaValueId,
+        index: SsaValueId,
+    },
+    StringConcat {
+        lhs: SsaValueId,
+        rhs: SsaValueId,
+    },
+    BytesConcat {
+        lhs: SsaValueId,
+        rhs: SsaValueId,
+    },
     ArrayLen {
         array: SsaValueId,
     },
@@ -245,10 +277,25 @@ impl SsaInstKind {
             | Self::UnboxFloat { input }
             | Self::UnboxBool { input }
             | Self::UnboxHeapPtr { input, .. }
+            | Self::StringLen { text: input }
+            | Self::BytesLen { bytes: input }
             | Self::ArrayLen { array: input }
             | Self::MapLen { map: input }
             | Self::IntNeg { input }
             | Self::FloatNeg { input } => vec![*input],
+            Self::StringSlice {
+                text,
+                start,
+                length,
+            } => vec![*text, *start, *length],
+            Self::BytesSlice {
+                bytes,
+                start,
+                length,
+            } => vec![*bytes, *start, *length],
+            Self::StringGet { text, index } => vec![*text, *index],
+            Self::BytesGet { bytes, index } => vec![*bytes, *index],
+            Self::StringConcat { lhs, rhs } | Self::BytesConcat { lhs, rhs } => vec![*lhs, *rhs],
             Self::ArrayGet { array, index } => vec![*array, *index],
             Self::ArrayHas { array, index } => vec![*array, *index],
             Self::MapGet { map, key } => vec![*map, *key],
@@ -751,6 +798,22 @@ fn render_inst_kind(kind: &SsaInstKind) -> String {
         SsaInstKind::UnboxFloat { input } => format!("unbox_float {input}"),
         SsaInstKind::UnboxBool { input } => format!("unbox_bool {input}"),
         SsaInstKind::UnboxHeapPtr { input, tag } => format!("unbox_ptr {input}, {tag:?}"),
+        SsaInstKind::StringLen { text } => format!("string_len {text}"),
+        SsaInstKind::BytesLen { bytes } => format!("bytes_len {bytes}"),
+        SsaInstKind::StringSlice {
+            text,
+            start,
+            length,
+        } => format!("string_slice {text}, {start}, {length}"),
+        SsaInstKind::BytesSlice {
+            bytes,
+            start,
+            length,
+        } => format!("bytes_slice {bytes}, {start}, {length}"),
+        SsaInstKind::StringGet { text, index } => format!("string_get {text}, {index}"),
+        SsaInstKind::BytesGet { bytes, index } => format!("bytes_get {bytes}, {index}"),
+        SsaInstKind::StringConcat { lhs, rhs } => format!("string_concat {lhs}, {rhs}"),
+        SsaInstKind::BytesConcat { lhs, rhs } => format!("bytes_concat {lhs}, {rhs}"),
         SsaInstKind::ArrayLen { array } => format!("array_len {array}"),
         SsaInstKind::ArrayGet { array, index } => format!("array_get {array}, {index}"),
         SsaInstKind::ArrayHas { array, index } => format!("array_has {array}, {index}"),

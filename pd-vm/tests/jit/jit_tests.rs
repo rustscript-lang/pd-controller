@@ -1,7 +1,7 @@
 use vm::{
     BytecodeBuilder, CallOutcome, HostFunction, JitConfig, JitTraceTerminal, OpCode, Program,
-    SourceFlavor, TypeMap, Value, ValueType, Vm, VmStatus, VmYieldReason, compile_source,
-    compile_source_with_flavor, disassemble_program,
+    SourceFlavor, TypeMap, Value, ValueType, Vm, VmStatus, VmYieldReason, builtin_call_index,
+    compile_source, compile_source_with_flavor, disassemble_program,
 };
 
 fn native_jit_supported() -> bool {
@@ -57,6 +57,41 @@ fn assert_native_ssa_call_boundary_trace(vm: &Vm, snapshot: &vm::jit::JitSnapsho
     );
 }
 
+fn assert_native_ssa_specialized_trace(
+    vm: &Vm,
+    snapshot: &vm::jit::JitSnapshot,
+    label: &str,
+    expected_ops: &[&str],
+) {
+    let dump = vm.dump_jit_info();
+    assert!(
+        snapshot.traces.iter().all(|trace| !trace.has_call),
+        "{label} should avoid call-boundary SSA traces, dump:\n{dump}"
+    );
+    assert!(
+        dump.contains("lowering=ssa"),
+        "{label} should lower through SSA, dump:\n{dump}"
+    );
+    assert!(
+        vm.jit_native_trace_count() > 0,
+        "{label} should compile at least one native trace, dump:\n{dump}"
+    );
+    assert!(
+        vm.jit_native_exec_count() > 0,
+        "{label} should execute natively, dump:\n{dump}"
+    );
+    for op in expected_ops {
+        assert!(
+            any_trace_op(snapshot, op),
+            "{label} should record SSA op '{op}', dump:\n{dump}"
+        );
+    }
+    assert_eq!(
+        snapshot.metrics.helper_fallback_count, 0,
+        "{label} should not need interpreter fallback diagnostics, dump:\n{dump}"
+    );
+}
+
 fn first_native_code_bytes(dump: &str) -> Option<usize> {
     for line in dump.lines() {
         let marker = "code_bytes=";
@@ -97,6 +132,14 @@ fn force_local_types(program: Program, hints: &[(usize, ValueType)]) -> Program 
     }
     for (slot, ty) in hints {
         type_map.local_types[*slot] = *ty;
+    }
+    program.with_type_map(type_map)
+}
+
+fn force_operand_types(program: Program, hints: &[(usize, (ValueType, ValueType))]) -> Program {
+    let mut type_map = program.type_map.clone().unwrap_or_else(TypeMap::default);
+    for (ip, (lhs, rhs)) in hints {
+        type_map.operand_types.insert(*ip, (*lhs, *rhs));
     }
     program.with_type_map(type_map)
 }
@@ -2297,12 +2340,453 @@ fn trace_jit_supports_string_sequence_call_boundary_exits() {
     );
 
     let snapshot = vm.jit_snapshot();
-    assert_native_ssa_call_boundary_trace(&vm, &snapshot, "string builtin loop");
+    assert_native_ssa_specialized_trace(
+        &vm,
+        &snapshot,
+        "string builtin loop",
+        &["string_len", "string_get", "string_slice"],
+    );
 
     let bridge_hits = vm.jit_native_bridge_stats_snapshot();
     assert!(
         bridge_hits.iter().all(|(_, count)| *count == 0),
         "string builtin loop should not need native helper bridges for call-boundary execution, bridge hits: {bridge_hits:?}\n{}",
+        vm.dump_jit_info()
+    );
+}
+
+#[test]
+fn trace_jit_supports_bytes_len_get_slice_in_ssa() {
+    if !native_jit_supported() {
+        return;
+    }
+
+    let mut bc = BytecodeBuilder::new();
+    let len_call = builtin_call_index("len").expect("len builtin should exist");
+    let get_call = builtin_call_index("get").expect("get builtin should exist");
+    let slice_call = builtin_call_index("slice").expect("slice builtin should exist");
+    bc.ldc(0);
+    bc.stloc(0);
+    bc.ldc(1);
+    bc.stloc(1);
+    bc.ldc(1);
+    bc.stloc(2);
+    bc.ldc(1);
+    bc.stloc(3);
+    bc.ldc(6);
+    bc.stloc(4);
+
+    let root_ip = bc.position();
+    bc.ldloc(1);
+    bc.ldc(5);
+    let clt_ip = bc.position();
+    bc.clt();
+    let guard_ip = bc.position();
+    bc.brfalse(0);
+
+    bc.ldloc(0);
+    let len_ip = bc.position();
+    bc.call(len_call, 1);
+    bc.stloc(2);
+
+    bc.ldloc(0);
+    bc.ldc(2);
+    let get_ip = bc.position();
+    bc.call(get_call, 2);
+    bc.stloc(3);
+
+    bc.ldloc(0);
+    bc.ldc(2);
+    bc.ldc(4);
+    let slice_ip = bc.position();
+    bc.call(slice_call, 3);
+    bc.stloc(4);
+
+    bc.ldloc(1);
+    bc.ldc(3);
+    let add_ip = bc.position();
+    bc.add();
+    bc.stloc(1);
+    bc.br(root_ip);
+
+    let exit_ip = bc.position();
+    bc.ldloc(2);
+    bc.ldloc(4);
+    bc.ldloc(3);
+    bc.ret();
+
+    let mut code = bc.finish();
+    patch_branch_target(&mut code, guard_ip, exit_ip);
+    let program = Program::new(
+        vec![
+            Value::bytes(vec![0x00, 0xFF, 0x10]),
+            Value::Int(0),
+            Value::Int(1),
+            Value::Int(1),
+            Value::Int(2),
+            Value::Int(4),
+            Value::bytes(vec![]),
+        ],
+        code,
+    )
+    .with_local_count(5);
+    let program = force_local_types(
+        program,
+        &[
+            (0, ValueType::Bytes),
+            (1, ValueType::Int),
+            (2, ValueType::Int),
+            (3, ValueType::Int),
+            (4, ValueType::Bytes),
+        ],
+    );
+    let program = force_operand_types(
+        program,
+        &[
+            (clt_ip as usize, (ValueType::Int, ValueType::Int)),
+            (len_ip as usize, (ValueType::Bytes, ValueType::Unknown)),
+            (get_ip as usize, (ValueType::Bytes, ValueType::Int)),
+            (slice_ip as usize, (ValueType::Bytes, ValueType::Int)),
+            (add_ip as usize, (ValueType::Int, ValueType::Int)),
+        ],
+    );
+
+    let mut vm = Vm::new(program);
+    vm.set_jit_config(JitConfig {
+        enabled: true,
+        hot_loop_threshold: 1,
+        max_trace_len: 512,
+    });
+    vm.set_jit_native_bridge_stats_enabled(true);
+
+    let status = vm.run().expect("bytes builtin vm should run");
+    assert_eq!(status, VmStatus::Halted);
+    assert_eq!(
+        vm.stack(),
+        &[
+            Value::Int(3),
+            Value::bytes(vec![0xFF, 0x10]),
+            Value::Int(255),
+        ]
+    );
+
+    let snapshot = vm.jit_snapshot();
+    assert_native_ssa_specialized_trace(
+        &vm,
+        &snapshot,
+        "bytes builtin loop",
+        &["bytes_len", "bytes_get", "bytes_slice"],
+    );
+    assert!(
+        any_trace_ssa_contains(&snapshot, "unbox_ptr "),
+        "bytes builtin loop should guard a bytes heap pointer at trace entry, dump:\n{}",
+        vm.dump_jit_info()
+    );
+
+    let bridge_hits = vm.jit_native_bridge_stats_snapshot();
+    assert!(
+        bridge_hits.iter().all(|(_, count)| *count == 0),
+        "bytes builtin loop should not need native helper bridges for call-boundary execution, bridge hits: {bridge_hits:?}\n{}",
+        vm.dump_jit_info()
+    );
+}
+
+#[test]
+fn trace_jit_supports_string_len_get_slice_in_ssa() {
+    if !native_jit_supported() {
+        return;
+    }
+
+    let mut bc = BytecodeBuilder::new();
+    let len_call = builtin_call_index("len").expect("len builtin should exist");
+    let get_call = builtin_call_index("get").expect("get builtin should exist");
+    let slice_call = builtin_call_index("slice").expect("slice builtin should exist");
+    bc.ldc(0);
+    bc.stloc(0);
+    bc.ldc(1);
+    bc.stloc(1);
+    bc.ldc(1);
+    bc.stloc(2);
+    bc.ldc(5);
+    bc.stloc(3);
+    bc.ldc(5);
+    bc.stloc(4);
+
+    let root_ip = bc.position();
+    bc.ldloc(1);
+    bc.ldc(6);
+    let clt_ip = bc.position();
+    bc.clt();
+    let guard_ip = bc.position();
+    bc.brfalse(0);
+
+    bc.ldloc(0);
+    let len_ip = bc.position();
+    bc.call(len_call, 1);
+    bc.stloc(2);
+
+    bc.ldloc(0);
+    bc.ldc(4);
+    let get_ip = bc.position();
+    bc.call(get_call, 2);
+    bc.stloc(3);
+
+    bc.ldloc(0);
+    bc.ldc(4);
+    bc.ldc(3);
+    let slice_ip = bc.position();
+    bc.call(slice_call, 3);
+    bc.stloc(4);
+
+    bc.ldloc(1);
+    bc.ldc(3);
+    let add_ip = bc.position();
+    bc.add();
+    bc.stloc(1);
+    bc.br(root_ip);
+
+    let exit_ip = bc.position();
+    bc.ldloc(2);
+    bc.ldloc(4);
+    bc.ldloc(3);
+    bc.ret();
+
+    let mut code = bc.finish();
+    patch_branch_target(&mut code, guard_ip, exit_ip);
+    let program = Program::new(
+        vec![
+            Value::string("a界🙂"),
+            Value::Int(0),
+            Value::Int(1),
+            Value::Int(2),
+            Value::Int(1),
+            Value::string(""),
+            Value::Int(4),
+        ],
+        code,
+    )
+    .with_local_count(5);
+    let program = force_local_types(
+        program,
+        &[
+            (0, ValueType::String),
+            (1, ValueType::Int),
+            (2, ValueType::Int),
+            (3, ValueType::String),
+            (4, ValueType::String),
+        ],
+    );
+    let program = force_operand_types(
+        program,
+        &[
+            (clt_ip as usize, (ValueType::Int, ValueType::Int)),
+            (len_ip as usize, (ValueType::String, ValueType::Unknown)),
+            (get_ip as usize, (ValueType::String, ValueType::Int)),
+            (slice_ip as usize, (ValueType::String, ValueType::Int)),
+            (add_ip as usize, (ValueType::Int, ValueType::Int)),
+        ],
+    );
+
+    let mut vm = Vm::new(program);
+    vm.set_jit_config(JitConfig {
+        enabled: true,
+        hot_loop_threshold: 1,
+        max_trace_len: 512,
+    });
+    vm.set_jit_native_bridge_stats_enabled(true);
+
+    let status = vm.run().expect("string builtin vm should run");
+    assert_eq!(status, VmStatus::Halted);
+    assert_eq!(
+        vm.stack(),
+        &[Value::Int(3), Value::string("界🙂"), Value::string("界"),]
+    );
+
+    let snapshot = vm.jit_snapshot();
+    assert_native_ssa_specialized_trace(
+        &vm,
+        &snapshot,
+        "string builtin loop",
+        &["string_len", "string_get", "string_slice"],
+    );
+    assert!(
+        any_trace_ssa_contains(&snapshot, "unbox_ptr "),
+        "string builtin loop should guard a string heap pointer at trace entry, dump:\n{}",
+        vm.dump_jit_info()
+    );
+}
+
+#[test]
+fn trace_jit_supports_manual_string_concat_in_ssa() {
+    if !native_jit_supported() {
+        return;
+    }
+
+    let mut bc = BytecodeBuilder::new();
+    bc.ldc(0);
+    bc.stloc(0);
+    bc.ldc(1);
+    bc.stloc(1);
+
+    let root_ip = bc.position();
+    bc.ldloc(1);
+    bc.ldc(3);
+    let clt_ip = bc.position();
+    bc.clt();
+    let guard_ip = bc.position();
+    bc.brfalse(0);
+
+    bc.ldloc(0);
+    bc.ldc(4);
+    let concat_ip = bc.position();
+    bc.add();
+    bc.stloc(0);
+
+    bc.ldloc(1);
+    bc.ldc(2);
+    let add_ip = bc.position();
+    bc.add();
+    bc.stloc(1);
+    bc.br(root_ip);
+
+    let exit_ip = bc.position();
+    bc.ldloc(0);
+    bc.ret();
+
+    let mut code = bc.finish();
+    patch_branch_target(&mut code, guard_ip, exit_ip);
+    let program = Program::new(
+        vec![
+            Value::string(""),
+            Value::Int(0),
+            Value::Int(1),
+            Value::Int(4),
+            Value::string("x"),
+        ],
+        code,
+    )
+    .with_local_count(2);
+    let program = force_local_types(program, &[(0, ValueType::String), (1, ValueType::Int)]);
+    let program = force_operand_types(
+        program,
+        &[
+            (clt_ip as usize, (ValueType::Int, ValueType::Int)),
+            (concat_ip as usize, (ValueType::String, ValueType::String)),
+            (add_ip as usize, (ValueType::Int, ValueType::Int)),
+        ],
+    );
+
+    let mut vm = Vm::new(program);
+    vm.set_jit_config(JitConfig {
+        enabled: true,
+        hot_loop_threshold: 1,
+        max_trace_len: 512,
+    });
+
+    let status = vm.run().expect("manual string concat vm should run");
+    assert_eq!(status, VmStatus::Halted);
+    assert_eq!(vm.stack(), &[Value::string("xxxx")]);
+
+    let snapshot = vm.jit_snapshot();
+    assert_native_ssa_specialized_trace(
+        &vm,
+        &snapshot,
+        "manual string concat loop",
+        &["string_concat"],
+    );
+    assert!(
+        any_trace_ssa_contains(&snapshot, "unbox_ptr "),
+        "manual string concat loop should unbox string operands into heap pointers, dump:\n{}",
+        vm.dump_jit_info()
+    );
+}
+
+#[test]
+fn trace_jit_supports_manual_bytes_concat_in_ssa() {
+    if !native_jit_supported() {
+        return;
+    }
+
+    let mut bc = BytecodeBuilder::new();
+    bc.ldc(0);
+    bc.stloc(0);
+    bc.ldc(1);
+    bc.stloc(1);
+
+    let root_ip = bc.position();
+    bc.ldloc(1);
+    bc.ldc(3);
+    let clt_ip = bc.position();
+    bc.clt();
+    let guard_ip = bc.position();
+    bc.brfalse(0);
+
+    bc.ldloc(0);
+    bc.ldc(4);
+    let concat_ip = bc.position();
+    bc.add();
+    bc.stloc(0);
+
+    bc.ldloc(1);
+    bc.ldc(2);
+    let add_ip = bc.position();
+    bc.add();
+    bc.stloc(1);
+    bc.br(root_ip);
+
+    let exit_ip = bc.position();
+    bc.ldloc(0);
+    bc.ret();
+
+    let mut code = bc.finish();
+    patch_branch_target(&mut code, guard_ip, exit_ip);
+    let program = Program::new(
+        vec![
+            Value::bytes(vec![]),
+            Value::Int(0),
+            Value::Int(1),
+            Value::Int(5),
+            Value::bytes(vec![0x00, 0xFF]),
+        ],
+        code,
+    )
+    .with_local_count(2);
+    let program = force_local_types(program, &[(0, ValueType::Bytes), (1, ValueType::Int)]);
+    let program = force_operand_types(
+        program,
+        &[
+            (clt_ip as usize, (ValueType::Int, ValueType::Int)),
+            (concat_ip as usize, (ValueType::Bytes, ValueType::Bytes)),
+            (add_ip as usize, (ValueType::Int, ValueType::Int)),
+        ],
+    );
+
+    let mut vm = Vm::new(program);
+    vm.set_jit_config(JitConfig {
+        enabled: true,
+        hot_loop_threshold: 1,
+        max_trace_len: 512,
+    });
+
+    let status = vm.run().expect("manual bytes concat vm should run");
+    assert_eq!(status, VmStatus::Halted);
+    assert_eq!(
+        vm.stack(),
+        &[Value::bytes(vec![
+            0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF,
+        ])]
+    );
+
+    let snapshot = vm.jit_snapshot();
+    assert_native_ssa_specialized_trace(
+        &vm,
+        &snapshot,
+        "manual bytes concat loop",
+        &["bytes_concat"],
+    );
+    assert!(
+        any_trace_ssa_contains(&snapshot, "unbox_ptr "),
+        "manual bytes concat loop should unbox bytes operands into heap pointers, dump:\n{}",
         vm.dump_jit_info()
     );
 }
