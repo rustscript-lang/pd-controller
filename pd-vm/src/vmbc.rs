@@ -3,6 +3,7 @@ use std::fmt::Write;
 
 use crate::builtins::BuiltinFunction;
 use crate::bytecode::{TypeMap, ValueType};
+use crate::compiler::ir::TypeSchema;
 use crate::debug_info::{ArgInfo, DebugFunction, DebugInfo, LineInfo, LocalInfo};
 use crate::vm::{HostImport, OpCode, Program, Value};
 
@@ -738,10 +739,16 @@ fn write_type_map(out: &mut Vec<u8>, type_map: Option<&TypeMap>) -> Result<(), W
     };
 
     out.push(1);
+    out.push(u8::from(type_map.strict_types));
     write_u32_count("type map locals", type_map.local_types.len(), out)?;
     for ty in &type_map.local_types {
         out.push(*ty as u8);
     }
+    for schema in &type_map.local_schemas {
+        write_optional_schema(schema.as_ref(), out)?;
+    }
+    write_bool_slice("type map callable slots", &type_map.callable_slots, out)?;
+    write_bool_slice("type map optional slots", &type_map.optional_slots, out)?;
 
     write_u32_count("type map operands", type_map.operand_types.len(), out)?;
     let mut operand_entries = type_map
@@ -762,11 +769,22 @@ fn read_type_map(cursor: &mut Cursor<'_>) -> Result<Option<TypeMap>, WireError> 
     match cursor.read_u8()? {
         0 => Ok(None),
         1 => {
+            let strict_types = match cursor.read_u8()? {
+                0 => false,
+                1 => true,
+                other => return Err(WireError::InvalidBool(other)),
+            };
             let local_count = cursor.read_u32()? as usize;
             let mut local_types = Vec::with_capacity(local_count);
             for _ in 0..local_count {
                 local_types.push(read_value_type(cursor.read_u8()?)?);
             }
+            let mut local_schemas = Vec::with_capacity(local_count);
+            for _ in 0..local_count {
+                local_schemas.push(read_optional_schema(cursor)?);
+            }
+            let callable_slots = read_bool_vec(cursor, local_count)?;
+            let optional_slots = read_bool_vec(cursor, local_count)?;
 
             let operand_count = cursor.read_u32()? as usize;
             let mut operand_types = HashMap::with_capacity(operand_count);
@@ -778,7 +796,11 @@ fn read_type_map(cursor: &mut Cursor<'_>) -> Result<Option<TypeMap>, WireError> 
             }
 
             Ok(Some(TypeMap {
+                strict_types,
                 local_types,
+                local_schemas,
+                callable_slots,
+                optional_slots,
                 operand_types,
             }))
         }
@@ -816,6 +838,181 @@ fn read_optional_u32(cursor: &mut Cursor<'_>) -> Result<Option<u32>, WireError> 
         0 => Ok(None),
         1 => Ok(Some(cursor.read_u32()?)),
         other => Err(WireError::InvalidDebugFlag(other)),
+    }
+}
+
+fn write_bool_slice(field: &'static str, values: &[bool], out: &mut Vec<u8>) -> Result<(), WireError> {
+    write_u32_count(field, values.len(), out)?;
+    out.extend(values.iter().map(|value| u8::from(*value)));
+    Ok(())
+}
+
+fn read_bool_vec(cursor: &mut Cursor<'_>, expected_len: usize) -> Result<Vec<bool>, WireError> {
+    let count = cursor.read_u32()? as usize;
+    if count != expected_len {
+        return Err(WireError::TrailingBytes);
+    }
+    let mut values = Vec::with_capacity(count);
+    for _ in 0..count {
+        values.push(match cursor.read_u8()? {
+            0 => false,
+            1 => true,
+            other => return Err(WireError::InvalidBool(other)),
+        });
+    }
+    Ok(values)
+}
+
+fn write_optional_schema(schema: Option<&TypeSchema>, out: &mut Vec<u8>) -> Result<(), WireError> {
+    match schema {
+        Some(schema) => {
+            out.push(1);
+            write_schema(schema, out)?;
+        }
+        None => out.push(0),
+    }
+    Ok(())
+}
+
+fn read_optional_schema(cursor: &mut Cursor<'_>) -> Result<Option<TypeSchema>, WireError> {
+    match cursor.read_u8()? {
+        0 => Ok(None),
+        1 => Ok(Some(read_schema(cursor)?)),
+        other => Err(WireError::InvalidBool(other)),
+    }
+}
+
+fn write_schema(schema: &TypeSchema, out: &mut Vec<u8>) -> Result<(), WireError> {
+    match schema {
+        TypeSchema::Unknown => out.push(0),
+        TypeSchema::Null => out.push(1),
+        TypeSchema::Int => out.push(2),
+        TypeSchema::Float => out.push(3),
+        TypeSchema::Number => out.push(4),
+        TypeSchema::Bool => out.push(5),
+        TypeSchema::String => out.push(6),
+        TypeSchema::Bytes => out.push(7),
+        TypeSchema::Optional(inner) => {
+            out.push(16);
+            write_schema(inner, out)?;
+        }
+        TypeSchema::GenericParam(name) => {
+            out.push(8);
+            write_string("schema generic", name, out)?;
+        }
+        TypeSchema::Named(name, type_args) => {
+            out.push(9);
+            write_string("schema name", name, out)?;
+            write_u32_count("schema type args", type_args.len(), out)?;
+            for type_arg in type_args {
+                write_schema(type_arg, out)?;
+            }
+        }
+        TypeSchema::Array(item) => {
+            out.push(10);
+            write_schema(item, out)?;
+        }
+        TypeSchema::ArrayTuple(items) => {
+            out.push(11);
+            write_u32_count("schema tuple items", items.len(), out)?;
+            for item in items {
+                write_schema(item, out)?;
+            }
+        }
+        TypeSchema::ArrayTupleRest { prefix, rest } => {
+            out.push(12);
+            write_u32_count("schema tuple prefix", prefix.len(), out)?;
+            for item in prefix {
+                write_schema(item, out)?;
+            }
+            write_schema(rest, out)?;
+        }
+        TypeSchema::Map(item) => {
+            out.push(13);
+            write_schema(item, out)?;
+        }
+        TypeSchema::Object(fields) => {
+            out.push(14);
+            let mut entries = fields.iter().collect::<Vec<_>>();
+            entries.sort_unstable_by(|(lhs, _), (rhs, _)| lhs.cmp(rhs));
+            write_u32_count("schema object fields", entries.len(), out)?;
+            for (name, value) in entries {
+                write_string("schema object field", name, out)?;
+                write_schema(value, out)?;
+            }
+        }
+        TypeSchema::Callable { params, result } => {
+            out.push(15);
+            write_u32_count("schema callable params", params.len(), out)?;
+            for param in params {
+                write_schema(param, out)?;
+            }
+            write_schema(result, out)?;
+        }
+    }
+    Ok(())
+}
+
+fn read_schema(cursor: &mut Cursor<'_>) -> Result<TypeSchema, WireError> {
+    match cursor.read_u8()? {
+        0 => Ok(TypeSchema::Unknown),
+        1 => Ok(TypeSchema::Null),
+        2 => Ok(TypeSchema::Int),
+        3 => Ok(TypeSchema::Float),
+        4 => Ok(TypeSchema::Number),
+        5 => Ok(TypeSchema::Bool),
+        6 => Ok(TypeSchema::String),
+        7 => Ok(TypeSchema::Bytes),
+        16 => Ok(TypeSchema::Optional(Box::new(read_schema(cursor)?))),
+        8 => Ok(TypeSchema::GenericParam(cursor.read_string()?)),
+        9 => {
+            let name = cursor.read_string()?;
+            let count = cursor.read_u32()? as usize;
+            let mut type_args = Vec::with_capacity(count);
+            for _ in 0..count {
+                type_args.push(read_schema(cursor)?);
+            }
+            Ok(TypeSchema::Named(name, type_args))
+        }
+        10 => Ok(TypeSchema::Array(Box::new(read_schema(cursor)?))),
+        11 => {
+            let count = cursor.read_u32()? as usize;
+            let mut items = Vec::with_capacity(count);
+            for _ in 0..count {
+                items.push(read_schema(cursor)?);
+            }
+            Ok(TypeSchema::ArrayTuple(items))
+        }
+        12 => {
+            let count = cursor.read_u32()? as usize;
+            let mut prefix = Vec::with_capacity(count);
+            for _ in 0..count {
+                prefix.push(read_schema(cursor)?);
+            }
+            let rest = Box::new(read_schema(cursor)?);
+            Ok(TypeSchema::ArrayTupleRest { prefix, rest })
+        }
+        13 => Ok(TypeSchema::Map(Box::new(read_schema(cursor)?))),
+        14 => {
+            let count = cursor.read_u32()? as usize;
+            let mut fields = HashMap::with_capacity(count);
+            for _ in 0..count {
+                let name = cursor.read_string()?;
+                let value = read_schema(cursor)?;
+                fields.insert(name, value);
+            }
+            Ok(TypeSchema::Object(fields))
+        }
+        15 => {
+            let count = cursor.read_u32()? as usize;
+            let mut params = Vec::with_capacity(count);
+            for _ in 0..count {
+                params.push(read_schema(cursor)?);
+            }
+            let result = Box::new(read_schema(cursor)?);
+            Ok(TypeSchema::Callable { params, result })
+        }
+        other => Err(WireError::InvalidValueType(other)),
     }
 }
 

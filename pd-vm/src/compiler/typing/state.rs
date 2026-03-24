@@ -21,6 +21,7 @@ pub(crate) enum BoundType {
     Null,
     Int,
     Float,
+    Number,
     Bool,
     String,
     Bytes,
@@ -37,6 +38,7 @@ impl BoundType {
             BoundType::Null => Some("null"),
             BoundType::Int => Some("int"),
             BoundType::Float => Some("float"),
+            BoundType::Number => Some("number"),
             BoundType::Bool => Some("bool"),
             BoundType::String => Some("string"),
             BoundType::Bytes => Some("bytes"),
@@ -76,6 +78,7 @@ impl From<BoundType> for ValueType {
             BoundType::Null => ValueType::Null,
             BoundType::Int => ValueType::Int,
             BoundType::Float => ValueType::Float,
+            BoundType::Number => ValueType::Unknown,
             BoundType::Bool => ValueType::Bool,
             BoundType::String => ValueType::String,
             BoundType::Bytes => ValueType::Bytes,
@@ -131,6 +134,11 @@ pub(super) fn merge_bound_types(lhs: BoundType, rhs: BoundType) -> BoundType {
     }
 
     match (lhs, rhs) {
+        (BoundType::Number, BoundType::Int)
+        | (BoundType::Int, BoundType::Number)
+        | (BoundType::Number, BoundType::Float)
+        | (BoundType::Float, BoundType::Number)
+        | (BoundType::Number, BoundType::Number) => BoundType::Number,
         (BoundType::ArrayOf(lhs), BoundType::ArrayOf(rhs)) => {
             merge_container_element_types(lhs, rhs)
         }
@@ -180,6 +188,13 @@ impl LocalTypeState {
         self.callables.get(&slot)
     }
 
+    pub(crate) fn callable_schema(&self, slot: LocalSlot) -> Option<&TypeSchema> {
+        match self.schemas.get(&slot) {
+            Some(TypeSchema::Callable { .. }) => self.schemas.get(&slot),
+            _ => None,
+        }
+    }
+
     pub(crate) fn schema(&self, slot: LocalSlot) -> Option<&TypeSchema> {
         self.schemas.get(&slot)
     }
@@ -194,6 +209,26 @@ impl LocalTypeState {
 
     pub(super) fn iter_slots(&self) -> impl Iterator<Item = LocalSlot> + '_ {
         self.by_slot.keys().copied()
+    }
+
+    pub(super) fn has_binding(&self, slot: LocalSlot) -> bool {
+        self.by_slot.contains_key(&slot)
+            || self.schemas.contains_key(&slot)
+            || self.callables.contains_key(&slot)
+            || self.optional_slots.contains(&slot)
+    }
+
+    pub(super) fn copy_all_bindings_from(&mut self, source: &LocalTypeState) {
+        for slot in source
+            .by_slot
+            .keys()
+            .chain(source.schemas.keys())
+            .chain(source.callables.keys())
+            .copied()
+            .collect::<HashSet<_>>()
+        {
+            self.copy_binding_from(source, slot, slot, None, false);
+        }
     }
 
     pub(crate) fn set(&mut self, slot: LocalSlot, ty: BoundType) {
@@ -246,6 +281,33 @@ impl LocalTypeState {
         self.schemas.remove(&slot);
         self.declared_schema_slots.remove(&slot);
         self.optional_slots.remove(&slot);
+        self.callables.insert(slot, callable);
+    }
+
+    pub(super) fn bind_callable_with_schema(
+        &mut self,
+        slot: LocalSlot,
+        callable: InferredCallable,
+        schema: Option<TypeSchema>,
+        from_declared_schema: bool,
+        optional: bool,
+    ) {
+        self.by_slot.remove(&slot);
+        if let Some(schema) = schema {
+            self.schemas.insert(slot, schema);
+        } else {
+            self.schemas.remove(&slot);
+        }
+        if from_declared_schema {
+            self.declared_schema_slots.insert(slot);
+        } else {
+            self.declared_schema_slots.remove(&slot);
+        }
+        if optional {
+            self.optional_slots.insert(slot);
+        } else {
+            self.optional_slots.remove(&slot);
+        }
         self.callables.insert(slot, callable);
     }
 
@@ -359,8 +421,10 @@ where
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct TypeInferenceResult {
     pub local_types: Vec<ValueType>,
+    pub local_schemas: Vec<Option<TypeSchema>>,
     pub local_schema_labels: Vec<Option<String>>,
     pub callable_slots: Vec<bool>,
+    pub optional_slots: Vec<bool>,
 }
 
 #[derive(Clone, Debug)]

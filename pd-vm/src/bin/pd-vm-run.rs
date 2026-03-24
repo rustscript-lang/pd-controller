@@ -986,6 +986,8 @@ struct ReplSession {
 struct ReplSessionLocal {
     value: Value,
     mutable: bool,
+    schema: Option<vm::compiler::TypeSchema>,
+    optional: bool,
 }
 
 fn sync_repl_session(vm: &Vm, bindings: &[ReplLocalBinding], session: &mut ReplSession) {
@@ -1005,11 +1007,14 @@ fn sync_repl_session(vm: &Vm, bindings: &[ReplLocalBinding], session: &mut ReplS
         let Some(value) = vm.locals().get(index as usize) else {
             continue;
         };
+        let (schema, optional) = repl_local_schema_from_vm(vm, index as usize, value);
         next.insert(
             binding.name.clone(),
             ReplSessionLocal {
                 value: value.clone(),
                 mutable: binding.mutable,
+                schema,
+                optional,
             },
         );
     }
@@ -1055,6 +1060,8 @@ fn compile_repl_snippet(
         .map(|(name, local)| ReplLocalBinding {
             name: name.clone(),
             mutable: local.mutable,
+            schema: local.schema.clone(),
+            optional: local.optional,
         })
         .collect::<Vec<_>>();
     match compile_source_for_repl_with_locals(trimmed, &bindings) {
@@ -1090,6 +1097,63 @@ fn seed_repl_vm_locals(
         vm.set_local(index, local.value.clone())?;
     }
     Ok(())
+}
+
+fn repl_local_schema_from_vm(
+    vm: &Vm,
+    index: usize,
+    value: &Value,
+) -> (Option<vm::compiler::TypeSchema>, bool) {
+    let fallback = repl_schema_from_value(value);
+    let Some(type_map) = vm.program().type_map.as_ref() else {
+        return (fallback, false);
+    };
+    let schema = type_map
+        .local_schemas
+        .get(index)
+        .cloned()
+        .flatten()
+        .or_else(|| {
+            type_map
+                .local_types
+                .get(index)
+                .copied()
+                .and_then(repl_schema_from_value_type)
+        })
+        .or(fallback);
+    let optional = type_map.optional_slots.get(index).copied().unwrap_or(false);
+    (schema, optional)
+}
+
+fn repl_schema_from_value(value: &Value) -> Option<vm::compiler::TypeSchema> {
+    use vm::compiler::TypeSchema;
+
+    match value {
+        Value::Null => Some(TypeSchema::Null),
+        Value::Int(_) => Some(TypeSchema::Int),
+        Value::Float(_) => Some(TypeSchema::Float),
+        Value::Bool(_) => Some(TypeSchema::Bool),
+        Value::String(_) => Some(TypeSchema::String),
+        Value::Bytes(_) => Some(TypeSchema::Bytes),
+        Value::Array(_) => Some(TypeSchema::Array(Box::new(TypeSchema::Unknown))),
+        Value::Map(_) => Some(TypeSchema::Map(Box::new(TypeSchema::Unknown))),
+    }
+}
+
+fn repl_schema_from_value_type(value_type: vm::ValueType) -> Option<vm::compiler::TypeSchema> {
+    use vm::compiler::TypeSchema;
+
+    match value_type {
+        vm::ValueType::Unknown => None,
+        vm::ValueType::Null => Some(TypeSchema::Null),
+        vm::ValueType::Int => Some(TypeSchema::Int),
+        vm::ValueType::Float => Some(TypeSchema::Float),
+        vm::ValueType::Bool => Some(TypeSchema::Bool),
+        vm::ValueType::String => Some(TypeSchema::String),
+        vm::ValueType::Bytes => Some(TypeSchema::Bytes),
+        vm::ValueType::Array => Some(TypeSchema::Array(Box::new(TypeSchema::Unknown))),
+        vm::ValueType::Map => Some(TypeSchema::Map(Box::new(TypeSchema::Unknown))),
+    }
 }
 
 fn is_repl_input_complete(input: &str) -> bool {
@@ -1796,6 +1860,8 @@ mod tests {
             super::ReplSessionLocal {
                 value: Value::Int(41),
                 mutable: false,
+                schema: Some(vm::compiler::TypeSchema::Int),
+                optional: false,
             },
         );
         let compiled =
@@ -1864,6 +1930,8 @@ mod tests {
             super::ReplSessionLocal {
                 value: Value::Int(1),
                 mutable: false,
+                schema: Some(vm::compiler::TypeSchema::Int),
+                optional: false,
             },
         );
         match super::compile_repl_snippet("let y = ;", &locals) {

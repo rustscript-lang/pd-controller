@@ -314,7 +314,11 @@ fn hash_type_map(type_map: Option<&crate::bytecode::TypeMap>, state: &mut impl H
     };
 
     1u8.hash(state);
+    type_map.strict_types.hash(state);
     type_map.local_types.hash(state);
+    hash_local_schemas(&type_map.local_schemas, state);
+    type_map.callable_slots.hash(state);
+    type_map.optional_slots.hash(state);
     let mut operand_entries = type_map
         .operand_types
         .iter()
@@ -322,6 +326,93 @@ fn hash_type_map(type_map: Option<&crate::bytecode::TypeMap>, state: &mut impl H
         .collect::<Vec<_>>();
     operand_entries.sort_unstable_by_key(|(offset, _)| *offset);
     operand_entries.hash(state);
+}
+
+fn hash_local_schemas(
+    schemas: &[Option<crate::compiler::TypeSchema>],
+    state: &mut impl Hasher,
+) {
+    schemas.len().hash(state);
+    for schema in schemas {
+        match schema {
+            Some(schema) => {
+                1u8.hash(state);
+                hash_type_schema(schema, state);
+            }
+            None => 0u8.hash(state),
+        }
+    }
+}
+
+fn hash_type_schema(schema: &crate::compiler::TypeSchema, state: &mut impl Hasher) {
+    use crate::compiler::TypeSchema;
+
+    match schema {
+        TypeSchema::Unknown => 0u8.hash(state),
+        TypeSchema::Null => 1u8.hash(state),
+        TypeSchema::Int => 2u8.hash(state),
+        TypeSchema::Float => 3u8.hash(state),
+        TypeSchema::Number => 4u8.hash(state),
+        TypeSchema::Bool => 5u8.hash(state),
+        TypeSchema::String => 6u8.hash(state),
+        TypeSchema::Bytes => 7u8.hash(state),
+        TypeSchema::Optional(inner) => {
+            16u8.hash(state);
+            hash_type_schema(inner, state);
+        }
+        TypeSchema::GenericParam(name) => {
+            8u8.hash(state);
+            name.hash(state);
+        }
+        TypeSchema::Named(name, type_args) => {
+            9u8.hash(state);
+            name.hash(state);
+            type_args.len().hash(state);
+            for arg in type_args {
+                hash_type_schema(arg, state);
+            }
+        }
+        TypeSchema::Array(item) => {
+            10u8.hash(state);
+            hash_type_schema(item, state);
+        }
+        TypeSchema::ArrayTuple(items) => {
+            11u8.hash(state);
+            items.len().hash(state);
+            for item in items {
+                hash_type_schema(item, state);
+            }
+        }
+        TypeSchema::ArrayTupleRest { prefix, rest } => {
+            12u8.hash(state);
+            prefix.len().hash(state);
+            for item in prefix {
+                hash_type_schema(item, state);
+            }
+            hash_type_schema(rest, state);
+        }
+        TypeSchema::Map(item) => {
+            13u8.hash(state);
+            hash_type_schema(item, state);
+        }
+        TypeSchema::Object(fields) => {
+            14u8.hash(state);
+            let mut entries = fields.iter().collect::<Vec<_>>();
+            entries.sort_unstable_by(|lhs, rhs| lhs.0.cmp(rhs.0));
+            for (key, value) in entries {
+                key.hash(state);
+                hash_type_schema(value, state);
+            }
+        }
+        TypeSchema::Callable { params, result } => {
+            15u8.hash(state);
+            params.len().hash(state);
+            for param in params {
+                hash_type_schema(param, state);
+            }
+            hash_type_schema(result, state);
+        }
+    }
 }
 
 impl Vm {

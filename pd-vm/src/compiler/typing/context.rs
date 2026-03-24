@@ -3,6 +3,7 @@ use std::collections::{HashMap, HashSet};
 use crate::builtins::BuiltinFunction;
 
 use super::super::CompileError;
+use super::super::TypingMode;
 use super::super::ir::{
     ClosureExpr, Expr, FunctionDecl, FunctionImpl, LocalSlot, Stmt, StructDecl, TypeSchema,
 };
@@ -16,7 +17,10 @@ use super::state::{
     merge_bound_types, merge_container_element_types, stabilize_loop_state,
 };
 use super::validate::refine_state_for_condition;
-use super::validate::{validate_host_signature, validate_signature_overloads};
+use super::validate::{
+    DiagnosticSite, validate_function_argument_schemas, validate_host_signature,
+    validate_json_encode_argument, validate_signature_overloads,
+};
 
 pub(super) struct TypeContext<'a> {
     pub(super) function_impls: &'a HashMap<u16, FunctionImpl>,
@@ -25,13 +29,21 @@ pub(super) struct TypeContext<'a> {
     pub(super) function_names: &'a HashMap<u16, String>,
     pub(super) host_import_return_types: &'a HashMap<u16, BoundType>,
     pub(super) host_import_signatures: &'a HashMap<u16, HostCallableSignature>,
-    pub(super) require_declared_schema_for_optional_access: bool,
+    pub(super) typing_mode: TypingMode,
     pub(super) active_functions: Vec<(u16, Vec<TypeSchema>)>,
     pub(super) generic_bindings: Vec<HashMap<String, TypeSchema>>,
     pub(super) observed_function_param_types: HashMap<u16, Vec<BoundType>>,
     pub(super) observed_function_param_schemas: HashMap<u16, Vec<Option<TypeSchema>>>,
+    pub(super) observed_function_param_callables: HashMap<u16, Vec<Option<InferredCallable>>>,
+    pub(super) observed_function_param_capture_states:
+        HashMap<u16, Vec<Option<LocalTypeState>>>,
     pub(super) observed_function_capture_states: HashMap<u16, LocalTypeState>,
     pub(super) function_param_conflicts: HashMap<u16, String>,
+    observed_return_types: HashMap<(u16, Vec<String>), BoundType>,
+    observed_return_schemas: HashMap<(u16, Vec<String>), Option<TypeSchema>>,
+    observed_optional_returns: HashMap<u16, bool>,
+    active_observed_returns: Vec<(u16, Vec<String>)>,
+    active_optional_returns: Vec<u16>,
 }
 
 struct CallableBody<'a> {
@@ -50,7 +62,7 @@ impl<'a> TypeContext<'a> {
         function_names: &'a HashMap<u16, String>,
         host_import_return_types: &'a HashMap<u16, BoundType>,
         host_import_signatures: &'a HashMap<u16, HostCallableSignature>,
-        require_declared_schema_for_optional_access: bool,
+        typing_mode: TypingMode,
     ) -> Self {
         Self {
             function_impls,
@@ -59,14 +71,25 @@ impl<'a> TypeContext<'a> {
             function_names,
             host_import_return_types,
             host_import_signatures,
-            require_declared_schema_for_optional_access,
+            typing_mode,
             active_functions: Vec::new(),
             generic_bindings: Vec::new(),
             observed_function_param_types: HashMap::new(),
             observed_function_param_schemas: HashMap::new(),
+            observed_function_param_callables: HashMap::new(),
+            observed_function_param_capture_states: HashMap::new(),
             observed_function_capture_states: HashMap::new(),
             function_param_conflicts: HashMap::new(),
+            observed_return_types: HashMap::new(),
+            observed_return_schemas: HashMap::new(),
+            observed_optional_returns: HashMap::new(),
+            active_observed_returns: Vec::new(),
+            active_optional_returns: Vec::new(),
         }
+    }
+
+    pub(super) fn is_strict(&self) -> bool {
+        self.typing_mode.is_strict()
     }
 
     pub(super) fn function_name(&self, index: u16) -> &str {
@@ -112,12 +135,22 @@ impl<'a> TypeContext<'a> {
             TypeSchema::Map(value) => {
                 TypeSchema::Map(Box::new(self.substitute_schema_generics(value)))
             }
+            TypeSchema::Optional(inner) => {
+                TypeSchema::Optional(Box::new(self.substitute_schema_generics(inner)))
+            }
             TypeSchema::Object(fields) => TypeSchema::Object(
                 fields
                     .iter()
                     .map(|(key, value)| (key.clone(), self.substitute_schema_generics(value)))
                     .collect(),
             ),
+            TypeSchema::Callable { params, result } => TypeSchema::Callable {
+                params: params
+                    .iter()
+                    .map(|param| self.substitute_schema_generics(param))
+                    .collect(),
+                result: Box::new(self.substitute_schema_generics(result)),
+            },
             _ => schema.clone(),
         }
     }
@@ -182,12 +215,22 @@ impl<'a> TypeContext<'a> {
             TypeSchema::Map(value) => {
                 TypeSchema::Map(Box::new(self.resolve_schema_with_seen(value, seen)))
             }
+            TypeSchema::Optional(inner) => {
+                TypeSchema::Optional(Box::new(self.resolve_schema_with_seen(inner, seen)))
+            }
             TypeSchema::Object(fields) => TypeSchema::Object(
                 fields
                     .iter()
                     .map(|(key, value)| (key.clone(), self.resolve_schema_with_seen(value, seen)))
                     .collect(),
             ),
+            TypeSchema::Callable { params, result } => TypeSchema::Callable {
+                params: params
+                    .iter()
+                    .map(|param| self.resolve_schema_with_seen(param, seen))
+                    .collect(),
+                result: Box::new(self.resolve_schema_with_seen(result, seen)),
+            },
             _ => schema.clone(),
         }
     }
@@ -357,6 +400,17 @@ impl<'a> TypeContext<'a> {
             Expr::MoveField { root, .. } | Expr::MoveIndex { root, .. } => state.is_optional(*root),
             Expr::OptionalGet { .. } => true,
             Expr::OptionUnwrapOr { .. } => false,
+            Expr::Call(index, _, _) => {
+                BuiltinFunction::from_call_index(*index) == Some(BuiltinFunction::ReFind)
+                    || self.function_returns_optional(*index)
+            }
+            Expr::LocalCall(slot, _, _) => match state.callable(*slot) {
+                Some(InferredCallable::Function(index)) => {
+                    BuiltinFunction::from_call_index(*index) == Some(BuiltinFunction::ReFind)
+                        || self.function_returns_optional(*index)
+                }
+                _ => false,
+            },
             Expr::ToOwned(inner) | Expr::Borrow(inner) | Expr::BorrowMut(inner) => {
                 self.expr_is_optional(inner, state)
             }
@@ -395,6 +449,46 @@ impl<'a> TypeContext<'a> {
             }
             _ => false,
         }
+    }
+
+    fn function_returns_optional(&mut self, index: u16) -> bool {
+        if let Some(optional) = self.observed_optional_returns.get(&index).copied() {
+            return optional;
+        }
+        let Some(function_decl) = self.function_decls.get(&index).cloned() else {
+            return false;
+        };
+        if function_decl
+            .return_schema
+            .as_ref()
+            .is_some_and(TypeSchema::is_optional)
+        {
+            self.observed_optional_returns.insert(index, true);
+            return true;
+        }
+        if crate::builtins::default_host_callable(&function_decl.name)
+            .is_some_and(|callable| callable.signature.return_type.contains("| null"))
+        {
+            self.observed_optional_returns.insert(index, true);
+            return true;
+        }
+        let Some(function_impl) = self.function_impls.get(&index).cloned() else {
+            return false;
+        };
+        if self.active_optional_returns.contains(&index) {
+            return false;
+        }
+        self.active_optional_returns.push(index);
+        let optional = self
+            .build_observed_function_state(index)
+            .map(|mut nested| {
+                self.apply_stmts(&function_impl.body_stmts, &mut nested);
+                self.expr_is_optional(&function_impl.body_expr, &nested)
+            })
+            .unwrap_or(false);
+        self.active_optional_returns.pop();
+        self.observed_optional_returns.insert(index, optional);
+        optional
     }
 
     pub(super) fn infer_optional_expr_inner_type(
@@ -514,6 +608,8 @@ impl<'a> TypeContext<'a> {
                 (
                     self.infer_expr_type(arg, state),
                     self.infer_expr_schema(arg, state),
+                    self.callable_binding_from_expr(arg, state),
+                    self.callable_capture_state_from_expr(arg, state),
                 )
             })
             .collect::<Vec<_>>();
@@ -525,13 +621,29 @@ impl<'a> TypeContext<'a> {
             .observed_function_param_schemas
             .remove(&index)
             .unwrap_or_else(|| vec![None; actual.len()]);
+        let mut merged_callables = self
+            .observed_function_param_callables
+            .remove(&index)
+            .unwrap_or_else(|| vec![None; actual.len()]);
+        let mut merged_capture_states = self
+            .observed_function_param_capture_states
+            .remove(&index)
+            .unwrap_or_else(|| vec![None; actual.len()]);
         if merged_types.len() < actual.len() {
             merged_types.resize(actual.len(), BoundType::Unknown);
         }
         if merged_schemas.len() < actual.len() {
             merged_schemas.resize(actual.len(), None);
         }
-        for (arg_index, (actual_ty, actual_schema)) in actual.into_iter().enumerate() {
+        if merged_callables.len() < actual.len() {
+            merged_callables.resize(actual.len(), None);
+        }
+        if merged_capture_states.len() < actual.len() {
+            merged_capture_states.resize(actual.len(), None);
+        }
+        for (arg_index, (actual_ty, actual_schema, actual_callable, actual_capture_state)) in
+            actual.into_iter().enumerate()
+        {
             let current = merged_types[arg_index];
             match merge_observed_function_param_type(current, actual_ty) {
                 Ok(merged) => merged_types[arg_index] = merged,
@@ -555,11 +667,23 @@ impl<'a> TypeContext<'a> {
                 merged_schemas[arg_index].clone(),
                 actual_schema,
             );
+            merged_callables[arg_index] = merge_observed_function_param_callable(
+                merged_callables[arg_index].clone(),
+                actual_callable,
+            );
+            merged_capture_states[arg_index] = merge_observed_capture_state(
+                merged_capture_states[arg_index].take(),
+                actual_capture_state,
+            );
         }
         self.observed_function_param_types
             .insert(index, merged_types);
         self.observed_function_param_schemas
             .insert(index, merged_schemas);
+        self.observed_function_param_callables
+            .insert(index, merged_callables);
+        self.observed_function_param_capture_states
+            .insert(index, merged_capture_states);
     }
 
     pub(super) fn observe_function_capture_state(
@@ -581,6 +705,37 @@ impl<'a> TypeContext<'a> {
             self.observed_function_capture_states
                 .insert(index, observed);
         }
+    }
+
+    fn callable_capture_state_from_expr(
+        &mut self,
+        expr: &Expr,
+        state: &LocalTypeState,
+    ) -> Option<LocalTypeState> {
+        let callable = self.callable_binding_from_expr(expr, state)?;
+        self.capture_state_for_callable(&callable, state)
+    }
+
+    fn capture_state_for_callable(
+        &self,
+        callable: &InferredCallable,
+        state: &LocalTypeState,
+    ) -> Option<LocalTypeState> {
+        let capture_copies = match callable {
+            InferredCallable::Function(index) => self
+                .function_impls
+                .get(index)
+                .map(|function_impl| function_impl.capture_copies.as_slice())?,
+            InferredCallable::Closure(closure) => closure.capture_copies.as_slice(),
+        };
+        if capture_copies.is_empty() {
+            return None;
+        }
+        let mut captured = LocalTypeState::default();
+        for (source_slot, _) in capture_copies {
+            captured.copy_binding_from(state, *source_slot, *source_slot, None, false);
+        }
+        Some(captured)
     }
 
     pub(super) fn infer_expr_schema(
@@ -628,7 +783,7 @@ impl<'a> TypeContext<'a> {
                 Some(InferredCallable::Closure(closure)) => {
                     self.infer_closure_return_schema(&closure, args, state)
                 }
-                None => None,
+                None => self.infer_declared_callable_call_schema(*slot, args, state),
             },
             Expr::IfElse {
                 then_expr,
@@ -825,33 +980,52 @@ impl<'a> TypeContext<'a> {
                 if let Some(builtin) = BuiltinFunction::from_call_index(*index) {
                     self.infer_builtin_call_like_expr_type(builtin, type_args, args, state)
                 } else {
-                    let inferred = self.infer_function_return(*index, type_args, args, state);
-                    if inferred != BoundType::Unknown {
+                    if let Some(decl) = self.function_decls.get(index)
+                        && let inferred =
+                            infer_host_passthrough_return_type(&decl.name, args, state, self)
+                        && inferred != BoundType::Unknown
+                    {
                         inferred
                     } else {
-                        self.host_import_return_types
-                            .get(index)
-                            .copied()
-                            .unwrap_or(BoundType::Unknown)
+                        let inferred = self.infer_function_return(*index, type_args, args, state);
+                        if inferred != BoundType::Unknown {
+                            inferred
+                        } else {
+                            self.host_import_return_types
+                                .get(index)
+                                .copied()
+                                .unwrap_or(BoundType::Unknown)
+                        }
                     }
                 }
             }
             Expr::LocalCall(slot, type_args, args) => match state.callable(*slot).cloned() {
                 Some(InferredCallable::Function(index)) => {
-                    let inferred = self.infer_function_return(index, type_args, args, state);
-                    if inferred != BoundType::Unknown {
+                    if let Some(decl) = self.function_decls.get(&index)
+                        && let inferred =
+                            infer_host_passthrough_return_type(&decl.name, args, state, self)
+                        && inferred != BoundType::Unknown
+                    {
                         inferred
                     } else {
-                        self.host_import_return_types
-                            .get(&index)
-                            .copied()
-                            .unwrap_or(BoundType::Unknown)
+                        let inferred = self.infer_function_return(index, type_args, args, state);
+                        if inferred != BoundType::Unknown {
+                            inferred
+                        } else {
+                            self.host_import_return_types
+                                .get(&index)
+                                .copied()
+                                .unwrap_or(BoundType::Unknown)
+                        }
                     }
                 }
                 Some(InferredCallable::Closure(closure)) => {
                     self.infer_closure_return(&closure, args, state)
                 }
-                None => BoundType::Unknown,
+                None => self
+                    .infer_declared_callable_call_schema(*slot, args, state)
+                    .map(|schema| self.bound_type_for_schema(&schema))
+                    .unwrap_or(BoundType::Unknown),
             },
             Expr::ClosureCall(closure, args) => self.infer_closure_return(closure, args, state),
             Expr::Closure(_) | Expr::FunctionRef(_) => BoundType::Unknown,
@@ -887,6 +1061,7 @@ impl<'a> TypeContext<'a> {
             BuiltinFunction::Get if args.len() == 2 => {
                 self.infer_get_return_type(&args[0], &args[1], state)
             }
+            BuiltinFunction::ReFind => BoundType::String,
             BuiltinFunction::Keys if args.len() == 1 => {
                 self.infer_keys_return_type(&args[0], state)
             }
@@ -944,6 +1119,7 @@ impl<'a> TypeContext<'a> {
             BuiltinFunction::Get if args.len() == 2 => self
                 .infer_expr_schema(&args[0], state)
                 .and_then(|schema| infer_access_schema(&schema, &args[1], self, state).ok()),
+            BuiltinFunction::ReFind => Some(TypeSchema::String),
             BuiltinFunction::Slice if args.len() == 3 => {
                 match self.infer_expr_schema(&args[0], state) {
                     Some(schema) if schema.array_prefix_and_rest().is_some() => schema
@@ -972,7 +1148,28 @@ impl<'a> TypeContext<'a> {
         }
 
         let decl = self.function_decls.get(&index)?;
+        if let Some(schema) =
+            infer_host_passthrough_return_schema(&decl.name, args, caller_state, self)
+        {
+            return Some(schema);
+        }
         host_generic_return_schema(&decl.name, type_args)
+    }
+
+    fn infer_declared_callable_call_schema(
+        &mut self,
+        slot: LocalSlot,
+        args: &[Expr],
+        state: &LocalTypeState,
+    ) -> Option<TypeSchema> {
+        let schema = state.callable_schema(slot)?.clone();
+        let TypeSchema::Callable { params, result } = self.resolve_schema(&schema) else {
+            return None;
+        };
+        if params.len() != args.len() {
+            return None;
+        }
+        Some(*result)
     }
 
     fn infer_closure_return_schema(
@@ -1099,6 +1296,7 @@ impl<'a> TypeContext<'a> {
         match self.infer_expr_type(expr, state) {
             BoundType::Int => BoundType::Int,
             BoundType::Float => BoundType::Float,
+            BoundType::Number => BoundType::Number,
             _ => BoundType::Unknown,
         }
     }
@@ -1113,8 +1311,14 @@ impl<'a> TypeContext<'a> {
         let rhs_ty = self.infer_expr_type(rhs, state);
         if lhs_ty == BoundType::Int && rhs_ty == BoundType::Int {
             BoundType::Int
+        } else if lhs_ty == BoundType::Float || rhs_ty == BoundType::Float {
+            if is_numeric_bound_type(lhs_ty) && is_numeric_bound_type(rhs_ty) {
+                BoundType::Float
+            } else {
+                BoundType::Unknown
+            }
         } else if is_numeric_bound_type(lhs_ty) && is_numeric_bound_type(rhs_ty) {
-            BoundType::Float
+            BoundType::Number
         } else {
             BoundType::Unknown
         }
@@ -1132,11 +1336,23 @@ impl<'a> TypeContext<'a> {
         let third_ty = self.infer_expr_type(third, state);
         if first_ty == BoundType::Int && second_ty == BoundType::Int && third_ty == BoundType::Int {
             BoundType::Int
+        } else if first_ty == BoundType::Float
+            || second_ty == BoundType::Float
+            || third_ty == BoundType::Float
+        {
+            if is_numeric_bound_type(first_ty)
+                && is_numeric_bound_type(second_ty)
+                && is_numeric_bound_type(third_ty)
+            {
+                BoundType::Float
+            } else {
+                BoundType::Unknown
+            }
         } else if is_numeric_bound_type(first_ty)
             && is_numeric_bound_type(second_ty)
             && is_numeric_bound_type(third_ty)
         {
-            BoundType::Float
+            BoundType::Number
         } else {
             BoundType::Unknown
         }
@@ -1152,9 +1368,6 @@ impl<'a> TypeContext<'a> {
         let Some(function_decl) = self.function_decls.get(&index).cloned() else {
             return BoundType::Unknown;
         };
-        let Some(function_impl) = self.function_impls.get(&index).cloned() else {
-            return BoundType::Unknown;
-        };
         if function_decl.type_params.is_empty() {
             self.observe_function_arg_types(index, args, caller_state);
         } else if function_decl.type_params.len() != type_args.len() {
@@ -1162,23 +1375,35 @@ impl<'a> TypeContext<'a> {
         }
         let instance_key = (index, type_args.to_vec());
         if self.active_functions.contains(&instance_key) {
-            return BoundType::Unknown;
+            return self.infer_observed_function_return(index, type_args);
         }
         self.active_functions.push(instance_key);
         if !function_decl.type_params.is_empty() {
             self.push_generic_bindings(&function_decl.type_params, type_args);
         }
-        let result = self.infer_callable_body(
-            CallableBody {
-                param_slots: &function_impl.param_slots,
-                param_schemas: Some(&function_decl.arg_schemas),
-                capture_copies: &function_impl.capture_copies,
-                body_stmts: &function_impl.body_stmts,
-                body_expr: &function_impl.body_expr,
-            },
-            args,
-            caller_state,
-        );
+        let result = if let Some(schema) = function_decl.return_schema.as_ref() {
+            let resolved = self.resolve_schema(schema);
+            bound_type_from_schema(&resolved)
+        } else {
+            let Some(function_impl) = self.function_impls.get(&index).cloned() else {
+                if !function_decl.type_params.is_empty() {
+                    self.pop_generic_bindings();
+                }
+                self.active_functions.pop();
+                return BoundType::Unknown;
+            };
+            let Some(mut nested) =
+                self.build_function_call_state(index, &function_impl, &function_decl, args, caller_state)
+            else {
+                if !function_decl.type_params.is_empty() {
+                    self.pop_generic_bindings();
+                }
+                self.active_functions.pop();
+                return BoundType::Unknown;
+            };
+            self.apply_stmts(&function_impl.body_stmts, &mut nested);
+            self.infer_expr_type(&function_impl.body_expr, &nested)
+        };
         if !function_decl.type_params.is_empty() {
             self.pop_generic_bindings();
         }
@@ -1194,7 +1419,6 @@ impl<'a> TypeContext<'a> {
         caller_state: &LocalTypeState,
     ) -> Option<TypeSchema> {
         let function_decl = self.function_decls.get(&index).cloned()?;
-        let function_impl = self.function_impls.get(&index).cloned()?;
         if !function_decl.type_params.is_empty()
             && function_decl.type_params.len() != type_args.len()
         {
@@ -1203,27 +1427,133 @@ impl<'a> TypeContext<'a> {
 
         let instance_key = (index, type_args.to_vec());
         if self.active_functions.contains(&instance_key) {
-            return None;
+            return self.infer_observed_function_return_schema(index, type_args);
         }
         self.active_functions.push(instance_key);
         if !function_decl.type_params.is_empty() {
             self.push_generic_bindings(&function_decl.type_params, type_args);
         }
-        let result = self.infer_callable_body_schema(
-            CallableBody {
-                param_slots: &function_impl.param_slots,
-                param_schemas: Some(&function_decl.arg_schemas),
-                capture_copies: &function_impl.capture_copies,
-                body_stmts: &function_impl.body_stmts,
-                body_expr: &function_impl.body_expr,
-            },
-            args,
-            caller_state,
-        );
+        let result = if let Some(schema) = function_decl.return_schema.as_ref() {
+            Some(self.resolve_schema(schema).clone_inner_if_optional())
+        } else {
+            self.function_impls
+                .get(&index)
+                .cloned()
+                .and_then(|function_impl| {
+                    let mut nested = self.build_function_call_state(
+                        index,
+                        &function_impl,
+                        &function_decl,
+                        args,
+                        caller_state,
+                    )?;
+                    self.apply_stmts(&function_impl.body_stmts, &mut nested);
+                    self.infer_expr_schema(&function_impl.body_expr, &nested)
+                        .map(|schema| self.resolve_schema(&schema))
+                })
+        };
         if !function_decl.type_params.is_empty() {
             self.pop_generic_bindings();
         }
         self.active_functions.pop();
+        result
+    }
+
+    pub(super) fn infer_observed_function_return(
+        &mut self,
+        index: u16,
+        type_args: &[TypeSchema],
+    ) -> BoundType {
+        let instance_key = observed_return_key(index, type_args);
+        if let Some(cached) = self.observed_return_types.get(&instance_key).copied() {
+            return cached;
+        }
+        if self.active_observed_returns.contains(&instance_key) {
+            return BoundType::Unknown;
+        }
+        let Some(function_decl) = self.function_decls.get(&index).cloned() else {
+            return BoundType::Unknown;
+        };
+        let Some(function_impl) = self.function_impls.get(&index).cloned() else {
+            return function_decl
+                .return_schema
+                .as_ref()
+                .map(|schema| {
+                    let resolved = self.resolve_schema(schema);
+                    bound_type_from_schema(&resolved)
+                })
+                .unwrap_or_else(|| {
+                    self.host_import_return_types
+                        .get(&index)
+                        .copied()
+                        .unwrap_or(BoundType::Unknown)
+                });
+        };
+        if !function_decl.type_params.is_empty()
+            && function_decl.type_params.len() != type_args.len()
+        {
+            return BoundType::Unknown;
+        }
+        self.active_observed_returns.push(instance_key.clone());
+        if !function_decl.type_params.is_empty() {
+            self.push_generic_bindings(&function_decl.type_params, type_args);
+        }
+        let result = self
+            .build_observed_function_state(index)
+            .map(|mut nested| {
+                self.apply_stmts(&function_impl.body_stmts, &mut nested);
+                self.infer_expr_type(&function_impl.body_expr, &nested)
+            })
+            .unwrap_or(BoundType::Unknown);
+        if !function_decl.type_params.is_empty() {
+            self.pop_generic_bindings();
+        }
+        self.active_observed_returns.pop();
+        self.observed_return_types.insert(instance_key, result);
+        result
+    }
+
+    pub(super) fn infer_observed_function_return_schema(
+        &mut self,
+        index: u16,
+        type_args: &[TypeSchema],
+    ) -> Option<TypeSchema> {
+        let instance_key = observed_return_key(index, type_args);
+        if let Some(cached) = self.observed_return_schemas.get(&instance_key) {
+            return cached.clone();
+        }
+        if self.active_observed_returns.contains(&instance_key) {
+            return None;
+        }
+        let function_decl = self.function_decls.get(&index).cloned()?;
+        if !function_decl.type_params.is_empty()
+            && function_decl.type_params.len() != type_args.len()
+        {
+            return None;
+        }
+        if let Some(schema) = function_decl.return_schema.as_ref() {
+            let resolved = Some(self.resolve_schema(schema).clone_inner_if_optional());
+            self.observed_return_schemas.insert(instance_key, resolved.clone());
+            return resolved;
+        }
+        let function_impl = self.function_impls.get(&index).cloned()?;
+        self.active_observed_returns.push(instance_key.clone());
+        if !function_decl.type_params.is_empty() {
+            self.push_generic_bindings(&function_decl.type_params, type_args);
+        }
+        let result = self
+            .build_observed_function_state(index)
+            .and_then(|mut nested| {
+                self.apply_stmts(&function_impl.body_stmts, &mut nested);
+                self.infer_expr_schema(&function_impl.body_expr, &nested)
+                    .map(|schema| self.resolve_schema(&schema))
+            });
+        if !function_decl.type_params.is_empty() {
+            self.pop_generic_bindings();
+        }
+        self.active_observed_returns.pop();
+        self.observed_return_schemas
+            .insert(instance_key, result.clone());
         result
     }
 
@@ -1265,22 +1595,40 @@ impl<'a> TypeContext<'a> {
         self.infer_expr_type(callable.body_expr, &nested)
     }
 
-    fn infer_callable_body_schema(
+    fn build_function_call_state(
         &mut self,
-        callable: CallableBody<'_>,
+        index: u16,
+        function_impl: &FunctionImpl,
+        function_decl: &FunctionDecl,
         args: &[Expr],
         caller_state: &LocalTypeState,
-    ) -> Option<TypeSchema> {
-        let mut nested = self.build_callable_state(
-            callable.param_slots,
-            callable.param_schemas,
-            callable.capture_copies,
-            Some(args),
-            caller_state,
-        )?;
-        self.apply_stmts(callable.body_stmts, &mut nested);
-        self.infer_expr_schema(callable.body_expr, &nested)
-            .map(|schema| self.resolve_schema(&schema))
+    ) -> Option<LocalTypeState> {
+        if function_impl.param_slots.len() != args.len() {
+            return None;
+        }
+        let mut nested = LocalTypeState::default();
+        let observed_captures = self.observed_function_capture_states.get(&index);
+        for (source_slot, captured_slot) in &function_impl.capture_copies {
+            let has_direct_source = caller_state.callable(*source_slot).is_some()
+                || caller_state.callable_schema(*source_slot).is_some()
+                || caller_state.get(*source_slot) != BoundType::Unknown
+                || caller_state.schema(*source_slot).is_some();
+            if has_direct_source {
+                nested.copy_binding_from(caller_state, *source_slot, *captured_slot, None, false);
+            } else if let Some(observed) = observed_captures {
+                nested.copy_binding_from(observed, *captured_slot, *captured_slot, None, false);
+            } else {
+                nested.copy_binding_from(caller_state, *source_slot, *captured_slot, None, false);
+            }
+        }
+        for (param_index, (arg, slot)) in args.iter().zip(function_impl.param_slots.iter()).enumerate() {
+            let declared_schema = function_decl
+                .arg_schemas
+                .get(param_index)
+                .and_then(|schema| schema.as_ref());
+            self.bind_expr_to_slot(&mut nested, *slot, declared_schema, arg, caller_state);
+        }
+        Some(nested)
     }
 
     pub(super) fn build_callable_state(
@@ -1322,6 +1670,97 @@ impl<'a> TypeContext<'a> {
         Some(nested)
     }
 
+    pub(super) fn resolve_function_arg_schemas(
+        &mut self,
+        index: u16,
+        type_args: &[TypeSchema],
+    ) -> Option<Vec<Option<TypeSchema>>> {
+        let function_decl = self.function_decls.get(&index).cloned()?;
+        if function_decl.type_params.len() != type_args.len() {
+            return None;
+        }
+        if !function_decl.type_params.is_empty() {
+            self.push_generic_bindings(&function_decl.type_params, type_args);
+        }
+        let resolved = function_decl
+            .arg_schemas
+            .iter()
+            .map(|schema| schema.as_ref().map(|schema| self.resolve_schema(schema)))
+            .collect::<Vec<_>>();
+        if !function_decl.type_params.is_empty() {
+            self.pop_generic_bindings();
+        }
+        Some(resolved)
+    }
+
+    pub(super) fn infer_callable_value_schema(
+        &mut self,
+        callable: &InferredCallable,
+    ) -> Option<TypeSchema> {
+        match callable {
+            InferredCallable::Function(index) => {
+                let function_decl = self.function_decls.get(index).cloned()?;
+                if !function_decl.type_params.is_empty() {
+                    return None;
+                }
+                let params = function_decl
+                    .arg_schemas
+                    .iter()
+                    .cloned()
+                    .collect::<Option<Vec<_>>>()?;
+                let result = function_decl
+                    .return_schema
+                    .clone()
+                    .or_else(|| self.infer_observed_function_return_schema(*index, &[]))?;
+                Some(TypeSchema::Callable {
+                    params,
+                    result: Box::new(self.resolve_schema(&result)),
+                })
+            }
+            InferredCallable::Closure(_) => None,
+        }
+    }
+
+    pub(super) fn infer_callable_expr_schema(
+        &mut self,
+        expr: &Expr,
+        state: &LocalTypeState,
+    ) -> Option<TypeSchema> {
+        self.infer_expr_schema(expr, state).or_else(|| {
+            self.callable_binding_from_expr(expr, state)
+                .and_then(|callable| self.infer_callable_value_schema(&callable))
+        })
+    }
+
+    fn build_observed_function_state(&mut self, index: u16) -> Option<LocalTypeState> {
+        let function_impl = self.function_impls.get(&index)?;
+        let function_decl = self.function_decls.get(&index)?;
+        let mut nested = LocalTypeState::default();
+        super::collect::seed_function_param_state(
+            &mut nested,
+            &function_impl.param_slots,
+            Some(function_decl.arg_schemas.as_slice()),
+            super::collect::observed_function_param_slice(&self.observed_function_param_types, index),
+            super::collect::observed_function_param_schema_slice(
+                &self.observed_function_param_schemas,
+                index,
+            ),
+            self.observed_function_param_callables
+                .get(&index)
+                .map(Vec::as_slice),
+            self.observed_function_param_capture_states
+                .get(&index)
+                .map(Vec::as_slice),
+        );
+        super::collect::seed_function_capture_state(
+            &mut nested,
+            index,
+            &function_impl.capture_copies,
+            &self.observed_function_capture_states,
+        );
+        Some(nested)
+    }
+
     pub(super) fn validate_call_argument_types(
         &mut self,
         expr: &Expr,
@@ -1330,7 +1769,7 @@ impl<'a> TypeContext<'a> {
         source_name: Option<&str>,
     ) -> Result<(), CompileError> {
         match expr {
-            Expr::Call(index, _, args) => {
+            Expr::Call(index, type_args, args) => {
                 if let Some(builtin) = BuiltinFunction::from_call_index(*index) {
                     self.validate_builtin_argument_types(
                         builtin,
@@ -1347,11 +1786,28 @@ impl<'a> TypeContext<'a> {
                         line_context,
                         source_name,
                     )
+                } else if let Some(function_decl) = self.function_decls.get(index).cloned() {
+                    let param_schemas = self
+                        .resolve_function_arg_schemas(*index, type_args)
+                        .unwrap_or_else(|| function_decl.arg_schemas.clone());
+                    validate_function_argument_schemas(
+                        &function_decl.name,
+                        "function",
+                        &function_decl.args,
+                        &param_schemas,
+                        args,
+                        state,
+                        DiagnosticSite {
+                            line: line_context,
+                            source_name,
+                        },
+                        self,
+                    )
                 } else {
                     Ok(())
                 }
             }
-            Expr::LocalCall(slot, _, args) => match state.callable(*slot).cloned() {
+            Expr::LocalCall(slot, type_args, args) => match state.callable(*slot).cloned() {
                 Some(InferredCallable::Function(index)) => {
                     if let Some(builtin) = BuiltinFunction::from_call_index(index) {
                         self.validate_builtin_argument_types(
@@ -1370,11 +1826,53 @@ impl<'a> TypeContext<'a> {
                             line_context,
                             source_name,
                         )
+                    } else if let Some(function_decl) = self.function_decls.get(&index).cloned() {
+                        let param_schemas = self
+                            .resolve_function_arg_schemas(index, type_args)
+                            .unwrap_or_else(|| function_decl.arg_schemas.clone());
+                        validate_function_argument_schemas(
+                            &function_decl.name,
+                            "function",
+                            &function_decl.args,
+                            &param_schemas,
+                            args,
+                            state,
+                            DiagnosticSite {
+                                line: line_context,
+                                source_name,
+                            },
+                            self,
+                        )
                     } else {
                         Ok(())
                     }
                 }
-                _ => Ok(()),
+                _ => {
+                    let Some(schema) = state.callable_schema(*slot).cloned() else {
+                        return Ok(());
+                    };
+                    let schema = self.resolve_schema(&schema);
+                    let TypeSchema::Callable { params, .. } = schema else {
+                        return Ok(());
+                    };
+                    let param_schemas = params.into_iter().map(Some).collect::<Vec<_>>();
+                    let param_names = (0..param_schemas.len())
+                        .map(|index| format!("arg{}", index + 1))
+                        .collect::<Vec<_>>();
+                    validate_function_argument_schemas(
+                        &format!("local slot {}", slot),
+                        "callable",
+                        &param_names,
+                        &param_schemas,
+                        args,
+                        state,
+                        DiagnosticSite {
+                            line: line_context,
+                            source_name,
+                        },
+                        self,
+                    )
+                }
             },
             _ => Ok(()),
         }
@@ -1388,6 +1886,18 @@ impl<'a> TypeContext<'a> {
         line_context: Option<u32>,
         source_name: Option<&str>,
     ) -> Result<(), CompileError> {
+        if builtin == BuiltinFunction::JsonEncode {
+            let arg = args.first().expect("json::encode arity is fixed");
+            return validate_json_encode_argument(
+                arg,
+                state,
+                self,
+                DiagnosticSite {
+                    line: line_context,
+                    source_name,
+                },
+            );
+        }
         validate_signature_overloads(
             &display_name_for_builtin(builtin),
             "builtin",
@@ -1410,6 +1920,31 @@ impl<'a> TypeContext<'a> {
         line_context: Option<u32>,
         source_name: Option<&str>,
     ) -> Result<(), CompileError> {
+        if matches!(signature.name.as_str(), "print" | "println") {
+            if args
+                .first()
+                .and_then(|arg| self.callable_binding_from_expr(arg, state))
+                .is_some()
+            {
+                return Err(CompileError::CallableUsedAsValue);
+            }
+            return Ok(());
+        }
+        if self.is_strict()
+            && signature
+                .params
+                .iter()
+                .any(|param| param.ty == crate::builtins::CallableParamType::Any)
+        {
+            return Err(CompileError::StrictTypingRequired {
+                line: line_context,
+                source_name: super::validate::owned_source_name(source_name),
+                detail: format!(
+                    "host function '{}' uses dynamically typed 'any' parameters and is not available from strict RustScript without a typed wrapper",
+                    signature.name
+                ),
+            });
+        }
         validate_host_signature(
             &signature.name,
             &signature.params,
@@ -1517,17 +2052,59 @@ impl<'a> TypeContext<'a> {
         expr_state: &LocalTypeState,
     ) -> BoundType {
         if let Some(callable) = self.callable_binding_from_expr(expr, expr_state) {
-            state.bind_callable(slot, callable);
+            let declared_binding = declared_schema
+                .map(TypeSchema::split_optional)
+                .or_else(|| {
+                    expr_state
+                        .has_declared_schema(slot)
+                        .then(|| (expr_state.schema(slot).cloned(), expr_state.is_optional(slot)))
+                        .and_then(|(schema, optional)| schema.map(|schema| (schema, optional)))
+                });
+            let slot_declared_schema = declared_binding
+                .as_ref()
+                .map(|(schema, _)| schema.clone());
+            let declared_optional = declared_binding
+                .as_ref()
+                .map(|(_, optional)| *optional)
+                .unwrap_or(false);
+            let optional = self.expr_is_optional(expr, expr_state) || declared_optional;
+            let schema = slot_declared_schema.clone().or_else(|| {
+                expr_state
+                    .callable_schema(slot)
+                    .cloned()
+                    .or_else(|| self.infer_expr_schema(expr, expr_state))
+            });
+            let from_declared_schema =
+                slot_declared_schema.is_some() || expr_state.has_declared_schema(slot);
+            state.bind_callable_with_schema(
+                slot,
+                callable.clone(),
+                schema,
+                from_declared_schema,
+                optional,
+            );
+            if let Some(capture_state) = self.capture_state_for_callable(&callable, expr_state) {
+                state.copy_all_bindings_from(&capture_state);
+            }
             BoundType::Unknown
         } else {
             let ty = self.infer_expr_type(expr, expr_state);
-            let slot_declared_schema = declared_schema.cloned().or_else(|| {
-                expr_state
-                    .has_declared_schema(slot)
-                    .then(|| expr_state.schema(slot).cloned())
-                    .flatten()
-            });
-            let optional = self.expr_is_optional(expr, expr_state);
+            let declared_binding = declared_schema
+                .map(TypeSchema::split_optional)
+                .or_else(|| {
+                    expr_state
+                        .has_declared_schema(slot)
+                        .then(|| (expr_state.schema(slot).cloned(), expr_state.is_optional(slot)))
+                        .and_then(|(schema, optional)| schema.map(|schema| (schema, optional)))
+                });
+            let slot_declared_schema = declared_binding
+                .as_ref()
+                .map(|(schema, _)| schema.clone());
+            let declared_optional = declared_binding
+                .as_ref()
+                .map(|(_, optional)| *optional)
+                .unwrap_or(false);
+            let optional = self.expr_is_optional(expr, expr_state) || declared_optional;
             let schema = slot_declared_schema.clone().or_else(|| {
                 if optional {
                     self.infer_optional_expr_inner_schema(expr, expr_state)
@@ -1565,12 +2142,47 @@ fn merge_observed_function_param_schema(
     }
 }
 
+fn merge_observed_function_param_callable(
+    current: Option<InferredCallable>,
+    next: Option<InferredCallable>,
+) -> Option<InferredCallable> {
+    match (current, next) {
+        (None, rhs) => rhs,
+        (lhs, None) => lhs,
+        (Some(InferredCallable::Function(lhs)), Some(InferredCallable::Function(rhs)))
+            if lhs == rhs =>
+        {
+            Some(InferredCallable::Function(lhs))
+        }
+        (Some(InferredCallable::Closure(lhs)), Some(InferredCallable::Closure(_))) => {
+            Some(InferredCallable::Closure(lhs))
+        }
+        _ => None,
+    }
+}
+
+fn merge_observed_capture_state(
+    current: Option<LocalTypeState>,
+    next: Option<LocalTypeState>,
+) -> Option<LocalTypeState> {
+    match (current, next) {
+        (None, rhs) => rhs,
+        (lhs, None) => lhs,
+        (Some(lhs), Some(rhs)) => {
+            let mut merged = LocalTypeState::default();
+            merged.merge_from_branches(&lhs, &rhs);
+            Some(merged)
+        }
+    }
+}
+
 fn schema_from_bound_type(ty: BoundType) -> Option<TypeSchema> {
     match ty {
         BoundType::Unknown => None,
         BoundType::Null => Some(TypeSchema::Null),
         BoundType::Int => Some(TypeSchema::Int),
         BoundType::Float => Some(TypeSchema::Float),
+        BoundType::Number => Some(TypeSchema::Number),
         BoundType::Bool => Some(TypeSchema::Bool),
         BoundType::String => Some(TypeSchema::String),
         BoundType::Bytes => Some(TypeSchema::Bytes),
@@ -1583,16 +2195,29 @@ fn schema_from_bound_type(ty: BoundType) -> Option<TypeSchema> {
     }
 }
 
+fn observed_return_key(index: u16, type_args: &[TypeSchema]) -> (u16, Vec<String>) {
+    (
+        index,
+        type_args
+            .iter()
+            .map(render_schema_label)
+            .collect::<Vec<_>>(),
+    )
+}
+
 pub(crate) fn bound_type_from_schema(schema: &TypeSchema) -> BoundType {
     match schema {
         TypeSchema::Unknown => BoundType::Unknown,
         TypeSchema::Null => BoundType::Null,
         TypeSchema::Int => BoundType::Int,
         TypeSchema::Float => BoundType::Float,
+        TypeSchema::Number => BoundType::Number,
         TypeSchema::Bool => BoundType::Bool,
         TypeSchema::String => BoundType::String,
         TypeSchema::Bytes => BoundType::Bytes,
+        TypeSchema::Optional(inner) => bound_type_from_schema(inner),
         TypeSchema::GenericParam(_) => BoundType::Unknown,
+        TypeSchema::Callable { .. } => BoundType::Unknown,
         TypeSchema::Named(_, _) => BoundType::Map,
         TypeSchema::Array(_) | TypeSchema::ArrayTuple(_) | TypeSchema::ArrayTupleRest { .. } => {
             BoundType::Array
@@ -1633,7 +2258,9 @@ fn infer_set_schema(
         Some(TypeSchema::GenericParam(name)) => Some(TypeSchema::GenericParam(name)),
         Some(TypeSchema::Object(mut fields)) => {
             let Expr::String(name) = key else {
-                return Some(TypeSchema::Map(Box::new(TypeSchema::Unknown)));
+                return Some(TypeSchema::Map(Box::new(
+                    value.unwrap_or(TypeSchema::Unknown),
+                )));
             };
             fields.insert(name.clone(), value.unwrap_or(TypeSchema::Unknown));
             Some(TypeSchema::Object(fields))
@@ -1720,6 +2347,7 @@ pub(super) fn infer_access_schema(
     }
 
     match resolved {
+        TypeSchema::Number => Err("cannot access fields on schema type 'number'".to_string()),
         TypeSchema::GenericParam(name) => Err(format!(
             "cannot access fields on unresolved generic parameter '{}'",
             name
@@ -1790,10 +2418,13 @@ pub(super) fn schema_label(schema: &TypeSchema) -> &'static str {
         TypeSchema::Null => "null",
         TypeSchema::Int => "int",
         TypeSchema::Float => "float",
+        TypeSchema::Number => "number",
         TypeSchema::Bool => "bool",
         TypeSchema::String => "string",
         TypeSchema::Bytes => "bytes",
+        TypeSchema::Optional(inner) => schema_label(inner),
         TypeSchema::GenericParam(_) => "unknown",
+        TypeSchema::Callable { .. } => "function",
         TypeSchema::Named(_, _) => "map",
         TypeSchema::Array(_) | TypeSchema::ArrayTuple(_) | TypeSchema::ArrayTupleRest { .. } => {
             "array"
@@ -1817,10 +2448,21 @@ pub(crate) fn render_schema_label(schema: &TypeSchema) -> String {
         TypeSchema::Null => "null".to_string(),
         TypeSchema::Int => "int".to_string(),
         TypeSchema::Float => "float".to_string(),
+        TypeSchema::Number => "number".to_string(),
         TypeSchema::Bool => "bool".to_string(),
         TypeSchema::String => "string".to_string(),
         TypeSchema::Bytes => "bytes".to_string(),
+        TypeSchema::Optional(inner) => format!("{}?", render_schema_label(inner)),
         TypeSchema::GenericParam(name) => name.clone(),
+        TypeSchema::Callable { params, result } => format!(
+            "fn({}) -> {}",
+            params
+                .iter()
+                .map(render_schema_label)
+                .collect::<Vec<_>>()
+                .join(", "),
+            render_schema_label(result)
+        ),
         TypeSchema::Named(name, type_args) if type_args.is_empty() => name.clone(),
         TypeSchema::Named(name, type_args) => format!(
             "{}<{}>",
@@ -1872,6 +2514,30 @@ fn host_generic_return_schema(name: &str, type_args: &[TypeSchema]) -> Option<Ty
         "json::decode" if type_args.len() == 1 => Some(type_args[0].clone()),
         _ => None,
     }
+}
+
+fn infer_host_passthrough_return_type(
+    name: &str,
+    args: &[Expr],
+    state: &LocalTypeState,
+    context: &mut TypeContext<'_>,
+) -> BoundType {
+    if matches!(name, "print" | "println") && args.len() == 1 {
+        return context.infer_expr_type(&args[0], state);
+    }
+    BoundType::Unknown
+}
+
+fn infer_host_passthrough_return_schema(
+    name: &str,
+    args: &[Expr],
+    state: &LocalTypeState,
+    context: &mut TypeContext<'_>,
+) -> Option<TypeSchema> {
+    if matches!(name, "print" | "println") && args.len() == 1 {
+        return context.infer_callable_expr_schema(&args[0], state);
+    }
+    None
 }
 
 fn literal_int_index(key: &Expr) -> Option<usize> {

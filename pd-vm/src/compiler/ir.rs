@@ -13,9 +13,11 @@ pub enum TypeSchema {
     Null,
     Int,
     Float,
+    Number,
     Bool,
     String,
     Bytes,
+    Optional(Box<TypeSchema>),
     GenericParam(String),
     Named(String, Vec<TypeSchema>),
     Array(Box<TypeSchema>),
@@ -26,9 +28,51 @@ pub enum TypeSchema {
     },
     Map(Box<TypeSchema>),
     Object(HashMap<String, TypeSchema>),
+    Callable {
+        params: Vec<TypeSchema>,
+        result: Box<TypeSchema>,
+    },
 }
 
 impl TypeSchema {
+    pub(crate) fn is_optional(&self) -> bool {
+        matches!(self, TypeSchema::Optional(_))
+    }
+
+    pub(crate) fn clone_inner_if_optional(&self) -> TypeSchema {
+        match self {
+            TypeSchema::Optional(inner) => inner.as_ref().clone(),
+            other => other.clone(),
+        }
+    }
+
+    pub(crate) fn split_optional(&self) -> (TypeSchema, bool) {
+        match self {
+            TypeSchema::Optional(inner) => (inner.as_ref().clone(), true),
+            other => (other.clone(), false),
+        }
+    }
+
+    pub(crate) fn coarse_value_type(&self) -> ValueType {
+        match self {
+            TypeSchema::Unknown
+            | TypeSchema::GenericParam(_)
+            | TypeSchema::Number
+            | TypeSchema::Callable { .. } => ValueType::Unknown,
+            TypeSchema::Null => ValueType::Null,
+            TypeSchema::Int => ValueType::Int,
+            TypeSchema::Float => ValueType::Float,
+            TypeSchema::Bool => ValueType::Bool,
+            TypeSchema::String => ValueType::String,
+            TypeSchema::Bytes => ValueType::Bytes,
+            TypeSchema::Optional(inner) => inner.coarse_value_type(),
+            TypeSchema::Named(_, _) | TypeSchema::Map(_) | TypeSchema::Object(_) => ValueType::Map,
+            TypeSchema::Array(_)
+            | TypeSchema::ArrayTuple(_)
+            | TypeSchema::ArrayTupleRest { .. } => ValueType::Array,
+        }
+    }
+
     pub(crate) fn array_prefix_and_rest(&self) -> Option<(&[TypeSchema], Option<&TypeSchema>)> {
         match self {
             TypeSchema::Array(element) => Some((&[], Some(element.as_ref()))),
@@ -293,6 +337,7 @@ pub struct FunctionDecl {
     pub index: u16,
     pub args: Vec<String>,
     pub arg_schemas: Vec<Option<TypeSchema>>,
+    pub return_schema: Option<TypeSchema>,
     pub type_params: Vec<String>,
     pub exported: bool,
     pub return_type: ValueType,
@@ -433,6 +478,7 @@ impl LocalIrBuilder {
                 .map(|slot| format!("arg{slot}"))
                 .collect(),
             arg_schemas: vec![None; usize::from(effective_arity)],
+            return_schema: None,
             type_params: Vec::new(),
             exported: false,
             return_type: ValueType::Unknown,

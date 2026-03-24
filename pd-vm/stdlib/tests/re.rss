@@ -1,5 +1,14 @@
 use re;
 
+fn assert_some_string(actual: string?, expected: string) -> bool {
+    let out = if type(actual) == "string" => {
+        actual == expected
+    } else => {
+        false
+    };
+    out
+}
+
 assert(re::match("^foo", "foobar"));
 assert(re::match("^foo", "barfoo") == false);
 assert(re::match("^foo", "foobar"));
@@ -8,10 +17,10 @@ assert(re::match("(?is)^foo.bar$", "FoO\nbar"));
 assert(re::match("(?m)^bar$", "foo\nbar\nbaz"));
 
 let mut first = re::find("bar+", "foobarr");
-assert(first == "barr");
+assert(assert_some_string(first, "barr"));
 
 let mut first_icase = re::find("(?i)^foo", "FoO bar");
-assert(first_icase == "FoO");
+assert(assert_some_string(first_icase, "FoO"));
 
 let mut missing = re::find("z+", "foobarr");
 assert(type(missing) == "null");

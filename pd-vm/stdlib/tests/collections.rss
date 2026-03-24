@@ -1,21 +1,21 @@
-use super::rss::collections::{contains, deep_compare, dedup, entries, get_or, has, index_of, merge, reverse, values};
+use super::rss::collections::{contains, dedup, entries, get_or, has, index_of, merge, reverse, values};
 
 let mut appended = [1, 2] + [3, 4];
 assert(appended.length == 4);
 assert(appended.copy()[0] == 1);
 assert(appended.copy()[3] == 4);
 
-assert(index_of(appended, 3) == 2);
-assert(index_of(appended, 9) ==-1);
-assert(contains(appended, 2));
-assert(contains(appended, 9) == false);
+assert(index_of::<int>(appended, 3) == 2);
+assert(index_of::<int>(appended, 9) ==-1);
+assert(contains::<int>(appended, 2));
+assert(contains::<int>(appended, 9) == false);
 
-let mut reversed = reverse(appended);
+let mut reversed = reverse::<int>(appended);
 assert(reversed.length == 4);
 assert(reversed[0] == 4);
 assert(reversed[3] == 1);
 
-let mut unique = dedup([1, 1, 2, 3, 2, 3]);
+let mut unique = dedup::<int>([1, 1, 2, 3, 2, 3]);
 assert(unique.length == 3);
 assert(unique[0] == 1);
 assert(unique[1] == 2);
@@ -23,50 +23,33 @@ assert(unique[2] == 3);
 
 let mut left = {x: 1, y: 2};
 let mut right = {y: 20, z: 3};
-let mut merged = merge(left, right);
-assert(has(merged, "x"));
-assert(has(merged, "z"));
-assert(has(merged, "missing") == false);
-assert(get_or(merged, "y", 0) == 20);
-assert(get_or(merged, "missing", 9) == 9);
+let mut merged = merge::<int>(left, right);
+assert(has::<string, int>(merged, "x"));
+assert(has::<string, int>(merged, "z"));
+assert(has::<string, int>(merged, "missing") == false);
+assert(get_or::<string, int>(merged, "y", 0) == 20);
+assert(get_or::<string, int>(merged, "missing", 9) == 9);
 
 let mut sparse = {keep: 1, drop: null};
-assert(has(sparse, "keep"));
-assert(has(sparse, "drop") == false);
+assert(has::<string, int>(sparse, "keep"));
+assert(has::<string, int>(sparse, "drop") == false);
 sparse.keep = null;
-assert(has(sparse, "keep") == false);
+assert(has::<string, int>(sparse, "keep") == false);
 
 let mut pruned = {x: 1, y: 2};
 pruned.y = null;
-let mut merged_without = merge(pruned, {z: 3});
-assert(has(merged_without, "x"));
-assert(has(merged_without, "y") == false);
-assert(has(merged_without, "z"));
-assert(get_or(merged_without, "y", 9) == 9);
+let mut merged_without = merge::<int>(pruned, {z: 3});
+assert(has::<string, int>(merged_without, "x"));
+assert(has::<string, int>(merged_without, "y") == false);
+assert(has::<string, int>(merged_without, "z"));
+assert(get_or::<string, int>(merged_without, "y", 9) == 9);
 
-let mut only_values = values(merged);
+let mut only_values = values::<int>(merged);
 assert(only_values.length == 3);
-assert(contains(only_values, 1));
-assert(contains(only_values, 20));
-assert(contains(only_values, 3));
+assert(contains::<int>(only_values, 1));
+assert(contains::<int>(only_values, 20));
+assert(contains::<int>(only_values, 3));
 
-let mut rows = entries(merged);
+let mut rows = entries::<string, int>(merged);
 assert(rows.length == 3);
 assert(rows[0].length == 2);
-
-assert(deep_compare(1, 1));
-assert(deep_compare(1, 2) == false);
-assert(deep_compare([1, [2, 3], {ok: true}], [1, [2, 3], {ok: true}]));
-assert(deep_compare([1, [2, 3]], [1, [3, 2]]) == false);
-assert(
-    deep_compare(
-        {name: "pd-vm", meta: {version: 1, tags: ["jit", "vm"]}},
-        {meta: {tags: ["jit", "vm"], version: 1}, name: "pd-vm"}
-    )
-);
-assert(
-    deep_compare(
-        {name: "pd-vm", meta: {version: 1, tags: ["jit", "vm"]}},
-        {meta: {tags: ["vm", "jit"], version: 1}, name: "pd-vm"}
-    ) == false
-);

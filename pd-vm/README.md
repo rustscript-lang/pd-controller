@@ -37,8 +37,9 @@ source syntaxes (`.rss`, `.js`, `.lua`, `.scm`).
 Executes compiled compact bytecode rather than interpreting source.
 Offers consistent runtime semantics for both synchronous and asynchronous execution.
 Includes rich debugging and profiling tools: interactive debugger, recording and replay, and JIT trace insights.
-Emits optional compile-time type metadata that the interpreter and trace JIT use for typed fast
-paths and clearer compile diagnostics.
+Emits compile-time type metadata that the interpreter and trace JIT use for typed fast paths and
+clearer compile diagnostics. RustScript now treats that metadata as required compiler output rather
+than optional hints.
 ## TODO
 
 - [ ] Rust-like Option/Result support.
@@ -595,6 +596,8 @@ Core compiler/IR:
   and callable parameters when the compiler can still identify the callee
 - known `if`/`else` expression results and branch-local merges with incompatible concrete types are
   compile errors
+- RustScript uses explicit nullable schemas such as `int?` and `Profile?`; non-optional declared
+  locals and returns reject `null`
 - in RustScript, optional chaining requires a user-declared schema on the container; the result
   stays optional until handled with `.unwrap_or(...)`, a `!= null` refinement, or a `match` arm
   that binds `Some(name)`

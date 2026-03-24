@@ -5,13 +5,14 @@ use crate::HostImport;
 
 use super::codegen::Compiler;
 use super::frontends;
-use super::ir::{Expr, FrontendIr, FunctionDecl, FunctionImpl, LocalSlot, Stmt};
+use super::ir::{Expr, FrontendIr, FunctionDecl, FunctionImpl, LocalSlot, Stmt, TypeSchema};
 use super::linker::merge_units;
 use super::source_loader::load_units_for_source_file;
 use super::source_map::SourceMap;
 use super::{
-    CompileSourceFileOptions, CompiledProgram, CompiledReplProgram, ParseError, ReplLocalBinding,
-    SourceError, SourceFlavor, SourcePathError, lifetime, parser, typing,
+    CompileError, CompileSourceFileOptions, CompiledProgram, CompiledReplProgram, ParseError,
+    ReplLocalBinding, SourceError, SourceFlavor, SourcePathError, TypingMode, lifetime, parser,
+    typing,
 };
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -340,13 +341,16 @@ fn compile_parsed_output(
     source: String,
     parsed: FrontendIr,
     behavior: CompileBehavior,
+    typing_mode: TypingMode,
     enable_local_move_semantics: bool,
 ) -> Result<CompiledProgram, SourceError> {
     compile_parsed_output_with_entry_locals(
         source,
         parsed,
         &[],
+        &[],
         behavior,
+        typing_mode,
         enable_local_move_semantics,
     )
 }
@@ -355,15 +359,25 @@ fn compile_parsed_output_with_entry_locals(
     source: String,
     parsed: FrontendIr,
     entry_definite_locals: &[LocalSlot],
+    entry_local_types: &[typing::EntryLocalType],
     behavior: CompileBehavior,
+    typing_mode: TypingMode,
     enable_local_move_semantics: bool,
 ) -> Result<CompiledProgram, SourceError> {
     // Normal compilation passes no entry locals. The REPL uses this hook to treat
     // carried-over locals from prior entries as already available at snippet start.
+    if typing_mode.is_strict() {
+        reject_strict_unknown_annotations(&parsed).map_err(SourceError::Parse)?;
+    }
     let local_debug_ranges = collect_named_local_debug_ranges(&parsed);
-    let parsed = typing::legalize_builtins_and_bind_types(parsed);
-    typing::validate_if_else_type_consistency(&parsed, enable_local_move_semantics)
+    let parsed = typing::legalize_builtins_and_bind_types(parsed, typing_mode, entry_local_types);
+    typing::validate_if_else_type_consistency(&parsed, typing_mode, entry_local_types)
         .map_err(SourceError::Compile)?;
+    if typing_mode.is_strict() {
+        let strict_type_info = typing::infer_types(&parsed, typing_mode, entry_local_types);
+        enforce_strict_rustscript_type_resolution(&parsed, &strict_type_info)
+            .map_err(SourceError::Compile)?;
+    }
     let parsed = lifetime::enforce_local_availability_with_entry_locals(
         parsed,
         entry_definite_locals,
@@ -371,7 +385,7 @@ fn compile_parsed_output_with_entry_locals(
         enable_local_move_semantics,
     )
     .map_err(SourceError::Parse)?;
-    let type_info = typing::infer_types(&parsed);
+    let type_info = typing::infer_types(&parsed, typing_mode, entry_local_types);
     let FrontendIr {
         stmts,
         locals,
@@ -419,6 +433,7 @@ fn compile_parsed_output_with_entry_locals(
 
     let mut compiler = Compiler::new();
     compiler.set_type_inference(type_info);
+    compiler.set_typing_mode(typing_mode);
     compiler.set_source(source);
     compiler.set_function_decls(function_decls);
     compiler.set_function_impls(function_impls);
@@ -453,6 +468,213 @@ fn compile_parsed_output_with_entry_locals(
         locals,
         functions: visible_runtime_import_functions,
     })
+}
+
+#[derive(Clone, Debug)]
+struct StrictSlotSite {
+    name: String,
+    kind: &'static str,
+    line: Option<u32>,
+    source_name: Option<String>,
+}
+
+fn reject_strict_unknown_annotations(parsed: &FrontendIr) -> Result<(), ParseError> {
+    let Some(span) = parsed.unknown_type_spans.first().copied() else {
+        return Ok(());
+    };
+    Err(ParseError {
+        line: 1,
+        message: "RustScript requires concrete compile-time types; 'unknown' annotations are not allowed"
+            .to_string(),
+        span: Some(span),
+        code: Some("E_STRICT_UNKNOWN_TYPE".to_string()),
+    })
+}
+
+fn enforce_strict_rustscript_type_resolution(
+    parsed: &FrontendIr,
+    type_info: &typing::TypeInferenceResult,
+) -> Result<(), CompileError> {
+    for schema in parsed.struct_schemas.values() {
+        if schema_is_fully_known(&schema.body_schema) {
+            continue;
+        }
+        return Err(CompileError::StrictTypingRequired {
+            line: None,
+            source_name: None,
+            detail: format!(
+                "struct '{}' contains non-concrete field types; RustScript requires concrete schemas",
+                schema.name
+            ),
+        });
+    }
+
+    let function_decl_lines = collect_function_decl_lines(&parsed.stmts);
+    for decl in &parsed.functions {
+        if let Some(schema) = decl.return_schema.as_ref() && !schema_is_fully_known(schema) {
+            return Err(CompileError::StrictTypingRequired {
+                line: function_decl_lines.get(&decl.index).copied(),
+                source_name: parsed.function_sources.get(&decl.index).cloned(),
+                detail: format!(
+                    "function '{}' uses a non-concrete return schema; RustScript requires concrete return types",
+                    decl.name
+                ),
+            });
+        }
+    }
+
+    for (slot, site) in collect_strict_slot_sites(parsed) {
+        if slot_is_fully_typed(slot, type_info) {
+            continue;
+        }
+        return Err(CompileError::StrictTypingRequired {
+            line: site.line,
+            source_name: site.source_name,
+            detail: format!(
+                "{} '{}' does not resolve to a concrete compile-time type in RustScript",
+                site.kind, site.name
+            ),
+        });
+    }
+
+    Ok(())
+}
+
+fn slot_is_fully_typed(slot: LocalSlot, type_info: &typing::TypeInferenceResult) -> bool {
+    let slot_index = usize::from(slot);
+    if type_info
+        .callable_slots
+        .get(slot_index)
+        .copied()
+        .unwrap_or(false)
+    {
+        return true;
+    }
+    if let Some(schema) = type_info.local_schemas.get(slot_index).and_then(|schema| schema.as_ref()) {
+        return schema_is_fully_known(schema);
+    }
+    type_info.local_types.get(slot_index).copied() != Some(crate::ValueType::Unknown)
+}
+
+fn schema_is_fully_known(schema: &TypeSchema) -> bool {
+    match schema {
+        TypeSchema::Unknown => false,
+        TypeSchema::Null
+        | TypeSchema::Int
+        | TypeSchema::Float
+        | TypeSchema::Number
+        | TypeSchema::Bool
+        | TypeSchema::String
+        | TypeSchema::Bytes
+        | TypeSchema::GenericParam(_) => true,
+        TypeSchema::Optional(inner) => schema_is_fully_known(inner),
+        TypeSchema::Named(_, type_args) => type_args.iter().all(schema_is_fully_known),
+        TypeSchema::Array(item) | TypeSchema::Map(item) => schema_is_fully_known(item),
+        TypeSchema::ArrayTuple(items) => items.iter().all(schema_is_fully_known),
+        TypeSchema::ArrayTupleRest { prefix, rest } => {
+            prefix.iter().all(schema_is_fully_known) && schema_is_fully_known(rest)
+        }
+        TypeSchema::Object(fields) => fields.values().all(schema_is_fully_known),
+        TypeSchema::Callable { params, result } => {
+            params.iter().all(schema_is_fully_known) && schema_is_fully_known(result)
+        }
+    }
+}
+
+fn collect_strict_slot_sites(parsed: &FrontendIr) -> Vec<(LocalSlot, StrictSlotSite)> {
+    let mut sites = Vec::new();
+    let local_debug_ranges = collect_local_debug_ranges(&parsed.stmts, &parsed.function_impls);
+    let local_source_names = collect_local_source_names(parsed);
+    for (name, slot) in &parsed.local_bindings {
+        let line = local_debug_ranges.get(slot).and_then(|range| range.declared_line);
+        sites.push((
+            *slot,
+            StrictSlotSite {
+                name: name.clone(),
+                kind: "local",
+                line,
+                source_name: local_source_names.get(slot).cloned().flatten(),
+            },
+        ));
+    }
+
+    let function_decl_lines = collect_function_decl_lines(&parsed.stmts);
+    for decl in &parsed.functions {
+        let Some(function_impl) = parsed.function_impls.get(&decl.index) else {
+            continue;
+        };
+        for (name, slot) in decl.args.iter().zip(function_impl.param_slots.iter()) {
+            sites.push((
+                *slot,
+                StrictSlotSite {
+                    name: name.clone(),
+                    kind: "parameter",
+                    line: function_decl_lines.get(&decl.index).copied(),
+                    source_name: parsed.function_sources.get(&decl.index).cloned(),
+                },
+            ));
+        }
+    }
+
+    sites.sort_by_key(|(slot, _)| *slot);
+    sites
+}
+
+fn collect_local_source_names(parsed: &FrontendIr) -> HashMap<LocalSlot, Option<String>> {
+    let mut out = HashMap::new();
+    for (index, stmt) in parsed.stmts.iter().enumerate() {
+        let source_name = parsed.stmt_sources.get(index).and_then(|source| source.as_deref());
+        record_local_source_names(std::slice::from_ref(stmt), source_name, &mut out);
+    }
+    for decl in &parsed.functions {
+        let Some(function_impl) = parsed.function_impls.get(&decl.index) else {
+            continue;
+        };
+        let source_name = parsed.function_sources.get(&decl.index).map(String::as_str);
+        record_local_source_names(&function_impl.body_stmts, source_name, &mut out);
+    }
+    out
+}
+
+fn record_local_source_names(
+    stmts: &[Stmt],
+    source_name: Option<&str>,
+    out: &mut HashMap<LocalSlot, Option<String>>,
+) {
+    let source_name = source_name.map(str::to_string);
+    for stmt in stmts {
+        match stmt {
+            Stmt::Let { index, .. } => {
+                out.entry(*index).or_insert_with(|| source_name.clone());
+            }
+            Stmt::IfElse {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                record_local_source_names(then_branch, source_name.as_deref(), out);
+                record_local_source_names(else_branch, source_name.as_deref(), out);
+            }
+            Stmt::For {
+                init, post, body, ..
+            } => {
+                record_local_source_names(std::slice::from_ref(init.as_ref()), source_name.as_deref(), out);
+                record_local_source_names(std::slice::from_ref(post.as_ref()), source_name.as_deref(), out);
+                record_local_source_names(body, source_name.as_deref(), out);
+            }
+            Stmt::While { body, .. } => {
+                record_local_source_names(body, source_name.as_deref(), out);
+            }
+            Stmt::Noop { .. }
+            | Stmt::Assign { .. }
+            | Stmt::ClosureLet { .. }
+            | Stmt::FuncDecl { .. }
+            | Stmt::Expr { .. }
+            | Stmt::Break { .. }
+            | Stmt::Continue { .. }
+            | Stmt::Drop { .. } => {}
+        }
+    }
 }
 
 pub fn compile_source(source: &str) -> Result<CompiledProgram, SourceError> {
@@ -651,8 +873,9 @@ fn collect_unknown_inferred_local_types(
     parsed: FrontendIr,
 ) -> Vec<UnknownInferredLocal> {
     let local_debug_ranges = collect_local_debug_ranges(&parsed.stmts, &parsed.function_impls);
-    let parsed = typing::legalize_builtins_and_bind_types(parsed);
-    let type_info = typing::infer_types(&parsed);
+    let parsed =
+        typing::legalize_builtins_and_bind_types(parsed, TypingMode::DynamicHints, &[]);
+    let type_info = typing::infer_types(&parsed, TypingMode::DynamicHints, &[]);
 
     let mut warnings = Vec::new();
     for (name, slot) in &parsed.local_bindings {
@@ -696,8 +919,9 @@ fn collect_unknown_inferred_local_types(
 fn collect_named_local_type_hints(parsed: FrontendIr) -> Vec<InferredLocalTypeHint> {
     let slot_ranges = collect_local_debug_ranges(&parsed.stmts, &parsed.function_impls);
     let function_decl_lines = collect_function_decl_lines(&parsed.stmts);
-    let parsed = typing::legalize_builtins_and_bind_types(parsed);
-    let type_info = typing::infer_types(&parsed);
+    let parsed =
+        typing::legalize_builtins_and_bind_types(parsed, TypingMode::DynamicHints, &[]);
+    let type_info = typing::infer_types(&parsed, TypingMode::DynamicHints, &[]);
 
     let mut hints = Vec::new();
     for (name, slot) in &parsed.local_bindings {
@@ -932,11 +1156,14 @@ fn compile_source_for_repl_with_locals_impl(
         frontends::parse_rustscript_repl_source(source, predefined_locals).map_err(|err| {
             SourceError::Parse(err.with_line_span_from_source(&source_map, source_id))
         })?;
+    let entry_local_types = build_entry_local_types(&parsed.ir, predefined_locals);
     let compiled = match compile_parsed_output_with_entry_locals(
         source.to_string(),
         parsed.ir,
         &parsed.entry_definite_locals,
+        &entry_local_types,
         CompileBehavior::REPL,
+        TypingMode::StrictRustScript,
         true,
     ) {
         Err(SourceError::Parse(err)) => Err(SourceError::Parse(
@@ -948,6 +1175,34 @@ fn compile_source_for_repl_with_locals_impl(
         compiled,
         bindings: parsed.bindings,
     })
+}
+
+fn build_entry_local_types(
+    parsed: &FrontendIr,
+    predefined_locals: &[ReplLocalBinding],
+) -> Vec<typing::EntryLocalType> {
+    let predefined_by_name = predefined_locals
+        .iter()
+        .map(|binding| (binding.name.as_str(), binding))
+        .collect::<HashMap<_, _>>();
+    parsed
+        .local_bindings
+        .iter()
+        .filter_map(|(name, slot)| {
+            let binding = predefined_by_name.get(name.as_str())?;
+            let (schema, schema_optional) = binding
+                .schema
+                .clone()
+                .map(|schema| schema.split_optional())
+                .map(|(schema, optional)| (Some(schema), optional))
+                .unwrap_or((None, false));
+            Some(typing::EntryLocalType {
+                slot: *slot,
+                schema,
+                optional: binding.optional || schema_optional,
+            })
+        })
+        .collect()
 }
 
 fn compile_source_with_flavor_impl(
@@ -964,6 +1219,7 @@ fn compile_source_with_flavor_impl(
         source.to_string(),
         parsed,
         behavior,
+        TypingMode::for_flavor(flavor),
         matches!(flavor, SourceFlavor::RustScript),
     ) {
         Err(SourceError::Parse(err)) => Err(SourceError::Parse(
@@ -990,6 +1246,7 @@ fn compile_source_with_flavor_and_options_impl(
         source.to_string(),
         merged,
         CompileBehavior::DEFAULT,
+        TypingMode::for_flavor(flavor),
         matches!(flavor, SourceFlavor::RustScript),
     )
     .map_err(SourcePathError::Source)
@@ -1007,6 +1264,7 @@ fn compile_source_at_path_with_flavor_and_options_impl(
         source.to_string(),
         merged,
         CompileBehavior::DEFAULT,
+        TypingMode::for_flavor(flavor),
         matches!(flavor, SourceFlavor::RustScript),
     )
     .map_err(SourcePathError::Source)
@@ -1047,6 +1305,7 @@ fn compile_source_file_impl(
         source_raw,
         merged,
         CompileBehavior::DEFAULT,
+        TypingMode::for_flavor(flavor),
         matches!(flavor, SourceFlavor::RustScript),
     )
     .map_err(SourcePathError::Source)

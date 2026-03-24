@@ -130,6 +130,7 @@ pub enum CompileErrorKind {
     BinaryOperandTypeMismatch,
     InvalidFieldAccess,
     FunctionParameterTypeConflict,
+    StrictTypingRequired,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -172,6 +173,7 @@ fn compile_error_kind(err: &vm::CompileError) -> CompileErrorKind {
         vm::CompileError::FunctionParameterTypeConflict { .. } => {
             CompileErrorKind::FunctionParameterTypeConflict
         }
+        vm::CompileError::StrictTypingRequired { .. } => CompileErrorKind::StrictTypingRequired,
     }
 }
 

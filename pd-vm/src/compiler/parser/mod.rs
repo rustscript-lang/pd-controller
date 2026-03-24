@@ -242,6 +242,8 @@ impl Parser {
             .map(|(name, index)| ReplLocalBinding {
                 name: name.clone(),
                 mutable: self.is_local_slot_mutable(*index),
+                schema: None,
+                optional: false,
             })
             .collect::<Vec<_>>();
         locals.sort_by_key(|binding| self.locals.get(&binding.name).copied().unwrap_or(0));

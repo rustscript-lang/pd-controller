@@ -8,7 +8,7 @@ use super::ir::{
     ClosureExpr, Expr, FunctionDecl, FunctionImpl, LocalSlot, MatchPattern, MatchTypePattern, Stmt,
     StructDecl, TypeSchema,
 };
-use super::{CompileError, typing};
+use super::{CompileError, TypingMode, typing};
 
 pub struct Compiler {
     assembler: Assembler,
@@ -23,6 +23,7 @@ pub struct Compiler {
     inline_call_stack: Vec<u16>,
     callable_bindings: HashMap<LocalSlot, CallableBinding>,
     enable_local_move_semantics: bool,
+    typing_mode: TypingMode,
     type_state: typing::LocalTypeState,
     type_map: TypeMap,
 }
@@ -67,6 +68,7 @@ impl Compiler {
             inline_call_stack: Vec::new(),
             callable_bindings: HashMap::new(),
             enable_local_move_semantics: false,
+            typing_mode: TypingMode::DynamicHints,
             type_state: typing::LocalTypeState::default(),
             type_map: TypeMap::default(),
         }
@@ -131,8 +133,15 @@ impl Compiler {
         self.enable_local_move_semantics = enable_local_move_semantics;
     }
 
+    pub(crate) fn set_typing_mode(&mut self, typing_mode: TypingMode) {
+        self.typing_mode = typing_mode;
+    }
+
     pub(crate) fn set_type_inference(&mut self, type_info: typing::TypeInferenceResult) {
         self.type_map.local_types = type_info.local_types;
+        self.type_map.local_schemas = type_info.local_schemas;
+        self.type_map.callable_slots = type_info.callable_slots;
+        self.type_map.optional_slots = type_info.optional_slots;
     }
 
     pub fn compile_program(mut self, stmts: &[Stmt]) -> Result<Program, CompileError> {
@@ -142,6 +151,7 @@ impl Compiler {
             .assembler
             .finish_program()
             .map_err(CompileError::Assembler)?;
+        self.type_map.strict_types = self.typing_mode.is_strict();
         program.type_map = Some(self.type_map);
         Ok(program)
     }
@@ -1184,6 +1194,26 @@ impl Compiler {
             }
             return Ok(());
         }
+        let declared_binding = declared_schema
+            .map(TypeSchema::split_optional)
+            .or_else(|| {
+                self.type_state
+                    .has_declared_schema(slot)
+                    .then(|| {
+                        (
+                            self.type_state.schema(slot).cloned(),
+                            self.type_state.is_optional(slot),
+                        )
+                    })
+                    .and_then(|(schema, optional)| schema.map(|schema| (schema, optional)))
+            });
+        let slot_declared_schema = declared_binding
+            .as_ref()
+            .map(|(schema, _)| schema.clone());
+        let declared_optional = declared_binding
+            .as_ref()
+            .map(|(_, optional)| *optional)
+            .unwrap_or(false);
         let optional = typing::expr_is_optional_with_function_impls_and_imports(
             expr,
             &self.type_state,
@@ -1192,7 +1222,7 @@ impl Compiler {
             &self.struct_schemas,
             &self.host_import_return_types,
             &self.host_import_signatures,
-        );
+        ) || declared_optional;
         let ty = if optional {
             typing::infer_optional_expr_inner_type_with_function_impls_and_imports(
                 expr,
@@ -1209,12 +1239,6 @@ impl Compiler {
         self.callable_bindings.remove(&slot);
         self.compile_scalar_expr(expr)?;
         self.emit_stloc(slot)?;
-        let slot_declared_schema = declared_schema.cloned().or_else(|| {
-            self.type_state
-                .has_declared_schema(slot)
-                .then(|| self.type_state.schema(slot).cloned())
-                .flatten()
-        });
         let schema = slot_declared_schema.clone().or_else(|| {
             if optional {
                 typing::infer_optional_expr_inner_schema_with_function_impls_and_imports(

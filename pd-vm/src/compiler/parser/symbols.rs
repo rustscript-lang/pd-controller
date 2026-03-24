@@ -31,7 +31,73 @@ fn abi_value_type_to_value_type(value: edge_abi::AbiValueType) -> ValueType {
 fn known_host_return_type(name: &str) -> ValueType {
     edge_abi::function_by_name(name)
         .map(|function| abi_value_type_to_value_type(function.return_type))
+        .or_else(|| {
+            default_host_callable(name)
+                .and_then(|callable| parse_host_return_value_type(callable.signature.return_type))
+        })
         .unwrap_or(ValueType::Unknown)
+}
+
+fn known_host_return_schema(name: &str) -> Option<TypeSchema> {
+    default_host_callable(name).and_then(|callable| parse_host_return_schema(callable.signature.return_type))
+}
+
+fn parse_host_return_schema(spec: &str) -> Option<TypeSchema> {
+    let spec = spec.trim();
+    if spec.is_empty() || spec == "unknown" {
+        return None;
+    }
+    if let Some(inner) = parse_optional_host_return_schema(spec) {
+        return Some(inner);
+    }
+    parse_simple_host_return_schema(spec)
+}
+
+fn parse_host_return_value_type(spec: &str) -> Option<ValueType> {
+    let spec = spec.trim();
+    if spec.is_empty() || spec == "unknown" {
+        return None;
+    }
+    if let Some(inner) = parse_optional_host_return_schema(spec) {
+        return Some(inner.coarse_value_type());
+    }
+    match spec {
+        "null" => Some(ValueType::Null),
+        "int" => Some(ValueType::Int),
+        "float" => Some(ValueType::Float),
+        "number" => Some(ValueType::Unknown),
+        "bool" => Some(ValueType::Bool),
+        "string" => Some(ValueType::String),
+        "bytes" => Some(ValueType::Bytes),
+        "array" => Some(ValueType::Array),
+        "map" => Some(ValueType::Map),
+        _ => None,
+    }
+}
+
+fn parse_optional_host_return_schema(spec: &str) -> Option<TypeSchema> {
+    let parts = spec.split('|').map(str::trim).collect::<Vec<_>>();
+    if parts.len() != 2 {
+        return None;
+    }
+    let non_null = parts.iter().copied().find(|part| *part != "null")?;
+    parts.iter().any(|part| *part == "null").then(|| ())?;
+    parse_simple_host_return_schema(non_null).map(|schema| TypeSchema::Optional(Box::new(schema)))
+}
+
+fn parse_simple_host_return_schema(spec: &str) -> Option<TypeSchema> {
+    match spec {
+        "null" => Some(TypeSchema::Null),
+        "int" => Some(TypeSchema::Int),
+        "float" => Some(TypeSchema::Float),
+        "number" => Some(TypeSchema::Number),
+        "bool" => Some(TypeSchema::Bool),
+        "string" => Some(TypeSchema::String),
+        "bytes" => Some(TypeSchema::Bytes),
+        "array" => Some(TypeSchema::Array(Box::new(TypeSchema::Unknown))),
+        "map" => Some(TypeSchema::Map(Box::new(TypeSchema::Unknown))),
+        _ => None,
+    }
 }
 
 fn known_host_accepts_arity(name: &str, arity: u8) -> bool {
@@ -197,6 +263,7 @@ impl Parser {
             index,
             args: (0..arity).map(|idx| format!("arg{idx}")).collect(),
             arg_schemas: vec![None; usize::from(arity)],
+            return_schema: None,
             type_params: Vec::new(),
             exported: true,
             return_type: ValueType::Unknown,
@@ -244,6 +311,7 @@ impl Parser {
             index,
             args,
             arg_schemas: vec![None; usize::from(arity)],
+            return_schema: None,
             type_params: Vec::new(),
             exported: true,
             return_type: ValueType::Unknown,
@@ -291,6 +359,7 @@ impl Parser {
             index,
             args,
             arg_schemas: vec![None; usize::from(arity)],
+            return_schema: known_host_return_schema(name),
             type_params: Vec::new(),
             exported: false,
             return_type: known_host_return_type(name),

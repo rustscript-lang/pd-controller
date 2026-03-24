@@ -74,11 +74,17 @@ Supported syntax and features:
   - `Option::Some(expr)` -> `(expr)`
   - `print("...", ...)` and `println("...", ...)` support Rust-style `std::fmt` formatting
 - RustScript compile-time type rules:
+  - RustScript requires compile-time types for accepted programs; unresolved `unknown` states are
+    compile errors on the RustScript path.
   - `+` is inferred as string concatenation when either side is known `string`, so expressions such
     as `"text" + 123` are valid and lower as string concat.
   - Known mixed numeric arithmetic widens to `float`.
   - `if`-expression branches and `if`/`else` local merges with conflicting known concrete types are
     rejected during compilation.
+  - Nullable or optional schemas are spelled with `?` after the inner type, for example `int?`,
+    `Profile?`, or `fn(int) -> string?`.
+  - `null` is only accepted where the declared schema is explicitly optional; non-optional locals,
+    parameters, and returns reject `null`.
   - Optional chaining in RustScript requires the container to come from a user-declared schema.
   - Values produced by RustScript optional chaining stay optional until handled with
     `.unwrap_or(...)`, a `!= null` refinement, or a `match` arm that binds `Some(name)`.

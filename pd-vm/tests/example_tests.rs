@@ -142,7 +142,7 @@ struct Inner { c: int }
 struct Outer { b: Inner }
 
 let present: Outer = { b: { c: 7 } };
-let missing: Outer = null;
+let missing: Outer? = null;
 
 present?.b?.c.unwrap_or(0);
 missing?.b?.c.unwrap_or(0);

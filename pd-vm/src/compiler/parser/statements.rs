@@ -434,9 +434,13 @@ impl Parser {
                 break;
             }
         }
-        self.pop_active_type_params();
         self.expect(&TokenKind::RParen, "expected ')' after parameters")?;
-        let return_type = self.parse_optional_declared_return_type()?;
+        let return_schema = self.parse_optional_declared_return_schema()?;
+        self.pop_active_type_params();
+        let return_type = return_schema
+            .as_ref()
+            .map(TypeSchema::coarse_value_type)
+            .unwrap_or(ValueType::Unknown);
         let param_names = Self::function_param_names(&params);
         let arg_schemas = params
             .iter()
@@ -478,6 +482,7 @@ impl Parser {
             index,
             args: param_names.clone(),
             arg_schemas,
+            return_schema,
             type_params: type_params.clone(),
             exported,
             return_type,
@@ -531,42 +536,18 @@ impl Parser {
         })
     }
 
-    pub(super) fn parse_optional_declared_return_type(&mut self) -> Result<ValueType, ParseError> {
+    pub(super) fn parse_optional_declared_return_schema(
+        &mut self,
+    ) -> Result<Option<TypeSchema>, ParseError> {
         if !self.match_return_type_arrow() {
-            return Ok(ValueType::Unknown);
+            return Ok(None);
         }
 
-        let ty = if self.match_kind(&TokenKind::Null) {
-            ValueType::Null
-        } else {
-            let span = self.current_span();
-            let name = self.expect_ident("expected return type after '->'")?;
-            match name.as_str() {
-                "unknown" => {
-                    self.unknown_type_spans.push(span);
-                    ValueType::Unknown
-                }
-                "int" => ValueType::Int,
-                "float" => ValueType::Float,
-                "bool" => ValueType::Bool,
-                "string" => ValueType::String,
-                "bytes" => ValueType::Bytes,
-                "array" => ValueType::Array,
-                "map" => ValueType::Map,
-                other => {
-                    return Err(ParseError {
-                        span: None,
-                        code: None,
-                        line: self.current_line(),
-                        message: format!(
-                            "unknown declared return type '{other}', expected unknown/null/int/float/bool/string/bytes/array/map"
-                        ),
-                    });
-                }
-            }
-        };
-
-        Ok(ty)
+        let mut schema = self.parse_declared_type_schema()?;
+        if self.match_kind(&TokenKind::Question) {
+            schema = TypeSchema::Optional(Box::new(schema));
+        }
+        Ok(Some(schema))
     }
 
     fn parse_object_type_schema_fields(
@@ -645,6 +626,32 @@ impl Parser {
                 message: "inline object type schema is not supported; declare a struct and reference it by name"
                     .to_string(),
             });
+        } else if self.match_kind(&TokenKind::Fn) {
+            self.expect(&TokenKind::LParen, "expected '(' after callable type 'fn'")?;
+            let mut params = Vec::new();
+            if !self.check(&TokenKind::RParen) {
+                loop {
+                    params.push(self.parse_declared_type_schema()?);
+                    if self.match_kind(&TokenKind::Comma) {
+                        continue;
+                    }
+                    break;
+                }
+            }
+            self.expect(&TokenKind::RParen, "expected ')' after callable type parameters")?;
+            if !self.match_return_type_arrow() {
+                return Err(ParseError {
+                    span: None,
+                    code: None,
+                    line: self.current_line(),
+                    message: "callable type schema requires '-> <return_type>'".to_string(),
+                });
+            }
+            let result = self.parse_declared_type_schema()?;
+            TypeSchema::Callable {
+                params,
+                result: Box::new(result),
+            }
         } else if self.match_kind(&TokenKind::Null) {
             TypeSchema::Null
         } else {
@@ -657,11 +664,28 @@ impl Parser {
                 }
                 "int" => TypeSchema::Int,
                 "float" => TypeSchema::Float,
+                "number" => TypeSchema::Number,
                 "bool" => TypeSchema::Bool,
                 "string" => TypeSchema::String,
                 "bytes" => TypeSchema::Bytes,
-                "array" => TypeSchema::Array(Box::new(TypeSchema::Unknown)),
-                "map" => TypeSchema::Map(Box::new(TypeSchema::Unknown)),
+                "array" => {
+                    if self.match_kind(&TokenKind::Less) {
+                        let element = self.parse_declared_type_schema()?;
+                        self.expect(&TokenKind::Greater, "expected '>' after array type argument")?;
+                        TypeSchema::Array(Box::new(element))
+                    } else {
+                        TypeSchema::Array(Box::new(TypeSchema::Unknown))
+                    }
+                }
+                "map" => {
+                    if self.match_kind(&TokenKind::Less) {
+                        let value = self.parse_declared_type_schema()?;
+                        self.expect(&TokenKind::Greater, "expected '>' after map value type")?;
+                        TypeSchema::Map(Box::new(value))
+                    } else {
+                        TypeSchema::Map(Box::new(TypeSchema::Unknown))
+                    }
+                }
                 other => {
                     let type_args = if self.check(&TokenKind::Less) {
                         self.expect(&TokenKind::Less, "expected '<' before type arguments")?;
@@ -709,6 +733,10 @@ impl Parser {
                 "expected ']' after array schema alias",
             )?;
             schema = TypeSchema::Array(Box::new(schema));
+        }
+
+        if self.match_kind(&TokenKind::Question) {
+            schema = TypeSchema::Optional(Box::new(schema));
         }
 
         Ok(schema)

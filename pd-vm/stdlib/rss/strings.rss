@@ -1,5 +1,5 @@
 // String helpers implemented in pure RustScript using language syntax.
-fn is_whitespace(ch: string) {
+fn is_whitespace(ch: string) -> bool {
     match ch {
         " " => true,
         "\n" => true,
@@ -10,22 +10,22 @@ fn is_whitespace(ch: string) {
 }
 
 // Returns whether two strings are equal.
-pub fn equals(lhs: string, rhs: string) {
+pub fn equals(lhs: string, rhs: string) -> bool {
     lhs == rhs
 }
 
 // Returns whether a string is empty.
-pub fn is_empty(value: string) {
+pub fn is_empty(value: string) -> bool {
     value.length == 0
 }
 
 // Returns whether a string is not empty.
-pub fn non_empty(value: string) {
+pub fn non_empty(value: string) -> bool {
     !is_empty(value)
 }
 
 // Returns whether a string contains a substring.
-pub fn contains(haystack: string, needle: string) {
+pub fn contains(haystack: string, needle: string) -> bool {
     let haystack_len = haystack.length;
     let needle_len = needle.length;
     let out = if needle_len == 0 => {
@@ -45,17 +45,17 @@ pub fn contains(haystack: string, needle: string) {
 }
 
 // Splits a string on a separator.
-pub fn split(value: string, separator: string) {
+pub fn split(value: string, separator: string) -> [string] {
     let value_len = value.length;
     let separator_len = separator.length;
-    let out = if separator_len == 0 => {
-        let mut out = [];
+    let out: [string] = if separator_len == 0 => {
+        let mut out: [string] = [];
         for (let mut char_index = 0; char_index < value_len; char_index = char_index + 1) {
             out[out.length] = value[char_index:(char_index + 1)];
         }
         out
     } else => {
-        let mut out = [];
+        let mut out: [string] = [];
         let mut cursor = 0;
         let mut part_start = 0;
         let limit = value_len - separator_len + 1;
@@ -75,7 +75,7 @@ pub fn split(value: string, separator: string) {
 }
 
 // Trims leading and trailing ASCII whitespace from a string.
-pub fn trim(value: string) {
+pub fn trim(value: string) -> string {
     let trim_len = value.length;
     let mut trim_start = 0;
     while trim_start < trim_len {
@@ -98,7 +98,7 @@ pub fn trim(value: string) {
 }
 
 // Replaces all matching substrings in a string.
-pub fn replace(value: string, needle: string, replacement: string) {
+pub fn replace(value: string, needle: string, replacement: string) -> string {
     let value_len = value.length;
     let needle_len = needle.length;
     let out = if needle_len == 0 => {

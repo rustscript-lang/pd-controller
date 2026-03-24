@@ -46,7 +46,11 @@ fn wire_roundtrip_preserves_constants_and_code() {
         }),
     )
     .with_type_map(TypeMap {
+        strict_types: true,
         local_types: vec![ValueType::Int, ValueType::Unknown],
+        local_schemas: vec![None, None],
+        callable_slots: vec![false, false],
+        optional_slots: vec![false, false],
         operand_types,
     });
 

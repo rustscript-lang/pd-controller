@@ -3,6 +3,8 @@ use std::fmt;
 use std::hash::{BuildHasherDefault, Hash, Hasher};
 use std::sync::{Arc, OnceLock};
 
+use crate::compiler::TypeSchema;
+
 pub type SharedString = Arc<String>;
 pub type SharedBytes = Arc<Vec<u8>>;
 pub type SharedArray = Arc<Vec<Value>>;
@@ -342,7 +344,11 @@ pub enum ValueType {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TypeMap {
+    pub strict_types: bool,
     pub local_types: Vec<ValueType>,
+    pub local_schemas: Vec<Option<TypeSchema>>,
+    pub callable_slots: Vec<bool>,
+    pub optional_slots: Vec<bool>,
     pub operand_types: HashMap<usize, (ValueType, ValueType)>,
 }
 

@@ -414,24 +414,20 @@ fn host_function_registry_includes_default_runtime_exit() {
 
 #[test]
 fn json_encode_rejects_non_string_map_keys() {
-    let compiled = compile_source(
+    match compile_source(
         r#"
         use json;
         let payload = { 1: "one" };
         json::encode(payload);
     "#,
-    )
-    .expect("source should compile");
-
-    let mut vm = Vm::new(compiled.program);
-    let err = vm
-        .run()
-        .expect_err("json::encode should reject non-string map keys");
-    match err {
-        vm::VmError::HostError(message) => {
-            assert!(message.contains("map keys must be strings"), "{message}");
+    ) {
+        Err(err) => match err {
+        vm::SourceError::Compile(vm::CompileError::CallableArgumentTypeMismatch { detail, .. }) => {
+            assert!(detail.contains("provably strings"), "{detail}");
         }
-        other => panic!("unexpected vm error: {other}"),
+        other => panic!("unexpected compiler error: {other}"),
+        },
+        Ok(_) => panic!("RustScript should reject generic-map json::encode at compile time"),
     }
 }
 

@@ -12,13 +12,13 @@ assert(descending[1] == 7);
 assert(descending[2] == 4);
 assert(descending[3] == 1);
 
-let mut pairs = enumerate(["a", "b"]);
+let mut pairs = enumerate::<string>(["a", "b"]);
 assert(pairs.length == 2);
 let mut second_pair = pairs[1].copy();
 assert(second_pair[0] == 1);
 assert(second_pair[1] == "b");
 
-let mut zipped = zip([1, 2, 3], ["a", "b"]);
+let mut zipped = zip::<int, string>([1, 2, 3], ["a", "b"]);
 assert(zipped.length == 2);
 let mut first_zip = zipped[0].copy();
 assert(first_zip[0] == 1);
@@ -27,17 +27,17 @@ let mut second_zip = zipped[1].copy();
 assert(second_zip[0] == 2);
 assert(second_zip[1] == "b");
 
-let mut head = take([1, 2, 3, 4], 2);
+let mut head = take::<int>([1, 2, 3, 4], 2);
 assert(head.length == 2);
 assert(head[0] == 1);
 assert(head[1] == 2);
 
-let mut tail = skip([1, 2, 3, 4], 2);
+let mut tail = skip::<int>([1, 2, 3, 4], 2);
 assert(tail.length == 2);
 assert(tail[0] == 3);
 assert(tail[1] == 4);
 
-let mut groups = chunk([1, 2, 3, 4, 5], 2);
+let mut groups = chunk::<int>([1, 2, 3, 4, 5], 2);
 assert(groups.length == 3);
 assert(groups[0].length == 2);
 assert(groups[1].length == 2);
@@ -51,25 +51,25 @@ assert(any_true([false, false]) == false);
 assert(all_true([true, true]));
 assert(all_true([true, false]) == false);
 
-let mut plus_one = map([1, 2, 3], |value| value + 1);
+let mut plus_one = map::<int, int>([1, 2, 3], |value| value + 1);
 assert(plus_one.length == 3);
 assert(plus_one[0] == 2);
 assert(plus_one[2] == 4);
 
-fn double(value) {
+fn double(value: int) -> int {
     value * 2
 }
-let mut doubled = map([1, 2, 3], double);
+let mut doubled = map::<int, int>([1, 2, 3], double);
 assert(doubled.length == 3);
 assert(doubled[1] == 4);
 
-let mut evens = filter([1, 2, 3, 4, 5, 6], |value| value % 2 == 0);
+let mut evens = filter::<int>([1, 2, 3, 4, 5, 6], |value| value % 2 == 0);
 assert(evens.length == 3);
 assert(evens[0] == 2);
 assert(evens[2] == 6);
 
-let mut total = reduce([1, 2, 3, 4], 0, |acc, value| acc + value);
+let mut total = reduce::<int, int>([1, 2, 3, 4], 0, |acc, value| acc + value);
 assert(total == 10);
 
-let mut each_result = each([7, 8], |value| value + 1);
+let mut each_result = each::<int, int>([7, 8], |value| value + 1);
 assert(type(each_result) == "null");

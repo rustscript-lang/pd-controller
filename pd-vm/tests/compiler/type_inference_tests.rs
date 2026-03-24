@@ -372,7 +372,7 @@ fn compiler_type_inference_runtime_cases_cover_operator_and_callable_flows() {
         rustscript_type_inference_runtime_case(
             "unused named functions do not force inferred plus operand metadata",
             r#"
-                fn addme(x) {
+                fn addme(x: number) -> number {
                     x + x
                 }
 
@@ -770,8 +770,8 @@ fn compiler_type_inference_compile_only_metadata_cases_work() {
         rustscript_type_inference_compile_case(
             "unstable loop-carried types drop operand metadata after conflicts",
             r#"
-                let mut value = 0;
-                let values = ["x", 1];
+                let mut value: number = 0;
+                let values: [number] = [1, 1.5];
                 for (let mut i = 0; i < 2; i = i + 1) {
                     value = values[i].copy();
                 }

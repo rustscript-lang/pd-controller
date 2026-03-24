@@ -197,6 +197,24 @@ fn remap_functions(
                     }
                 }
             }
+            if existing.return_schema != func.return_schema {
+                match (&existing.return_schema, &func.return_schema) {
+                    (None, Some(schema)) => existing.return_schema = Some(schema.clone()),
+                    (Some(_), None) => {}
+                    (Some(lhs), Some(rhs)) if lhs == rhs => {}
+                    _ => {
+                        return Err(SourcePathError::Source(SourceError::Parse(ParseError {
+                            span: None,
+                            code: None,
+                            line: 1,
+                            message: format!(
+                                "function '{}' declared with conflicting return schemas across imported modules",
+                                func.name
+                            ),
+                        })));
+                    }
+                }
+            }
             if existing.type_params != func.type_params {
                 if existing.type_params.is_empty() {
                     existing.type_params = func.type_params.clone();
@@ -249,6 +267,7 @@ fn remap_functions(
                 index: next_index,
                 args: func.args.clone(),
                 arg_schemas: func.arg_schemas.clone(),
+                return_schema: func.return_schema.clone(),
                 type_params: func.type_params.clone(),
                 exported: func.exported,
                 return_type: func.return_type,

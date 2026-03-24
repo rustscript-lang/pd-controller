@@ -80,6 +80,11 @@ pub enum CompileError {
         source_name: Option<String>,
         detail: String,
     },
+    StrictTypingRequired {
+        line: Option<u32>,
+        source_name: Option<String>,
+        detail: String,
+    },
 }
 
 impl CompileError {
@@ -100,6 +105,9 @@ impl CompileError {
             CompileError::FunctionParameterTypeConflict { line, .. } => {
                 line.and_then(|value| usize::try_from(value).ok())
             }
+            CompileError::StrictTypingRequired { line, .. } => {
+                line.and_then(|value| usize::try_from(value).ok())
+            }
             _ => None,
         }
     }
@@ -110,7 +118,8 @@ impl CompileError {
             | CompileError::CallableArgumentTypeMismatch { source_name, .. }
             | CompileError::BinaryOperandTypeMismatch { source_name, .. }
             | CompileError::InvalidFieldAccess { source_name, .. }
-            | CompileError::FunctionParameterTypeConflict { source_name, .. } => {
+            | CompileError::FunctionParameterTypeConflict { source_name, .. }
+            | CompileError::StrictTypingRequired { source_name, .. } => {
                 source_name.as_deref()
             }
             _ => None,
@@ -146,6 +155,7 @@ impl CompileError {
             CompileError::BinaryOperandTypeMismatch { detail, .. } => detail.clone(),
             CompileError::InvalidFieldAccess { detail, .. } => detail.clone(),
             CompileError::FunctionParameterTypeConflict { detail, .. } => detail.clone(),
+            CompileError::StrictTypingRequired { detail, .. } => detail.clone(),
         }
     }
 }
@@ -317,6 +327,27 @@ pub enum SourceFlavor {
     Scheme,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TypingMode {
+    DynamicHints,
+    StrictRustScript,
+}
+
+impl TypingMode {
+    pub(crate) fn for_flavor(flavor: SourceFlavor) -> Self {
+        match flavor {
+            SourceFlavor::RustScript => Self::StrictRustScript,
+            SourceFlavor::JavaScript | SourceFlavor::Lua | SourceFlavor::Scheme => {
+                Self::DynamicHints
+            }
+        }
+    }
+
+    pub(crate) fn is_strict(self) -> bool {
+        matches!(self, Self::StrictRustScript)
+    }
+}
+
 impl SourceFlavor {
     pub fn from_extension(ext: &str) -> Option<Self> {
         match ext.to_ascii_lowercase().as_str() {
@@ -342,6 +373,8 @@ impl SourceFlavor {
 pub struct ReplLocalBinding {
     pub name: String,
     pub mutable: bool,
+    pub schema: Option<TypeSchema>,
+    pub optional: bool,
 }
 
 pub struct CompiledProgram {

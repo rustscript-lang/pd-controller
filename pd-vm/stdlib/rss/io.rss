@@ -2,7 +2,7 @@
 use io;
 
 // Reads an entire file into a string.
-pub fn read_text(path: string) {
+pub fn read_text(path: string) -> string {
     let handle = io::open(path, "r");
     let out = io::read_all(handle);
     let read_text_closed = io::close(handle);
@@ -10,7 +10,7 @@ pub fn read_text(path: string) {
 }
 
 // Writes text to a file, replacing any existing contents.
-pub fn write_text(path: string, text: string) {
+pub fn write_text(path: string, text: string) -> int {
     let handle = io::open(path, "w");
     let written = io::write(handle, text);
     let write_text_flushed = io::flush(handle);
@@ -19,7 +19,7 @@ pub fn write_text(path: string, text: string) {
 }
 
 // Appends text to the end of a file.
-pub fn append_text(path: string, text: string) {
+pub fn append_text(path: string, text: string) -> int {
     let handle = io::open(path, "a");
     let written = io::write(handle, text);
     let append_text_flushed = io::flush(handle);
@@ -28,9 +28,9 @@ pub fn append_text(path: string, text: string) {
 }
 
 // Reads a file and splits it into newline-delimited lines.
-pub fn read_lines(path: string) {
+pub fn read_lines(path: string) -> [string] {
     let text = read_text(path);
-    let mut lines = [];
+    let mut lines: [string] = [];
     let text_len =(&text).length;
     let mut start = 0;
     for (let mut index = 0; index < text_len; index = index + 1) {

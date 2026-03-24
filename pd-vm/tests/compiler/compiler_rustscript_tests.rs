@@ -194,7 +194,7 @@ fn rustscript_builtin_and_namespace_runtime_cases_work() {
                 if a {
                     score = score + 1;
                 }
-                if b == "FoO" {
+                if b.unwrap_or("") == "FoO" {
                     score = score + 1;
                 }
                 if c == "x bar" {
@@ -216,6 +216,13 @@ fn rustscript_builtin_and_namespace_runtime_cases_work() {
             name: "json encode decode builtins are supported",
             source: r#"
                 use json;
+                struct Inner { name: string }
+                struct Payload {
+                    answer: int,
+                    ok: bool,
+                    arr: [int],
+                    inner: Inner,
+                }
                 let payload = {
                     answer: 42,
                     ok: true,
@@ -223,7 +230,7 @@ fn rustscript_builtin_and_namespace_runtime_cases_work() {
                     inner: { name: "pd" },
                 };
                 let text = json::encode(payload);
-                let decoded = json::decode(text);
+                let decoded = json::decode::<Payload>(text);
                 decoded.answer + decoded.arr[1];
             "#,
             flavor: SourceFlavor::RustScript,
@@ -677,7 +684,7 @@ fn rustscript_named_function_capture_error_cases_work() {
             name: "named function default capture moves movable local",
             source: r#"
                 let a = "";
-                fn add(v) { v + a }
+                fn add(v: string) -> string { v + a }
                 let d = a;
                 d;
             "#,
@@ -689,8 +696,8 @@ fn rustscript_named_function_capture_error_cases_work() {
             name: "named function repeated default move capture is rejected",
             source: r#"
                 let lut = {"a": 1};
-                fn parse_a(text) { lut[text[0:1]] }
-                fn parse_b(text) { lut[text[0:1]] }
+                fn parse_a(text: string) -> int { lut[text[0:1]] }
+                fn parse_b(text: string) -> int { lut[text[0:1]] }
                 parse_a("ab");
             "#,
             flavor: SourceFlavor::RustScript,
@@ -700,7 +707,7 @@ fn rustscript_named_function_capture_error_cases_work() {
         SourceErrorCase {
             name: "named function recursion is still rejected",
             source: r#"
-                fn recurse(x) { recurse(x) }
+                fn recurse(x: int) -> int { recurse(x) }
                 recurse(1);
             "#,
             flavor: SourceFlavor::RustScript,
@@ -943,7 +950,7 @@ fn rustscript_closure_value_parse_rejection_cases_work() {
         ParseErrorCase {
             name: "function value from partial control flow is rejected on call",
             source: r#"
-                fn add_one(value) {
+                fn add_one(value: int) -> int {
                     value + 1;
                 }
                 if true {
@@ -1341,6 +1348,42 @@ fn rustscript_index_move_updates_runtime_container_state() {
 
 #[test]
 fn rustscript_move_and_alias_parse_rejection_cases_work() {
+    let branch_case = SourceErrorCase {
+        name: "local move in one branch is rejected after merge",
+        source: r#"
+            let value = "x";
+            if true {
+                let _moved = value;
+            } else {
+                0;
+            }
+            value;
+        "#,
+        flavor: SourceFlavor::RustScript,
+        expected_kind: SourceErrorKind::Parse,
+        expected_contains_all: &["moved earlier", "value.copy()"],
+    };
+    expect_source_error_case(&branch_case);
+
+    let loop_branch_case = SourceErrorCase {
+        name: "move in one loop branch is visible after loop",
+        source: r#"
+            let p = { a: "x" };
+            let mut i = 0;
+            while i < 2 {
+                if i == 0 {
+                    let _moved = p.a;
+                }
+                i = i + 1;
+            }
+            p.a;
+        "#,
+        flavor: SourceFlavor::RustScript,
+        expected_kind: SourceErrorKind::Parse,
+        expected_contains_all: &["moved earlier", "p.a.copy()"],
+    };
+    expect_source_error_case(&loop_branch_case);
+
     let cases = vec![
         ParseErrorCase {
             name: "non numeric field access is moved by default",
@@ -1392,20 +1435,6 @@ fn rustscript_move_and_alias_parse_rejection_cases_work() {
             "#,
             flavor: SourceFlavor::RustScript,
             expected_contains_all: &["local 'a'", "moved"],
-        },
-        ParseErrorCase {
-            name: "local move in one branch is rejected after merge",
-            source: r#"
-                let value = "x";
-                if true {
-                    let _moved = value;
-                } else {
-                    0;
-                }
-                value;
-            "#,
-            flavor: SourceFlavor::RustScript,
-            expected_contains_all: &["local 'value'", "moved"],
         },
         ParseErrorCase {
             name: "callee consumed parameter moves caller local",
@@ -1569,22 +1598,6 @@ fn rustscript_move_and_alias_parse_rejection_cases_work() {
                     i = i + 1;
                     continue;
                 }
-            "#,
-            flavor: SourceFlavor::RustScript,
-            expected_contains_all: &["p.a", "moved"],
-        },
-        ParseErrorCase {
-            name: "move in one loop branch is visible after loop",
-            source: r#"
-                let p = { a: "x" };
-                let mut i = 0;
-                while i < 2 {
-                    if i == 0 {
-                        let _moved = p.a;
-                    }
-                    i = i + 1;
-                }
-                p.a;
             "#,
             flavor: SourceFlavor::RustScript,
             expected_contains_all: &["p.a", "moved"],
@@ -1965,7 +1978,7 @@ fn rustscript_callable_values_cannot_be_returned_from_functions() {
     let case = SourceErrorCase {
         name: "callable values cannot be returned from functions",
         source: r#"
-            fn add_one(value) {
+            fn add_one(value: int) -> int {
                 value + 1;
             }
             fn get_adder() {
@@ -2166,7 +2179,7 @@ fn compile_source_file_rustscript_imports_merge_with_scoped_locals() {
     std::fs::write(
         &module_path,
         r#"
-        pub fn add_one(x);
+        pub fn add_one(x) -> int;
         let shared = 40;
     "#,
     )
@@ -2283,9 +2296,9 @@ fn compile_source_file_rustscript_imported_borrow_capture_survives_nested_calls(
         r#"
         let lut = {"a": 1};
         let digits = [0, 2];
-        fn parse_key(text) { (&lut)[text[0:1]] }
-        fn read_digit() { (&digits)[1] }
-        pub fn run() {
+        fn parse_key(text: string) -> int { (&lut)[text[0:1]] }
+        fn read_digit() -> int { (&digits)[1] }
+        pub fn run() -> int {
             let a = parse_key("ab");
             let b = read_digit();
             let c = parse_key("ab");
@@ -2333,8 +2346,8 @@ fn compile_source_file_rustscript_imported_direct_capture_multiple_move_is_rejec
         &module_path,
         r#"
         let lut = {"a": 1};
-        fn parse_key(text) { lut[text[0:1]] }
-        fn parse_again(text) { lut[text[0:1]] }
+        fn parse_key(text: string) -> int { lut[text[0:1]] }
+        fn parse_again(text: string) -> int { lut[text[0:1]] }
         pub fn run() {
             parse_key("ab");
         }
@@ -2910,7 +2923,7 @@ fn rustscript_optional_chain_requires_declared_schema_and_explicit_handling() {
             struct Profile { stats: Stats }
 
             let present: Profile = { stats: { score: 41 } };
-            let missing: Profile = null;
+            let missing: Profile? = null;
 
             let present_score = present?.stats?.score.unwrap_or(0);
             let missing_score = missing?.stats?.score.unwrap_or(0);
@@ -3051,6 +3064,84 @@ fn rustscript_optional_chain_rejects_statistically_mismatched_declared_schemas()
             expected_contains_all: &[
                 "field 'stats.score' is declared as schema type 'int' but was assigned string",
             ],
+        },
+    ];
+
+    run_source_error_cases(&error_cases);
+}
+
+#[test]
+fn rustscript_explicit_optional_type_annotations_work() {
+    let runtime_cases = vec![
+        rustscript_runtime_case(
+            "optional local and return annotations preserve concrete inner typing",
+            r#"
+                fn maybe_score(text: string) -> int? {
+                    let mut out: int? = null;
+                    if text == "ok" {
+                        out = 41;
+                    }
+                    out
+                }
+
+                maybe_score("ok").unwrap_or(0) + maybe_score("bad").unwrap_or(1);
+            "#,
+            vec![Value::Int(42)],
+        ),
+        rustscript_runtime_case(
+            "typed callable locals enforce closure body schemas",
+            r#"
+                let mapper: fn(int) -> int = |value| value + 1;
+                mapper(41);
+            "#,
+            vec![Value::Int(42)],
+        ),
+    ];
+    run_runtime_cases(&runtime_cases);
+
+    let error_cases = vec![
+        SourceErrorCase {
+            name: "non optional local rejects null assignment",
+            source: r#"
+                let value: int = null;
+                value;
+            "#,
+            flavor: SourceFlavor::RustScript,
+            expected_kind: SourceErrorKind::Compile(CompileErrorKind::InvalidFieldAccess),
+            expected_contains_all: &["local is declared as schema type 'int' but was assigned null"],
+        },
+        SourceErrorCase {
+            name: "non optional return rejects null result",
+            source: r#"
+                fn bad() -> int {
+                    null
+                }
+
+                bad();
+            "#,
+            flavor: SourceFlavor::RustScript,
+            expected_kind: SourceErrorKind::Compile(CompileErrorKind::StrictTypingRequired),
+            expected_contains_all: &["function 'bad' is declared to return 'int' but produced null"],
+        },
+        SourceErrorCase {
+            name: "typed callable locals reject mismatched closure results",
+            source: r#"
+                let mapper: fn(int) -> int = |value| value == 41;
+                mapper(41);
+            "#,
+            flavor: SourceFlavor::RustScript,
+            expected_kind: SourceErrorKind::Compile(CompileErrorKind::CallableArgumentTypeMismatch),
+            expected_contains_all: &["callable body result expects 'int'", "got bool"],
+        },
+        SourceErrorCase {
+            name: "json encode rejects bytes under strict rustscript typing",
+            source: r#"
+                use json;
+                json::encode(b"abc");
+            "#,
+            flavor: SourceFlavor::RustScript,
+            expected_kind: SourceErrorKind::Compile(CompileErrorKind::CallableArgumentTypeMismatch),
+            expected_contains_all: &["json::encode", "bytes"],
         },
     ];
 

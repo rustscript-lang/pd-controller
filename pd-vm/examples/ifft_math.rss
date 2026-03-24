@@ -1,14 +1,19 @@
 use math;
 
-fn nearly_equal(lhs, rhs) {
+struct ComplexSignal {
+    re: [float],
+    im: [float]
+}
+
+fn nearly_equal(lhs: number, rhs: number) -> bool {
     math::abs(lhs - rhs) < 0.000001
 }
 
-fn nearly_zero(value) {
+fn nearly_zero(value: number) -> bool {
     nearly_equal(value, 0.0)
 }
 
-fn clean(value) {
+fn clean(value: float) -> float {
     let mut out = value;
     if nearly_zero(value) {
         out = 0.0;
@@ -16,7 +21,7 @@ fn clean(value) {
     out
 }
 
-fn exact_log2(value) {
+fn exact_log2(value: int) -> int {
     let mut bits = 0;
     let mut remaining = value;
     let mut valid = remaining > 0;
@@ -36,7 +41,7 @@ fn exact_log2(value) {
     out
 }
 
-fn reverse_bits(index, bit_count) {
+fn reverse_bits(index: int, bit_count: int) -> int {
     let mut out = 0;
     let mut value = index;
     let mut i = 0;
@@ -48,15 +53,15 @@ fn reverse_bits(index, bit_count) {
     out
 }
 
-fn ifft(freq_re, freq_im) {
+fn ifft(freq_re: [float], freq_im: [float]) -> ComplexSignal {
     let n = freq_re.length;
     assert(n == freq_im.length);
 
     let bit_count = exact_log2(n);
     assert(bit_count >= 0);
 
-    let mut out_re = [];
-    let mut out_im = [];
+    let mut out_re: [float] = [];
+    let mut out_im: [float] = [];
     let mut i = 0;
     while i < n {
         let j = reverse_bits(i, bit_count);
@@ -103,7 +108,8 @@ fn ifft(freq_re, freq_im) {
         i = i + 1;
     }
 
-    {re: out_re, im: out_im}
+    let out: ComplexSignal = {re: out_re, im: out_im};
+    out
 }
 
 // These bins are the forward DFT of [1, 2, 3, 4].

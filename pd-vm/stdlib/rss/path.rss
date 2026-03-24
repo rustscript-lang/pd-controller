@@ -1,9 +1,9 @@
 // Path helpers implemented in pure RustScript.
-fn is_separator(ch: string) {
+fn is_separator(ch: string) -> bool {
     ch == "/" || ch == "\\"
 }
 
-fn trim_trailing_separators(path: string) {
+fn trim_trailing_separators(path: string) -> string {
     let mut end =(&path).length;
     while end > 1 && is_separator((&path)[(end - 1):end]) {
         end = end - 1;
@@ -12,7 +12,7 @@ fn trim_trailing_separators(path: string) {
 }
 
 // Replaces backslashes with forward slashes in a path.
-pub fn normalize_sep(path: string) {
+pub fn normalize_sep(path: string) -> string {
     let mut out = "";
     for (let mut index = 0; index <(&path).length; index = index + 1) {
         let ch =(&path)[index:(index + 1)];
@@ -27,7 +27,7 @@ pub fn normalize_sep(path: string) {
 }
 
 // Joins two path segments with a single separator.
-pub fn join(lhs: string, rhs: string) {
+pub fn join(lhs: string, rhs: string) -> string {
     let left = normalize_sep(lhs);
     let right = normalize_sep(rhs);
     let out = if (&left).length == 0 => {
@@ -49,7 +49,7 @@ pub fn join(lhs: string, rhs: string) {
 }
 
 // Returns the final path segment.
-pub fn basename(path: string) {
+pub fn basename(path: string) -> string {
     let normalized = trim_trailing_separators(normalize_sep(path));
     let mut start = 0;
     let mut index =(&normalized).length - 1;
@@ -64,7 +64,7 @@ pub fn basename(path: string) {
 }
 
 // Returns the parent directory portion of a path.
-pub fn dirname(path: string) {
+pub fn dirname(path: string) -> string {
     let normalized = trim_trailing_separators(normalize_sep(path));
     let mut cut =-1;
     let mut index =(&normalized).length - 1;
@@ -86,7 +86,7 @@ pub fn dirname(path: string) {
 }
 
 // Returns the file extension of a path.
-pub fn extname(path: string) {
+pub fn extname(path: string) -> string {
     let name = basename(path);
     let mut dot =-1;
     let mut index =(&name).length - 1;

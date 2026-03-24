@@ -1,8 +1,8 @@
 // Iteration helpers implemented in pure RustScript.
 
 // Returns an array of numbers from start to stop using the given step.
-pub fn range_step(start: int, stop: int, step: int) {
-    let mut out = [];
+pub fn range_step(start: int, stop: int, step: int) -> [int] {
+    let mut out: [int] = [];
     if step != 0 {
         if step > 0 {
             for (let mut value = start; value < stop; value = value + step) {
@@ -18,13 +18,13 @@ pub fn range_step(start: int, stop: int, step: int) {
 }
 
 // Returns an array of numbers from 0 up to stop.
-pub fn range(stop: int) {
+pub fn range(stop: int) -> [int] {
     range_step(0, stop, 1)
 }
 
 // Returns [index, value] pairs for an array.
-pub fn enumerate(values) {
-    let mut out = [];
+pub fn enumerate<T>(values: [T]) -> [[int, T]] {
+    let mut out: [[int, T]] = [];
     for (let mut index = 0; index < values.length; index = index + 1) {
         out[out.length] = [index, values[index]];
     }
@@ -32,8 +32,8 @@ pub fn enumerate(values) {
 }
 
 // Zips two arrays into [lhs, rhs] pairs up to the shorter length.
-pub fn zip(lhs, rhs) {
-    let mut out = [];
+pub fn zip<L, R>(lhs: [L], rhs: [R]) -> [[L, R]] {
+    let mut out: [[L, R]] = [];
     let mut limit = lhs.length;
     if rhs.length < limit {
         limit = rhs.length;
@@ -45,17 +45,16 @@ pub fn zip(lhs, rhs) {
 }
 
 // Returns the first count values from an array.
-pub fn take(values, count: int) {
-    let out = if count > 0 => {
-        values[0:count]
-    } else => {
-        []
-    };
+pub fn take<T>(values: [T], count: int) -> [T] {
+    let mut out: [T] = [];
+    if count > 0 {
+        out = values[0:count];
+    }
     out
 }
 
 // Returns an array without the first count values.
-pub fn skip(values, count: int) {
+pub fn skip<T>(values: [T], count: int) -> [T] {
     let start = if count > 0 => {
         count
     } else => {
@@ -70,8 +69,8 @@ pub fn skip(values, count: int) {
 }
 
 // Splits an array into fixed-size chunks.
-pub fn chunk(values, size: int) {
-    let mut out = [];
+pub fn chunk<T>(values: [T], size: int) -> [[T]] {
+    let mut out: [[T]] = [];
     if size > 0 {
         let value_len = values.length;
         for (let mut index = 0; index < value_len; index = index + size) {
@@ -86,7 +85,7 @@ pub fn chunk(values, size: int) {
 }
 
 // Returns the sum of numeric values.
-pub fn sum(values) {
+pub fn sum(values: [number]) -> number {
     let mut out = 0;
     for (let mut index = 0; index < values.length; index = index + 1) {
         out = out + values[index];
@@ -95,7 +94,7 @@ pub fn sum(values) {
 }
 
 // Returns whether any value in an array is truthy.
-pub fn any_true(values: [bool]) {
+pub fn any_true(values: [bool]) -> bool {
     let mut out = false;
     for (let mut index = 0; index < values.length; index = index + 1) {
         if values[index] {
@@ -107,7 +106,7 @@ pub fn any_true(values: [bool]) {
 }
 
 // Returns whether every value in an array is truthy.
-pub fn all_true(values: [bool]) {
+pub fn all_true(values: [bool]) -> bool {
     let mut out = true;
     for (let mut index = 0; index < values.length; index = index + 1) {
         if values[index] == false {
@@ -119,8 +118,8 @@ pub fn all_true(values: [bool]) {
 }
 
 // Applies a function to each value in an array.
-pub fn map(values, func) {
-    let mut out = [];
+pub fn map<T, U>(values: [T], func: fn(T) -> U) -> [U] {
+    let mut out: [U] = [];
     for (let mut index = 0; index < values.length; index = index + 1) {
         out[out.length] = func(values[index]);
     }
@@ -128,8 +127,8 @@ pub fn map(values, func) {
 }
 
 // Returns the values for which pred(value) is true.
-pub fn filter(values, pred) {
-    let mut out = [];
+pub fn filter<T>(values: [T], pred: fn(T) -> bool) -> [T] {
+    let mut out: [T] = [];
     for (let mut index = 0; index < values.length; index = index + 1) {
         let value = values[index];
         if pred(value) {
@@ -140,7 +139,7 @@ pub fn filter(values, pred) {
 }
 
 // Reduces an array by applying func(acc, value) from left to right.
-pub fn reduce(values, init, func) {
+pub fn reduce<T, U>(values: [T], init: U, func: fn(U, T) -> U) -> U {
     let mut acc = init;
     for (let mut index = 0; index < values.length; index = index + 1) {
         acc = func(acc, values[index]);
@@ -149,7 +148,7 @@ pub fn reduce(values, init, func) {
 }
 
 // Calls a function for each value in an array and returns null.
-pub fn each(values, func) {
+pub fn each<T, U>(values: [T], func: fn(T) -> U) -> null {
     for (let mut index = 0; index < values.length; index = index + 1) {
         let each_result = func(values[index]);
     }
