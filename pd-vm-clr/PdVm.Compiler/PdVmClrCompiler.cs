@@ -42,6 +42,9 @@ public static class PdVmClrCompiler
     private static readonly MethodInfo SetInstructionPointerMethod =
         GetBaseMethod("SetInstructionPointer", typeof(int));
 
+    private static readonly MethodInfo AddExecutedInstructionsMethod =
+        GetBaseMethod("AddExecutedInstructions", typeof(int));
+
     private static readonly MethodInfo PushValueMethod =
         GetBaseMethod("PushValue", typeof(PdVmValue));
 
@@ -88,9 +91,17 @@ public static class PdVmClrCompiler
         typeof(PdVmValue).GetMethod(nameof(PdVmValue.FromInt), new[] { typeof(long) }) ??
         throw new InvalidOperationException("PdVmValue.FromInt not found");
 
+    private static readonly MethodInfo ValueAsIntMethod =
+        typeof(PdVmValue).GetMethod(nameof(PdVmValue.AsInt), Type.EmptyTypes) ??
+        throw new InvalidOperationException("PdVmValue.AsInt not found");
+
     private static readonly MethodInfo ValueFromFloatMethod =
         typeof(PdVmValue).GetMethod(nameof(PdVmValue.FromFloat), new[] { typeof(double) }) ??
         throw new InvalidOperationException("PdVmValue.FromFloat not found");
+
+    private static readonly MethodInfo ValueAsFloatMethod =
+        typeof(PdVmValue).GetMethod(nameof(PdVmValue.AsFloat), Type.EmptyTypes) ??
+        throw new InvalidOperationException("PdVmValue.AsFloat not found");
 
     private static readonly MethodInfo ValueFromBoolMethod =
         typeof(PdVmValue).GetMethod(nameof(PdVmValue.FromBool), new[] { typeof(bool) }) ??
@@ -100,9 +111,27 @@ public static class PdVmClrCompiler
         typeof(PdVmValue).GetMethod(nameof(PdVmValue.FromString), new[] { typeof(string) }) ??
         throw new InvalidOperationException("PdVmValue.FromString not found");
 
+    private static readonly MethodInfo ValueAsStringMethod =
+        typeof(PdVmValue).GetMethod(nameof(PdVmValue.AsString), Type.EmptyTypes) ??
+        throw new InvalidOperationException("PdVmValue.AsString not found");
+
     private static readonly MethodInfo ValueFromBytesMethod =
         typeof(PdVmValue).GetMethod(nameof(PdVmValue.FromBytes), new[] { typeof(IEnumerable<byte>) }) ??
         throw new InvalidOperationException("PdVmValue.FromBytes not found");
+
+    private static readonly MethodInfo ValidateShiftAmountMethod =
+        typeof(PdVmOps).GetMethod(nameof(PdVmOps.ValidateShiftAmount), new[] { typeof(long) }) ??
+        throw new InvalidOperationException("PdVmOps.ValidateShiftAmount not found");
+
+    private static readonly MethodInfo StringConcatMethod =
+        typeof(string).GetMethod(nameof(string.Concat), new[] { typeof(string), typeof(string) }) ??
+        throw new InvalidOperationException("string.Concat(string, string) not found");
+
+    private static readonly MethodInfo StringEqualsMethod =
+        typeof(string).GetMethod(
+            nameof(string.Equals),
+            new[] { typeof(string), typeof(string), typeof(StringComparison) }) ??
+        throw new InvalidOperationException("string.Equals(string, string, StringComparison) not found");
 
     private static readonly Dictionary<PdVmBytecodeOpCode, MethodInfo> UnaryOpcodeMethods = new()
     {
@@ -153,7 +182,33 @@ public static class PdVmClrCompiler
         [PdVmBuiltin.BytesToBase64] = (GetBuiltinMethod(nameof(PdVmBuiltins.BytesToBase64Value), typeof(PdVmValue)), true),
         [PdVmBuiltin.BytesFromArrayU8] = (GetBuiltinMethod(nameof(PdVmBuiltins.BytesFromArrayU8Value), typeof(PdVmValue)), true),
         [PdVmBuiltin.BytesToArrayU8] = (GetBuiltinMethod(nameof(PdVmBuiltins.BytesToArrayU8Value), typeof(PdVmValue)), true),
+        [PdVmBuiltin.IoOpen] = (GetBuiltinMethod(nameof(PdVmBuiltins.IoOpenValue), typeof(PdVmValue), typeof(PdVmValue)), true),
+        [PdVmBuiltin.IoPopen] = (GetBuiltinMethod(nameof(PdVmBuiltins.IoPopenValue), typeof(PdVmValue), typeof(PdVmValue)), true),
+        [PdVmBuiltin.IoReadAll] = (GetBuiltinMethod(nameof(PdVmBuiltins.IoReadAllValue), typeof(PdVmValue)), true),
+        [PdVmBuiltin.IoReadLine] = (GetBuiltinMethod(nameof(PdVmBuiltins.IoReadLineValue), typeof(PdVmValue)), true),
+        [PdVmBuiltin.IoWrite] = (GetBuiltinMethod(nameof(PdVmBuiltins.IoWriteValue), typeof(PdVmValue), typeof(PdVmValue)), true),
+        [PdVmBuiltin.IoFlush] = (GetBuiltinMethod(nameof(PdVmBuiltins.IoFlushValue), typeof(PdVmValue)), true),
+        [PdVmBuiltin.IoClose] = (GetBuiltinMethod(nameof(PdVmBuiltins.IoCloseValue), typeof(PdVmValue)), true),
+        [PdVmBuiltin.IoExists] = (GetBuiltinMethod(nameof(PdVmBuiltins.IoExistsValue), typeof(PdVmValue)), true),
+        [PdVmBuiltin.ReMatch] = (GetBuiltinMethod(nameof(PdVmBuiltins.ReMatchValue), typeof(PdVmValue), typeof(PdVmValue)), true),
+        [PdVmBuiltin.ReFind] = (GetBuiltinMethod(nameof(PdVmBuiltins.ReFindValue), typeof(PdVmValue), typeof(PdVmValue)), true),
+        [PdVmBuiltin.ReReplace] = (GetBuiltinMethod(nameof(PdVmBuiltins.ReReplaceValue), typeof(PdVmValue), typeof(PdVmValue), typeof(PdVmValue)), true),
+        [PdVmBuiltin.ReSplit] = (GetBuiltinMethod(nameof(PdVmBuiltins.ReSplitValue), typeof(PdVmValue), typeof(PdVmValue)), true),
+        [PdVmBuiltin.ReCaptures] = (GetBuiltinMethod(nameof(PdVmBuiltins.ReCapturesValue), typeof(PdVmValue), typeof(PdVmValue)), true),
+        [PdVmBuiltin.JsonEncode] = (GetBuiltinMethod(nameof(PdVmBuiltins.JsonEncodeValue), typeof(PdVmValue)), true),
+        [PdVmBuiltin.JsonDecode] = (GetBuiltinMethod(nameof(PdVmBuiltins.JsonDecodeValue), typeof(PdVmValue)), true),
     };
+
+    private readonly record struct PdVmTypedTemps(
+        LocalBuilder Int0,
+        LocalBuilder Int1,
+        LocalBuilder Float0,
+        LocalBuilder Float1,
+        LocalBuilder Bool0,
+        LocalBuilder Bool1,
+        LocalBuilder String0,
+        LocalBuilder String1,
+        LocalBuilder ShiftAmount);
 
     public static string CompileFile(string inputPath, string outputPath, PdVmCompileOptions? options = null)
     {
@@ -280,9 +335,20 @@ public static class PdVmClrCompiler
 
         var il = method.GetILGenerator();
         var instructionPointerLocal = il.DeclareLocal(typeof(int));
+        var executedInstructionsLocal = il.DeclareLocal(typeof(int));
         var tmp0 = il.DeclareLocal(typeof(PdVmValue));
         var tmp1 = il.DeclareLocal(typeof(PdVmValue));
         var tmp2 = il.DeclareLocal(typeof(PdVmValue));
+        var typedTemps = new PdVmTypedTemps(
+            il.DeclareLocal(typeof(long)),
+            il.DeclareLocal(typeof(long)),
+            il.DeclareLocal(typeof(double)),
+            il.DeclareLocal(typeof(double)),
+            il.DeclareLocal(typeof(bool)),
+            il.DeclareLocal(typeof(bool)),
+            il.DeclareLocal(typeof(string)),
+            il.DeclareLocal(typeof(string)),
+            il.DeclareLocal(typeof(int)));
         var labels = program.Instructions.ToDictionary(instruction => instruction.Offset, _ => il.DefineLabel());
 
         il.Emit(OpCodes.Ldarg_0);
@@ -290,6 +356,8 @@ public static class PdVmClrCompiler
         il.Emit(OpCodes.Ldarg_0);
         il.Emit(OpCodes.Call, InstructionPointerGetter);
         il.Emit(OpCodes.Stloc, instructionPointerLocal);
+        EmitInt32(il, 0);
+        il.Emit(OpCodes.Stloc, executedInstructionsLocal);
 
         foreach (var instruction in program.Instructions)
         {
@@ -303,24 +371,46 @@ public static class PdVmClrCompiler
         foreach (var instruction in program.Instructions)
         {
             il.MarkLabel(labels[instruction.Offset]);
-            EmitInstruction(il, constantsField, importsField, instruction, tmp0, tmp1, tmp2);
+            EmitInstructionPrefix(il, executedInstructionsLocal, instruction.Offset);
+            EmitInstruction(
+                il,
+                constantsField,
+                importsField,
+                program,
+                instruction,
+                labels,
+                executedInstructionsLocal,
+                typedTemps,
+                tmp0,
+                tmp1,
+                tmp2);
         }
+
+        EmitThrowInvalidInstructionPointer(il);
     }
 
     private static void EmitInstruction(
         ILGenerator il,
         FieldBuilder constantsField,
         FieldBuilder importsField,
+        PdVmProgramModel program,
         PdVmInstruction instruction,
+        IReadOnlyDictionary<int, Label> labels,
+        LocalBuilder executedInstructionsLocal,
+        PdVmTypedTemps typedTemps,
         LocalBuilder tmp0,
         LocalBuilder tmp1,
         LocalBuilder tmp2)
     {
+        if (TryEmitTypedInstruction(il, program, instruction, typedTemps))
+        {
+            return;
+        }
+
         if (BinaryOpcodeMethods.TryGetValue(instruction.OpCode, out var binaryMethod))
         {
             il.Emit(OpCodes.Ldarg_0);
             il.Emit(OpCodes.Call, binaryMethod);
-            EmitAdvanceAndYield(il, instruction.NextOffset);
             return;
         }
 
@@ -328,19 +418,18 @@ public static class PdVmClrCompiler
         {
             il.Emit(OpCodes.Ldarg_0);
             il.Emit(OpCodes.Call, unaryMethod);
-            EmitAdvanceAndYield(il, instruction.NextOffset);
             return;
         }
 
         switch (instruction.OpCode)
         {
             case PdVmBytecodeOpCode.Nop:
-                EmitAdvanceAndYield(il, instruction.NextOffset);
                 return;
             case PdVmBytecodeOpCode.Ret:
                 il.Emit(OpCodes.Ldarg_0);
-                il.Emit(OpCodes.Call, HaltProgramMethod);
-                il.Emit(OpCodes.Ret);
+                EmitInt32(il, instruction.Offset);
+                il.Emit(OpCodes.Call, SetInstructionPointerMethod);
+                EmitReturnStatus(il, executedInstructionsLocal, HaltProgramMethod);
                 return;
             case PdVmBytecodeOpCode.Ldc:
                 il.Emit(OpCodes.Ldarg_0);
@@ -348,10 +437,9 @@ public static class PdVmClrCompiler
                 EmitInt32(il, instruction.ConstantIndex!.Value);
                 il.Emit(OpCodes.Ldelem_Ref);
                 il.Emit(OpCodes.Call, PushValueMethod);
-                EmitAdvanceAndYield(il, instruction.NextOffset);
                 return;
             case PdVmBytecodeOpCode.Br:
-                EmitAdvanceAndYield(il, instruction.JumpTarget!.Value);
+                EmitTransfer(il, labels, executedInstructionsLocal, instruction.Offset, instruction.JumpTarget!.Value);
                 return;
             case PdVmBytecodeOpCode.Brfalse:
             {
@@ -359,45 +447,507 @@ public static class PdVmClrCompiler
                 il.Emit(OpCodes.Ldarg_0);
                 il.Emit(OpCodes.Call, PopBoolMethod);
                 il.Emit(OpCodes.Brtrue, fallthrough);
-                EmitAdvanceAndYield(il, instruction.JumpTarget!.Value);
+                EmitTransfer(
+                    il,
+                    labels,
+                    executedInstructionsLocal,
+                    instruction.Offset,
+                    instruction.JumpTarget!.Value);
                 il.MarkLabel(fallthrough);
-                EmitAdvanceAndYield(il, instruction.NextOffset);
                 return;
             }
             case PdVmBytecodeOpCode.Pop:
                 il.Emit(OpCodes.Ldarg_0);
                 il.Emit(OpCodes.Call, DiscardTopMethod);
-                EmitAdvanceAndYield(il, instruction.NextOffset);
                 return;
             case PdVmBytecodeOpCode.Dup:
                 il.Emit(OpCodes.Ldarg_0);
                 il.Emit(OpCodes.Call, DuplicateTopMethod);
-                EmitAdvanceAndYield(il, instruction.NextOffset);
                 return;
             case PdVmBytecodeOpCode.Ldloc:
                 il.Emit(OpCodes.Ldarg_0);
                 EmitInt32(il, instruction.LocalIndex!.Value);
                 il.Emit(OpCodes.Call, LoadLocalValueMethod);
-                EmitAdvanceAndYield(il, instruction.NextOffset);
                 return;
             case PdVmBytecodeOpCode.Stloc:
                 il.Emit(OpCodes.Ldarg_0);
                 EmitInt32(il, instruction.LocalIndex!.Value);
                 il.Emit(OpCodes.Call, StoreLocalValueMethod);
-                EmitAdvanceAndYield(il, instruction.NextOffset);
                 return;
             case PdVmBytecodeOpCode.Call:
-                EmitCallInstruction(il, importsField, instruction, tmp0, tmp1, tmp2);
+                EmitCallInstruction(
+                    il,
+                    importsField,
+                    instruction,
+                    executedInstructionsLocal,
+                    tmp0,
+                    tmp1,
+                    tmp2);
                 return;
             default:
                 throw new PdVmCompilerException($"unsupported opcode {instruction.OpCode}");
         }
     }
 
+    private static bool TryEmitTypedInstruction(
+        ILGenerator il,
+        PdVmProgramModel program,
+        PdVmInstruction instruction,
+        PdVmTypedTemps typedTemps)
+    {
+        var operandTypes = GetOperandTypes(program, instruction.Offset);
+
+        switch (instruction.OpCode)
+        {
+            case PdVmBytecodeOpCode.Add:
+                if (operandTypes.Lhs == PdVmValueType.Int && operandTypes.Rhs == PdVmValueType.Int)
+                {
+                    EmitPopIntPair(il, typedTemps);
+                    il.Emit(OpCodes.Ldarg_0);
+                    il.Emit(OpCodes.Ldloc, typedTemps.Int0);
+                    il.Emit(OpCodes.Ldloc, typedTemps.Int1);
+                    il.Emit(OpCodes.Add);
+                    EmitPushValueFromFactory(il, ValueFromIntMethod);
+                    return true;
+                }
+
+                if (operandTypes.Lhs == PdVmValueType.Float && operandTypes.Rhs == PdVmValueType.Float)
+                {
+                    EmitPopFloatPair(il, typedTemps);
+                    il.Emit(OpCodes.Ldarg_0);
+                    il.Emit(OpCodes.Ldloc, typedTemps.Float0);
+                    il.Emit(OpCodes.Ldloc, typedTemps.Float1);
+                    il.Emit(OpCodes.Add);
+                    EmitPushValueFromFactory(il, ValueFromFloatMethod);
+                    return true;
+                }
+
+                if (operandTypes.Lhs == PdVmValueType.String && operandTypes.Rhs == PdVmValueType.String)
+                {
+                    EmitPopStringPair(il, typedTemps);
+                    il.Emit(OpCodes.Ldarg_0);
+                    il.Emit(OpCodes.Ldloc, typedTemps.String0);
+                    il.Emit(OpCodes.Ldloc, typedTemps.String1);
+                    il.Emit(OpCodes.Call, StringConcatMethod);
+                    EmitPushValueFromFactory(il, ValueFromStringMethod);
+                    return true;
+                }
+
+                return false;
+            case PdVmBytecodeOpCode.Sub:
+                if (operandTypes.Lhs == PdVmValueType.Int && operandTypes.Rhs == PdVmValueType.Int)
+                {
+                    EmitPopIntPair(il, typedTemps);
+                    il.Emit(OpCodes.Ldarg_0);
+                    il.Emit(OpCodes.Ldloc, typedTemps.Int0);
+                    il.Emit(OpCodes.Ldloc, typedTemps.Int1);
+                    il.Emit(OpCodes.Sub);
+                    EmitPushValueFromFactory(il, ValueFromIntMethod);
+                    return true;
+                }
+
+                if (operandTypes.Lhs == PdVmValueType.Float && operandTypes.Rhs == PdVmValueType.Float)
+                {
+                    EmitPopFloatPair(il, typedTemps);
+                    il.Emit(OpCodes.Ldarg_0);
+                    il.Emit(OpCodes.Ldloc, typedTemps.Float0);
+                    il.Emit(OpCodes.Ldloc, typedTemps.Float1);
+                    il.Emit(OpCodes.Sub);
+                    EmitPushValueFromFactory(il, ValueFromFloatMethod);
+                    return true;
+                }
+
+                return false;
+            case PdVmBytecodeOpCode.Mul:
+                if (operandTypes.Lhs == PdVmValueType.Int && operandTypes.Rhs == PdVmValueType.Int)
+                {
+                    EmitPopIntPair(il, typedTemps);
+                    il.Emit(OpCodes.Ldarg_0);
+                    il.Emit(OpCodes.Ldloc, typedTemps.Int0);
+                    il.Emit(OpCodes.Ldloc, typedTemps.Int1);
+                    il.Emit(OpCodes.Mul);
+                    EmitPushValueFromFactory(il, ValueFromIntMethod);
+                    return true;
+                }
+
+                if (operandTypes.Lhs == PdVmValueType.Float && operandTypes.Rhs == PdVmValueType.Float)
+                {
+                    EmitPopFloatPair(il, typedTemps);
+                    il.Emit(OpCodes.Ldarg_0);
+                    il.Emit(OpCodes.Ldloc, typedTemps.Float0);
+                    il.Emit(OpCodes.Ldloc, typedTemps.Float1);
+                    il.Emit(OpCodes.Mul);
+                    EmitPushValueFromFactory(il, ValueFromFloatMethod);
+                    return true;
+                }
+
+                return false;
+            case PdVmBytecodeOpCode.Div:
+                if (operandTypes.Lhs == PdVmValueType.Int && operandTypes.Rhs == PdVmValueType.Int)
+                {
+                    EmitPopIntPair(il, typedTemps);
+                    EmitGuardIntDivisorNotZero(il, typedTemps.Int1, "division by zero");
+                    EmitGuardIntMinValueOverflow(il, typedTemps.Int0, typedTemps.Int1, "integer overflow in division");
+                    il.Emit(OpCodes.Ldarg_0);
+                    il.Emit(OpCodes.Ldloc, typedTemps.Int0);
+                    il.Emit(OpCodes.Ldloc, typedTemps.Int1);
+                    il.Emit(OpCodes.Div);
+                    EmitPushValueFromFactory(il, ValueFromIntMethod);
+                    return true;
+                }
+
+                if (operandTypes.Lhs == PdVmValueType.Float && operandTypes.Rhs == PdVmValueType.Float)
+                {
+                    EmitPopFloatPair(il, typedTemps);
+                    il.Emit(OpCodes.Ldarg_0);
+                    il.Emit(OpCodes.Ldloc, typedTemps.Float0);
+                    il.Emit(OpCodes.Ldloc, typedTemps.Float1);
+                    il.Emit(OpCodes.Div);
+                    EmitPushValueFromFactory(il, ValueFromFloatMethod);
+                    return true;
+                }
+
+                return false;
+            case PdVmBytecodeOpCode.Mod:
+                if (operandTypes.Lhs == PdVmValueType.Int && operandTypes.Rhs == PdVmValueType.Int)
+                {
+                    EmitPopIntPair(il, typedTemps);
+                    EmitGuardIntDivisorNotZero(il, typedTemps.Int1, "division by zero");
+                    EmitGuardIntMinValueOverflow(il, typedTemps.Int0, typedTemps.Int1, "integer overflow in remainder");
+                    il.Emit(OpCodes.Ldarg_0);
+                    il.Emit(OpCodes.Ldloc, typedTemps.Int0);
+                    il.Emit(OpCodes.Ldloc, typedTemps.Int1);
+                    il.Emit(OpCodes.Rem);
+                    EmitPushValueFromFactory(il, ValueFromIntMethod);
+                    return true;
+                }
+
+                if (operandTypes.Lhs == PdVmValueType.Float && operandTypes.Rhs == PdVmValueType.Float)
+                {
+                    EmitPopFloatPair(il, typedTemps);
+                    il.Emit(OpCodes.Ldarg_0);
+                    il.Emit(OpCodes.Ldloc, typedTemps.Float0);
+                    il.Emit(OpCodes.Ldloc, typedTemps.Float1);
+                    il.Emit(OpCodes.Rem);
+                    EmitPushValueFromFactory(il, ValueFromFloatMethod);
+                    return true;
+                }
+
+                return false;
+            case PdVmBytecodeOpCode.Neg:
+                if (operandTypes.Lhs == PdVmValueType.Int)
+                {
+                    EmitPopInt(il, typedTemps.Int0);
+                    il.Emit(OpCodes.Ldarg_0);
+                    il.Emit(OpCodes.Ldloc, typedTemps.Int0);
+                    il.Emit(OpCodes.Neg);
+                    EmitPushValueFromFactory(il, ValueFromIntMethod);
+                    return true;
+                }
+
+                if (operandTypes.Lhs == PdVmValueType.Float)
+                {
+                    EmitPopFloat(il, typedTemps.Float0);
+                    il.Emit(OpCodes.Ldarg_0);
+                    il.Emit(OpCodes.Ldloc, typedTemps.Float0);
+                    il.Emit(OpCodes.Neg);
+                    EmitPushValueFromFactory(il, ValueFromFloatMethod);
+                    return true;
+                }
+
+                return false;
+            case PdVmBytecodeOpCode.Ceq:
+                if (operandTypes.Lhs == PdVmValueType.Int && operandTypes.Rhs == PdVmValueType.Int)
+                {
+                    EmitPopIntPair(il, typedTemps);
+                    il.Emit(OpCodes.Ldarg_0);
+                    il.Emit(OpCodes.Ldloc, typedTemps.Int0);
+                    il.Emit(OpCodes.Ldloc, typedTemps.Int1);
+                    il.Emit(OpCodes.Ceq);
+                    EmitPushValueFromFactory(il, ValueFromBoolMethod);
+                    return true;
+                }
+
+                if (operandTypes.Lhs == PdVmValueType.Float && operandTypes.Rhs == PdVmValueType.Float)
+                {
+                    EmitPopFloatPair(il, typedTemps);
+                    il.Emit(OpCodes.Ldarg_0);
+                    il.Emit(OpCodes.Ldloc, typedTemps.Float0);
+                    il.Emit(OpCodes.Ldloc, typedTemps.Float1);
+                    il.Emit(OpCodes.Ceq);
+                    EmitPushValueFromFactory(il, ValueFromBoolMethod);
+                    return true;
+                }
+
+                if (operandTypes.Lhs == PdVmValueType.Bool && operandTypes.Rhs == PdVmValueType.Bool)
+                {
+                    EmitPopBoolPair(il, typedTemps);
+                    il.Emit(OpCodes.Ldarg_0);
+                    il.Emit(OpCodes.Ldloc, typedTemps.Bool0);
+                    il.Emit(OpCodes.Ldloc, typedTemps.Bool1);
+                    il.Emit(OpCodes.Ceq);
+                    EmitPushValueFromFactory(il, ValueFromBoolMethod);
+                    return true;
+                }
+
+                if (operandTypes.Lhs == PdVmValueType.String && operandTypes.Rhs == PdVmValueType.String)
+                {
+                    EmitPopStringPair(il, typedTemps);
+                    il.Emit(OpCodes.Ldarg_0);
+                    il.Emit(OpCodes.Ldloc, typedTemps.String0);
+                    il.Emit(OpCodes.Ldloc, typedTemps.String1);
+                    EmitInt32(il, (int)StringComparison.Ordinal);
+                    il.Emit(OpCodes.Call, StringEqualsMethod);
+                    EmitPushValueFromFactory(il, ValueFromBoolMethod);
+                    return true;
+                }
+
+                return false;
+            case PdVmBytecodeOpCode.Clt:
+                if (operandTypes.Lhs == PdVmValueType.Int && operandTypes.Rhs == PdVmValueType.Int)
+                {
+                    EmitPopIntPair(il, typedTemps);
+                    il.Emit(OpCodes.Ldarg_0);
+                    il.Emit(OpCodes.Ldloc, typedTemps.Int0);
+                    il.Emit(OpCodes.Ldloc, typedTemps.Int1);
+                    il.Emit(OpCodes.Clt);
+                    EmitPushValueFromFactory(il, ValueFromBoolMethod);
+                    return true;
+                }
+
+                if (operandTypes.Lhs == PdVmValueType.Float && operandTypes.Rhs == PdVmValueType.Float)
+                {
+                    EmitPopFloatPair(il, typedTemps);
+                    il.Emit(OpCodes.Ldarg_0);
+                    il.Emit(OpCodes.Ldloc, typedTemps.Float0);
+                    il.Emit(OpCodes.Ldloc, typedTemps.Float1);
+                    il.Emit(OpCodes.Clt);
+                    EmitPushValueFromFactory(il, ValueFromBoolMethod);
+                    return true;
+                }
+
+                return false;
+            case PdVmBytecodeOpCode.Cgt:
+                if (operandTypes.Lhs == PdVmValueType.Int && operandTypes.Rhs == PdVmValueType.Int)
+                {
+                    EmitPopIntPair(il, typedTemps);
+                    il.Emit(OpCodes.Ldarg_0);
+                    il.Emit(OpCodes.Ldloc, typedTemps.Int0);
+                    il.Emit(OpCodes.Ldloc, typedTemps.Int1);
+                    il.Emit(OpCodes.Cgt);
+                    EmitPushValueFromFactory(il, ValueFromBoolMethod);
+                    return true;
+                }
+
+                if (operandTypes.Lhs == PdVmValueType.Float && operandTypes.Rhs == PdVmValueType.Float)
+                {
+                    EmitPopFloatPair(il, typedTemps);
+                    il.Emit(OpCodes.Ldarg_0);
+                    il.Emit(OpCodes.Ldloc, typedTemps.Float0);
+                    il.Emit(OpCodes.Ldloc, typedTemps.Float1);
+                    il.Emit(OpCodes.Cgt);
+                    EmitPushValueFromFactory(il, ValueFromBoolMethod);
+                    return true;
+                }
+
+                return false;
+            case PdVmBytecodeOpCode.Shl:
+                if (operandTypes.Lhs == PdVmValueType.Int && operandTypes.Rhs == PdVmValueType.Int)
+                {
+                    EmitPopIntPair(il, typedTemps);
+                    EmitLoadValidatedShiftAmount(il, typedTemps);
+                    il.Emit(OpCodes.Ldarg_0);
+                    il.Emit(OpCodes.Ldloc, typedTemps.Int0);
+                    il.Emit(OpCodes.Ldloc, typedTemps.ShiftAmount);
+                    il.Emit(OpCodes.Shl);
+                    EmitPushValueFromFactory(il, ValueFromIntMethod);
+                    return true;
+                }
+
+                return false;
+            case PdVmBytecodeOpCode.Shr:
+                if (operandTypes.Lhs == PdVmValueType.Int && operandTypes.Rhs == PdVmValueType.Int)
+                {
+                    EmitPopIntPair(il, typedTemps);
+                    EmitLoadValidatedShiftAmount(il, typedTemps);
+                    il.Emit(OpCodes.Ldarg_0);
+                    il.Emit(OpCodes.Ldloc, typedTemps.Int0);
+                    il.Emit(OpCodes.Ldloc, typedTemps.ShiftAmount);
+                    il.Emit(OpCodes.Shr);
+                    EmitPushValueFromFactory(il, ValueFromIntMethod);
+                    return true;
+                }
+
+                return false;
+            case PdVmBytecodeOpCode.Lshr:
+                if (operandTypes.Lhs == PdVmValueType.Int && operandTypes.Rhs == PdVmValueType.Int)
+                {
+                    EmitPopIntPair(il, typedTemps);
+                    EmitLoadValidatedShiftAmount(il, typedTemps);
+                    il.Emit(OpCodes.Ldarg_0);
+                    il.Emit(OpCodes.Ldloc, typedTemps.Int0);
+                    il.Emit(OpCodes.Ldloc, typedTemps.ShiftAmount);
+                    il.Emit(OpCodes.Shr_Un);
+                    EmitPushValueFromFactory(il, ValueFromIntMethod);
+                    return true;
+                }
+
+                return false;
+            case PdVmBytecodeOpCode.And:
+                if (operandTypes.Lhs == PdVmValueType.Bool && operandTypes.Rhs == PdVmValueType.Bool)
+                {
+                    EmitPopBoolPair(il, typedTemps);
+                    il.Emit(OpCodes.Ldarg_0);
+                    il.Emit(OpCodes.Ldloc, typedTemps.Bool0);
+                    il.Emit(OpCodes.Ldloc, typedTemps.Bool1);
+                    il.Emit(OpCodes.And);
+                    EmitPushValueFromFactory(il, ValueFromBoolMethod);
+                    return true;
+                }
+
+                return false;
+            case PdVmBytecodeOpCode.Or:
+                if (operandTypes.Lhs == PdVmValueType.Bool && operandTypes.Rhs == PdVmValueType.Bool)
+                {
+                    EmitPopBoolPair(il, typedTemps);
+                    il.Emit(OpCodes.Ldarg_0);
+                    il.Emit(OpCodes.Ldloc, typedTemps.Bool0);
+                    il.Emit(OpCodes.Ldloc, typedTemps.Bool1);
+                    il.Emit(OpCodes.Or);
+                    EmitPushValueFromFactory(il, ValueFromBoolMethod);
+                    return true;
+                }
+
+                return false;
+            case PdVmBytecodeOpCode.Not:
+                if (operandTypes.Lhs == PdVmValueType.Bool)
+                {
+                    EmitPopBool(il, typedTemps.Bool0);
+                    il.Emit(OpCodes.Ldarg_0);
+                    il.Emit(OpCodes.Ldloc, typedTemps.Bool0);
+                    il.Emit(OpCodes.Ldc_I4_0);
+                    il.Emit(OpCodes.Ceq);
+                    EmitPushValueFromFactory(il, ValueFromBoolMethod);
+                    return true;
+                }
+
+                return false;
+            default:
+                return false;
+        }
+    }
+
+    private static PdVmOperandTypes GetOperandTypes(PdVmProgramModel program, int offset)
+    {
+        if (program.TypeMap is not null &&
+            program.TypeMap.OperandTypes.TryGetValue(offset, out var operandTypes))
+        {
+            return operandTypes;
+        }
+
+        return new PdVmOperandTypes(PdVmValueType.Unknown, PdVmValueType.Unknown);
+    }
+
+    private static void EmitPopIntPair(ILGenerator il, PdVmTypedTemps typedTemps)
+    {
+        EmitPopInt(il, typedTemps.Int1);
+        EmitPopInt(il, typedTemps.Int0);
+    }
+
+    private static void EmitPopInt(ILGenerator il, LocalBuilder destination)
+    {
+        il.Emit(OpCodes.Ldarg_0);
+        il.Emit(OpCodes.Call, PopValueMethod);
+        il.Emit(OpCodes.Call, ValueAsIntMethod);
+        il.Emit(OpCodes.Stloc, destination);
+    }
+
+    private static void EmitPopFloatPair(ILGenerator il, PdVmTypedTemps typedTemps)
+    {
+        EmitPopFloat(il, typedTemps.Float1);
+        EmitPopFloat(il, typedTemps.Float0);
+    }
+
+    private static void EmitPopFloat(ILGenerator il, LocalBuilder destination)
+    {
+        il.Emit(OpCodes.Ldarg_0);
+        il.Emit(OpCodes.Call, PopValueMethod);
+        il.Emit(OpCodes.Call, ValueAsFloatMethod);
+        il.Emit(OpCodes.Stloc, destination);
+    }
+
+    private static void EmitPopBoolPair(ILGenerator il, PdVmTypedTemps typedTemps)
+    {
+        EmitPopBool(il, typedTemps.Bool1);
+        EmitPopBool(il, typedTemps.Bool0);
+    }
+
+    private static void EmitPopBool(ILGenerator il, LocalBuilder destination)
+    {
+        il.Emit(OpCodes.Ldarg_0);
+        il.Emit(OpCodes.Call, PopBoolMethod);
+        il.Emit(OpCodes.Stloc, destination);
+    }
+
+    private static void EmitPopStringPair(ILGenerator il, PdVmTypedTemps typedTemps)
+    {
+        EmitPopString(il, typedTemps.String1);
+        EmitPopString(il, typedTemps.String0);
+    }
+
+    private static void EmitPopString(ILGenerator il, LocalBuilder destination)
+    {
+        il.Emit(OpCodes.Ldarg_0);
+        il.Emit(OpCodes.Call, PopValueMethod);
+        il.Emit(OpCodes.Call, ValueAsStringMethod);
+        il.Emit(OpCodes.Stloc, destination);
+    }
+
+    private static void EmitLoadValidatedShiftAmount(ILGenerator il, PdVmTypedTemps typedTemps)
+    {
+        il.Emit(OpCodes.Ldloc, typedTemps.Int1);
+        il.Emit(OpCodes.Call, ValidateShiftAmountMethod);
+        il.Emit(OpCodes.Stloc, typedTemps.ShiftAmount);
+    }
+
+    private static void EmitGuardIntDivisorNotZero(ILGenerator il, LocalBuilder divisor, string message)
+    {
+        var safeLabel = il.DefineLabel();
+        il.Emit(OpCodes.Ldloc, divisor);
+        il.Emit(OpCodes.Ldc_I8, 0L);
+        il.Emit(OpCodes.Bne_Un, safeLabel);
+        EmitThrowInvalidOperation(il, message);
+        il.MarkLabel(safeLabel);
+    }
+
+    private static void EmitGuardIntMinValueOverflow(
+        ILGenerator il,
+        LocalBuilder dividend,
+        LocalBuilder divisor,
+        string message)
+    {
+        var safeLabel = il.DefineLabel();
+        il.Emit(OpCodes.Ldloc, dividend);
+        il.Emit(OpCodes.Ldc_I8, long.MinValue);
+        il.Emit(OpCodes.Bne_Un, safeLabel);
+        il.Emit(OpCodes.Ldloc, divisor);
+        il.Emit(OpCodes.Ldc_I8, -1L);
+        il.Emit(OpCodes.Bne_Un, safeLabel);
+        EmitThrowInvalidOperation(il, message);
+        il.MarkLabel(safeLabel);
+    }
+
+    private static void EmitPushValueFromFactory(ILGenerator il, MethodInfo factoryMethod)
+    {
+        il.Emit(OpCodes.Call, factoryMethod);
+        il.Emit(OpCodes.Call, PushValueMethod);
+    }
+
     private static void EmitCallInstruction(
         ILGenerator il,
         FieldBuilder importsField,
         PdVmInstruction instruction,
+        LocalBuilder executedInstructionsLocal,
         LocalBuilder tmp0,
         LocalBuilder tmp1,
         LocalBuilder tmp2)
@@ -420,7 +970,6 @@ public static class PdVmClrCompiler
                 il.Emit(OpCodes.Call, intrinsic.Method);
             }
 
-            EmitAdvanceAndYield(il, instruction.NextOffset);
             return;
         }
 
@@ -434,13 +983,8 @@ public static class PdVmClrCompiler
         EmitInt32(il, instruction.NextOffset);
         il.Emit(OpCodes.Call, DispatchCallMethod);
         il.Emit(OpCodes.Brfalse, continueLabel);
-        il.Emit(OpCodes.Ldarg_0);
-        il.Emit(OpCodes.Call, GetLastStatusMethod);
-        il.Emit(OpCodes.Ret);
+        EmitReturnStatus(il, executedInstructionsLocal, GetLastStatusMethod);
         il.MarkLabel(continueLabel);
-        il.Emit(OpCodes.Ldarg_0);
-        il.Emit(OpCodes.Call, YieldProgramMethod);
-        il.Emit(OpCodes.Ret);
     }
 
     private static void EmitPopArgs(
@@ -487,14 +1031,52 @@ public static class PdVmClrCompiler
         }
     }
 
-    private static void EmitAdvanceAndYield(ILGenerator il, int nextOffset)
+    private static void EmitInstructionPrefix(
+        ILGenerator il,
+        LocalBuilder executedInstructionsLocal,
+        int offset)
+    {
+        il.Emit(OpCodes.Ldloc, executedInstructionsLocal);
+        il.Emit(OpCodes.Ldc_I4_1);
+        il.Emit(OpCodes.Add);
+        il.Emit(OpCodes.Stloc, executedInstructionsLocal);
+    }
+
+    private static void EmitTransfer(
+        ILGenerator il,
+        IReadOnlyDictionary<int, Label> labels,
+        LocalBuilder executedInstructionsLocal,
+        int currentOffset,
+        int targetOffset)
+    {
+        if (targetOffset > currentOffset)
+        {
+            il.Emit(OpCodes.Br, labels[targetOffset]);
+            return;
+        }
+
+        il.Emit(OpCodes.Ldarg_0);
+        EmitInt32(il, targetOffset);
+        il.Emit(OpCodes.Call, SetInstructionPointerMethod);
+        EmitReturnStatus(il, executedInstructionsLocal, YieldProgramMethod);
+    }
+
+    private static void EmitReturnStatus(
+        ILGenerator il,
+        LocalBuilder executedInstructionsLocal,
+        MethodInfo statusMethod)
+    {
+        EmitCommitExecutedInstructions(il, executedInstructionsLocal);
+        il.Emit(OpCodes.Ldarg_0);
+        il.Emit(OpCodes.Call, statusMethod);
+        il.Emit(OpCodes.Ret);
+    }
+
+    private static void EmitCommitExecutedInstructions(ILGenerator il, LocalBuilder executedInstructionsLocal)
     {
         il.Emit(OpCodes.Ldarg_0);
-        EmitInt32(il, nextOffset);
-        il.Emit(OpCodes.Call, SetInstructionPointerMethod);
-        il.Emit(OpCodes.Ldarg_0);
-        il.Emit(OpCodes.Call, YieldProgramMethod);
-        il.Emit(OpCodes.Ret);
+        il.Emit(OpCodes.Ldloc, executedInstructionsLocal);
+        il.Emit(OpCodes.Call, AddExecutedInstructionsMethod);
     }
 
     private static void EmitConstant(ILGenerator il, PdVmValue value)
@@ -543,6 +1125,13 @@ public static class PdVmClrCompiler
     private static void EmitThrowInvalidInstructionPointer(ILGenerator il)
     {
         il.Emit(OpCodes.Ldstr, "invalid instruction pointer");
+        il.Emit(OpCodes.Newobj, InvalidOperationConstructor);
+        il.Emit(OpCodes.Throw);
+    }
+
+    private static void EmitThrowInvalidOperation(ILGenerator il, string message)
+    {
+        il.Emit(OpCodes.Ldstr, message);
         il.Emit(OpCodes.Newobj, InvalidOperationConstructor);
         il.Emit(OpCodes.Throw);
     }

@@ -175,6 +175,51 @@ public static class PdVmBuiltins
     public static PdVmValue BytesToArrayU8Value(PdVmValue value) =>
         PdVmValue.FromArray(value.AsBytes().Select(item => PdVmValue.FromInt(item)));
 
+    public static PdVmValue IoOpenValue(PdVmValue path, PdVmValue mode) =>
+        PdVmBuiltinIo.Open(path.AsString(), mode.AsString());
+
+    public static PdVmValue IoPopenValue(PdVmValue command, PdVmValue mode) =>
+        PdVmBuiltinIo.Popen(command.AsString(), mode.AsString());
+
+    public static PdVmValue IoReadAllValue(PdVmValue handleId) =>
+        PdVmBuiltinIo.ReadAll(handleId.AsInt());
+
+    public static PdVmValue IoReadLineValue(PdVmValue handleId) =>
+        PdVmBuiltinIo.ReadLine(handleId.AsInt());
+
+    public static PdVmValue IoWriteValue(PdVmValue handleId, PdVmValue text) =>
+        PdVmBuiltinIo.Write(handleId.AsInt(), text.AsString());
+
+    public static PdVmValue IoFlushValue(PdVmValue handleId) =>
+        PdVmBuiltinIo.Flush(handleId.AsInt());
+
+    public static PdVmValue IoCloseValue(PdVmValue handleId) =>
+        PdVmBuiltinIo.Close(handleId.AsInt());
+
+    public static PdVmValue IoExistsValue(PdVmValue path) =>
+        PdVmBuiltinIo.Exists(path.AsString());
+
+    public static PdVmValue ReMatchValue(PdVmValue pattern, PdVmValue input) =>
+        DispatchRegexMatch(new[] { pattern, input });
+
+    public static PdVmValue ReFindValue(PdVmValue pattern, PdVmValue input) =>
+        DispatchRegexFind(new[] { pattern, input });
+
+    public static PdVmValue ReReplaceValue(PdVmValue pattern, PdVmValue input, PdVmValue replacement) =>
+        DispatchRegexReplace(new[] { pattern, input, replacement });
+
+    public static PdVmValue ReSplitValue(PdVmValue pattern, PdVmValue input) =>
+        DispatchRegexSplit(new[] { pattern, input });
+
+    public static PdVmValue ReCapturesValue(PdVmValue pattern, PdVmValue input) =>
+        DispatchRegexCaptures(new[] { pattern, input });
+
+    public static PdVmValue JsonEncodeValue(PdVmValue value) =>
+        PdVmValue.FromString(PdVmBuiltinJson.Encode(value));
+
+    public static PdVmValue JsonDecodeValue(PdVmValue value) =>
+        PdVmBuiltinJson.Decode(value.AsString());
+
     public static ushort GetCallIndex(PdVmBuiltin builtin)
     {
         return builtin switch

@@ -113,6 +113,8 @@ Optional execution cap:
 dotnet run --project pd-vm-clr\PdVm.Runner -- run output.dll --max-steps 1000000
 ```
 
+`--max-steps` is still supported. It caps executed VM instructions, but enforcement happens when control returns to the runtime: halt, host-call boundaries, async waits, or backward-branch safepoints.
+
 ## Run The Minimal HTTP Proxy
 
 Run with a precompiled `VMBC` program:

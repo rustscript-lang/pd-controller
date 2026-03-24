@@ -277,6 +277,16 @@ public sealed class PdVmValue : IEquatable<PdVmValue>
         return IntValue;
     }
 
+    public double AsFloat()
+    {
+        if (Kind != PdVmValueKind.Float)
+        {
+            throw new InvalidOperationException($"expected float, got {Kind}");
+        }
+
+        return FloatValue;
+    }
+
     public bool AsBool()
     {
         if (Kind != PdVmValueKind.Bool)

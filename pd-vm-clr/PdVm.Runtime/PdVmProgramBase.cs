@@ -6,6 +6,7 @@ public abstract class PdVmProgramBase : IPdVmProgram
     private readonly PdVmValue[] _locals;
     private PdVmStatus _lastStatus = PdVmStatus.Halted();
     private ulong? _pendingOpId;
+    private long _executedInstructionCount;
 
     protected PdVmProgramBase(int localCount)
     {
@@ -22,6 +23,8 @@ public abstract class PdVmProgramBase : IPdVmProgram
     public IReadOnlyList<PdVmValue> Locals => _locals;
 
     public int InstructionPointer { get; private set; }
+
+    public long ExecutedInstructionCount => _executedInstructionCount;
 
     public abstract PdVmStatus RunStep(IPdVmHost host);
 
@@ -52,6 +55,16 @@ public abstract class PdVmProgramBase : IPdVmProgram
     }
 
     protected void SetInstructionPointer(int instructionPointer) => InstructionPointer = instructionPointer;
+
+    protected void AddExecutedInstructions(int count)
+    {
+        if (count < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(count));
+        }
+
+        _executedInstructionCount += count;
+    }
 
     protected PdVmStatus GetLastStatus() => _lastStatus;
 
@@ -188,6 +201,7 @@ public abstract class PdVmProgramBase : IPdVmProgram
                 InstructionPointer = nextIp;
                 return false;
             case PdVmCallOutcomeKind.Halt:
+                InstructionPointer = callIp;
                 _lastStatus = PdVmStatus.Halted();
                 return true;
             case PdVmCallOutcomeKind.Yield:

@@ -41,6 +41,23 @@ public sealed record PdVmInstruction(
     ushort? CallIndex = null,
     byte? ArgCount = null);
 
+public readonly record struct PdVmOperandTypes(PdVmValueType Lhs, PdVmValueType Rhs);
+
+public sealed class PdVmTypeMap
+{
+    public PdVmTypeMap(
+        IReadOnlyList<PdVmValueType> localTypes,
+        IReadOnlyDictionary<int, PdVmOperandTypes> operandTypes)
+    {
+        LocalTypes = localTypes ?? throw new ArgumentNullException(nameof(localTypes));
+        OperandTypes = operandTypes ?? throw new ArgumentNullException(nameof(operandTypes));
+    }
+
+    public IReadOnlyList<PdVmValueType> LocalTypes { get; }
+
+    public IReadOnlyDictionary<int, PdVmOperandTypes> OperandTypes { get; }
+}
+
 public sealed class PdVmProgramModel
 {
     public PdVmProgramModel(
@@ -48,13 +65,15 @@ public sealed class PdVmProgramModel
         byte[] code,
         int localCount,
         IReadOnlyList<PdVmHostImport> imports,
-        IReadOnlyList<PdVmInstruction> instructions)
+        IReadOnlyList<PdVmInstruction> instructions,
+        PdVmTypeMap? typeMap = null)
     {
         Constants = constants ?? throw new ArgumentNullException(nameof(constants));
         Code = code ?? throw new ArgumentNullException(nameof(code));
         LocalCount = localCount;
         Imports = imports ?? throw new ArgumentNullException(nameof(imports));
         Instructions = instructions ?? throw new ArgumentNullException(nameof(instructions));
+        TypeMap = typeMap;
     }
 
     public IReadOnlyList<PdVmValue> Constants { get; }
@@ -66,4 +85,6 @@ public sealed class PdVmProgramModel
     public IReadOnlyList<PdVmHostImport> Imports { get; }
 
     public IReadOnlyList<PdVmInstruction> Instructions { get; }
+
+    public PdVmTypeMap? TypeMap { get; }
 }

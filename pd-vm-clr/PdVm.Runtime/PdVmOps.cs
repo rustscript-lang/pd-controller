@@ -171,18 +171,28 @@ public static class PdVmOps
 
     public static PdVmValue Shl(PdVmValue lhs, PdVmValue rhs)
     {
-        return PdVmValue.FromInt(unchecked(lhs.AsInt() << GetShiftAmount(rhs)));
+        return PdVmValue.FromInt(unchecked(lhs.AsInt() << ValidateShiftAmount(rhs.AsInt())));
     }
 
     public static PdVmValue Shr(PdVmValue lhs, PdVmValue rhs)
     {
-        return PdVmValue.FromInt(unchecked(lhs.AsInt() >> GetShiftAmount(rhs)));
+        return PdVmValue.FromInt(unchecked(lhs.AsInt() >> ValidateShiftAmount(rhs.AsInt())));
     }
 
     public static PdVmValue Lshr(PdVmValue lhs, PdVmValue rhs)
     {
-        var amount = GetShiftAmount(rhs);
+        var amount = ValidateShiftAmount(rhs.AsInt());
         return PdVmValue.FromInt(unchecked((long)((ulong)lhs.AsInt() >> amount)));
+    }
+
+    public static int ValidateShiftAmount(long amount)
+    {
+        if (amount < 0 || amount > 63)
+        {
+            throw new InvalidOperationException($"invalid shift amount {amount}, expected 0..63");
+        }
+
+        return (int)amount;
     }
 
     public static PdVmValue And(PdVmValue lhs, PdVmValue rhs) => PdVmValue.FromBool(lhs.AsBool() && rhs.AsBool());
@@ -217,14 +227,4 @@ public static class PdVmOps
         }
     }
 
-    private static int GetShiftAmount(PdVmValue value)
-    {
-        var amount = value.AsInt();
-        if (amount < 0 || amount > 63)
-        {
-            throw new InvalidOperationException($"invalid shift amount {amount}, expected 0..63");
-        }
-
-        return (int)amount;
-    }
 }

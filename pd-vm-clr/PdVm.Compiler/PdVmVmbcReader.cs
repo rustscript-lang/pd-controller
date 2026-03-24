@@ -66,7 +66,7 @@ public static class PdVmVmbcReader
             imports.Add(new PdVmHostImport(name, arity, returnType));
         }
 
-        SkipTypeMap(ref cursor);
+        var typeMap = ReadTypeMap(ref cursor);
         SkipDebugInfo(ref cursor);
 
         if (!cursor.IsEof)
@@ -75,8 +75,8 @@ public static class PdVmVmbcReader
         }
 
         var instructions = DecodeInstructions(code, constants.Count, imports);
-        var localCount = InferLocalCount(instructions);
-        return new PdVmProgramModel(constants, code, localCount, imports, instructions);
+        var localCount = Math.Max(InferLocalCount(instructions), typeMap?.LocalTypes.Count ?? 0);
+        return new PdVmProgramModel(constants, code, localCount, imports, instructions, typeMap);
     }
 
     private static PdVmValue ReadConstant(ref Cursor cursor)
@@ -256,29 +256,32 @@ public static class PdVmVmbcReader
         throw new PdVmCompilerException($"invalid opcode 0x{raw:X2}");
     }
 
-    private static void SkipTypeMap(ref Cursor cursor)
+    private static PdVmTypeMap? ReadTypeMap(ref Cursor cursor)
     {
         switch (cursor.ReadByte())
         {
             case 0:
-                return;
+                return null;
             case 1:
             {
                 var localCount = checked((int)cursor.ReadUInt32());
+                var localTypes = new PdVmValueType[localCount];
                 for (var index = 0; index < localCount; index++)
                 {
-                    _ = ReadValueType(cursor.ReadByte());
+                    localTypes[index] = ReadValueType(cursor.ReadByte());
                 }
 
                 var operandCount = checked((int)cursor.ReadUInt32());
+                var operandTypes = new Dictionary<int, PdVmOperandTypes>(operandCount);
                 for (var index = 0; index < operandCount; index++)
                 {
-                    _ = cursor.ReadUInt32();
-                    _ = ReadValueType(cursor.ReadByte());
-                    _ = ReadValueType(cursor.ReadByte());
+                    var offset = checked((int)cursor.ReadUInt32());
+                    operandTypes[offset] = new PdVmOperandTypes(
+                        ReadValueType(cursor.ReadByte()),
+                        ReadValueType(cursor.ReadByte()));
                 }
 
-                return;
+                return new PdVmTypeMap(localTypes, operandTypes);
             }
             default:
                 throw new PdVmCompilerException("invalid type map flag in VMBC payload");

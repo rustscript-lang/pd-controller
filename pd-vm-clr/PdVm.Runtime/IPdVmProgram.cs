@@ -8,6 +8,8 @@ public interface IPdVmProgram
 
     int InstructionPointer { get; }
 
+    long ExecutedInstructionCount { get; }
+
     PdVmStatus RunStep(IPdVmHost host);
 
     void ResumePending(ulong opId, PdVmCallReturn returnValues);

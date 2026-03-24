@@ -9,13 +9,16 @@ public static class PdVmExecution
 {
     public static PdVmExecutionResult Run(IPdVmProgram program, IPdVmHost host, int maxSteps = 1_000_000)
     {
-        for (var steps = 1; steps <= maxSteps; steps++)
+        var executedSteps = 0;
+        while (executedSteps < maxSteps)
         {
+            var before = program.ExecutedInstructionCount;
             var status = program.RunStep(host);
+            executedSteps = CheckedAccumulateSteps(executedSteps, program, before, maxSteps);
             switch (status.Kind)
             {
                 case PdVmStatusKind.Halted:
-                    return new PdVmExecutionResult(status, steps);
+                    return new PdVmExecutionResult(status, executedSteps);
                 case PdVmStatusKind.Yielded:
                     continue;
                 case PdVmStatusKind.Waiting:
@@ -35,14 +38,17 @@ public static class PdVmExecution
         int maxSteps = 1_000_000,
         CancellationToken cancellationToken = default)
     {
-        for (var steps = 1; steps <= maxSteps; steps++)
+        var executedSteps = 0;
+        while (executedSteps < maxSteps)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            var before = program.ExecutedInstructionCount;
             var status = program.RunStep(host);
+            executedSteps = CheckedAccumulateSteps(executedSteps, program, before, maxSteps);
             switch (status.Kind)
             {
                 case PdVmStatusKind.Halted:
-                    return new PdVmExecutionResult(status, steps);
+                    return new PdVmExecutionResult(status, executedSteps);
                 case PdVmStatusKind.Yielded:
                     continue;
                 case PdVmStatusKind.Waiting:
@@ -55,6 +61,28 @@ public static class PdVmExecution
         }
 
         throw new InvalidOperationException($"execution exceeded {maxSteps} steps");
+    }
+
+    private static int CheckedAccumulateSteps(
+        int currentSteps,
+        IPdVmProgram program,
+        long before,
+        int maxSteps)
+    {
+        var delta = program.ExecutedInstructionCount - before;
+        if (delta <= 0 || delta > int.MaxValue)
+        {
+            throw new InvalidOperationException(
+                $"program reported an invalid executed instruction delta of {delta}");
+        }
+
+        var next = checked(currentSteps + (int)delta);
+        if (next > maxSteps)
+        {
+            throw new InvalidOperationException($"execution exceeded {maxSteps} steps");
+        }
+
+        return next;
     }
 }
 
