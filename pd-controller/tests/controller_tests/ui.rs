@@ -470,7 +470,7 @@ async fn ui_deploy_compiles_edge_stdlib_wrapper_blocks() {
     assert!(rustscript.contains("use edge::http::upstream as upstream;"));
     assert!(rustscript.contains("use edge::http::upstream::request as upstream_request;"));
     assert!(rustscript.contains("upstream_request::set_target(\"127.0.0.1\", 8088);"));
-    assert!(rustscript.contains("let upstream_stream = upstream::as_stream();"));
+    assert!(rustscript.contains("let upstream_stream: int = upstream::as_stream();"));
 
     handle.abort();
 }
@@ -661,7 +661,7 @@ async fn ui_render_extended_value_blocks_work_with_flow_graph() {
         "expected math add line, got: {rustscript}"
     );
     assert!(
-        rustscript.contains("let items = [];"),
+        rustscript.contains("let items: [string] = [];"),
         "expected array_new line, got: {rustscript}"
     );
     assert!(
@@ -1115,23 +1115,27 @@ async fn ui_render_extended_abi_blocks_generate_expected_calls() {
         .expect("rustscript source should be a string");
     assert!(rustscript.contains("use edge::http::upstream as upstream;"));
     assert!(rustscript.contains("use edge::http::upstream::response as upstream_response;"));
-    assert!(rustscript.contains("let exchange = vm::http::exchange::new();"));
+    assert!(rustscript.contains("let exchange: int = vm::http::exchange::new();"));
     assert!(rustscript.contains("vm::http::exchange::set_target(exchange, \"127.0.0.1:8080\");"));
     assert!(rustscript.contains("vm::http::exchange::send(exchange);"));
-    assert!(rustscript.contains("let exchange_status = vm::http::exchange::get_status(exchange);"));
-    assert!(rustscript.contains("let stream = vm::tcp::stream::new();"));
+    assert!(
+        rustscript.contains("let exchange_status: int = vm::http::exchange::get_status(exchange);")
+    );
+    assert!(rustscript.contains("let stream: int = vm::tcp::stream::new();"));
     assert!(rustscript.contains("vm::tcp::stream::set_target(stream, \"127.0.0.1:9000\");"));
-    assert!(rustscript.contains("let connected = vm::tcp::stream::connect(stream);"));
-    assert!(rustscript.contains("let session = vm::tls::session::from_socket(stream);"));
+    assert!(rustscript.contains("let connected: bool = vm::tcp::stream::connect(stream);"));
+    assert!(rustscript.contains("let session: int = vm::tls::session::from_socket(stream);"));
     assert!(rustscript.contains("vm::tls::session::set_verify(session, false);"));
-    assert!(rustscript.contains("let ws = vm::websocket::connection::new();"));
+    assert!(rustscript.contains("let ws: int = vm::websocket::connection::new();"));
     assert!(
         rustscript.contains("vm::websocket::connection::set_target(ws, \"ws://127.0.0.1:8081\");")
     );
-    assert!(rustscript.contains("let rtc = vm::webrtc::connection::new();"));
-    assert!(rustscript.contains("let udp = vm::udp::socket::new();"));
-    assert!(rustscript.contains("let proxy_exchange = vm::proxy::stream::exchange(exchange);"));
-    assert!(rustscript.contains("let upstream_proxy = upstream::as_stream();"));
+    assert!(rustscript.contains("let rtc: int = vm::webrtc::connection::new();"));
+    assert!(rustscript.contains("let udp: int = vm::udp::socket::new();"));
+    assert!(
+        rustscript.contains("let proxy_exchange: int = vm::proxy::stream::exchange(exchange);")
+    );
+    assert!(rustscript.contains("let upstream_proxy: int = upstream::as_stream();"));
     assert!(rustscript.contains("let upstream_all = upstream_response::read_all();"));
     if let Err(err) = edge::compile_edge_source_with_flavor(rustscript, SourceFlavor::RustScript) {
         panic!("expected rustscript ABI render to compile, got: {err}\nsource:\n{rustscript}");
@@ -1185,13 +1189,13 @@ async fn ui_render_extended_abi_flow_blocks_work_with_graph() {
         .as_str()
         .expect("rustscript source should be a string");
     let stream_pos = rustscript
-        .find("let stream = vm::tcp::stream::new();")
+        .find("let stream: int = vm::tcp::stream::new();")
         .expect("stream constructor should be rendered");
     let target_pos = rustscript
         .find("vm::tcp::stream::set_target(stream, \"127.0.0.1:9000\");")
         .expect("set_target should be rendered");
     let connect_pos = rustscript
-        .find("let connected = vm::tcp::stream::connect(stream);")
+        .find("let connected: bool = vm::tcp::stream::connect(stream);")
         .expect("connect should be rendered");
     let status_pos = rustscript
         .find("vm::http::response::set_status(204);")

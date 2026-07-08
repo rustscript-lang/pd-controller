@@ -14,6 +14,15 @@ macro_rules! push_value_assignment {
     }};
 }
 
+macro_rules! push_typed_value_assignment {
+    ($rss:expr, $js:expr, $lua:expr, $scm:expr, $var:expr, $rss_type:expr, $rss_expr:expr, $js_expr:expr, $lua_expr:expr, $scm_expr:expr $(,)?) => {{
+        $rss.push(format!("let {}: {} = {};", $var, $rss_type, $rss_expr));
+        $js.push(format!("let {} = {};", $var, $js_expr));
+        $lua.push(format!("local {} = {}", $var, $lua_expr));
+        $scm.push(format!("(define {} {})", $var, $scm_expr));
+    }};
+}
+
 pub(super) fn is_additional_pure_value_block(block_id: &str) -> bool {
     matches!(
         block_id,
@@ -186,12 +195,13 @@ fn render_additional_http_value_block(
     match block.block_id.as_str() {
         "http_exchange_new" => {
             let var = sanitize_identifier(block.values.get("var"), "exchange");
-            push_value_assignment!(
+            push_typed_value_assignment!(
                 rss,
                 js,
                 lua,
                 scm,
                 &var,
+                "int",
                 "vm::http::exchange::new()".to_string(),
                 "vm.http.exchange.new()".to_string(),
                 "vm.http.exchange.new()".to_string(),
@@ -201,12 +211,13 @@ fn render_additional_http_value_block(
         }
         "http_exchange_default_upstream" => {
             let var = sanitize_identifier(block.values.get("var"), "default_exchange");
-            push_value_assignment!(
+            push_typed_value_assignment!(
                 rss,
                 js,
                 lua,
                 scm,
                 &var,
+                "int",
                 "vm::http::exchange::default_upstream()".to_string(),
                 "vm.http.exchange.default_upstream()".to_string(),
                 "vm.http.exchange.default_upstream()".to_string(),
@@ -216,12 +227,13 @@ fn render_additional_http_value_block(
         }
         "http_upstream_as_stream" => {
             let var = sanitize_identifier(block.values.get("var"), "upstream_stream");
-            push_value_assignment!(
+            push_typed_value_assignment!(
                 rss,
                 js,
                 lua,
                 scm,
                 &var,
+                "int",
                 "upstream::as_stream()".to_string(),
                 "upstream.as_stream()".to_string(),
                 "upstream.as_stream()".to_string(),
@@ -319,12 +331,13 @@ fn render_additional_transport_value_block(
     match block.block_id.as_str() {
         "tcp_stream_downstream" => {
             let var = sanitize_identifier(block.values.get("var"), "downstream_stream");
-            push_value_assignment!(
+            push_typed_value_assignment!(
                 rss,
                 js,
                 lua,
                 scm,
                 &var,
+                "int",
                 "vm::tcp::stream::downstream()".to_string(),
                 "vm.tcp.stream.downstream()".to_string(),
                 "vm.tcp.stream.downstream()".to_string(),
@@ -334,12 +347,13 @@ fn render_additional_transport_value_block(
         }
         "tcp_stream_default_upstream" => {
             let var = sanitize_identifier(block.values.get("var"), "default_tcp_upstream");
-            push_value_assignment!(
+            push_typed_value_assignment!(
                 rss,
                 js,
                 lua,
                 scm,
                 &var,
+                "int",
                 "vm::tcp::stream::default_upstream()".to_string(),
                 "vm.tcp.stream.default_upstream()".to_string(),
                 "vm.tcp.stream.default_upstream()".to_string(),
@@ -349,12 +363,13 @@ fn render_additional_transport_value_block(
         }
         "tcp_stream_new" => {
             let var = sanitize_identifier(block.values.get("var"), "tcp_stream");
-            push_value_assignment!(
+            push_typed_value_assignment!(
                 rss,
                 js,
                 lua,
                 scm,
                 &var,
+                "int",
                 "vm::tcp::stream::new()".to_string(),
                 "vm.tcp.stream.new()".to_string(),
                 "vm.tcp.stream.new()".to_string(),
@@ -365,12 +380,13 @@ fn render_additional_transport_value_block(
         "tls_session_from_socket" => {
             let var = sanitize_identifier(block.values.get("var"), "tls_session");
             let stream = render_number_expr(block_value(block, "stream", "1"), "1");
-            push_value_assignment!(
+            push_typed_value_assignment!(
                 rss,
                 js,
                 lua,
                 scm,
                 &var,
+                "int",
                 format!("vm::tls::session::from_socket({stream})"),
                 format!("vm.tls.session.from_socket({stream})"),
                 format!("vm.tls.session.from_socket({stream})"),
@@ -392,12 +408,13 @@ fn render_additional_realtime_value_block(
     let handled = match block.block_id.as_str() {
         "websocket_connection_new" => {
             let var = sanitize_identifier(block.values.get("var"), "ws_conn");
-            push_value_assignment!(
+            push_typed_value_assignment!(
                 rss,
                 js,
                 lua,
                 scm,
                 &var,
+                "int",
                 "vm::websocket::connection::new()".to_string(),
                 "vm.websocket.connection.new()".to_string(),
                 "vm.websocket.connection.new()".to_string(),
@@ -407,12 +424,13 @@ fn render_additional_realtime_value_block(
         }
         "websocket_connection_downstream" => {
             let var = sanitize_identifier(block.values.get("var"), "ws_downstream");
-            push_value_assignment!(
+            push_typed_value_assignment!(
                 rss,
                 js,
                 lua,
                 scm,
                 &var,
+                "int",
                 "vm::websocket::connection::downstream()".to_string(),
                 "vm.websocket.connection.downstream()".to_string(),
                 "vm.websocket.connection.downstream()".to_string(),
@@ -422,12 +440,13 @@ fn render_additional_realtime_value_block(
         }
         "websocket_connection_default_upstream" => {
             let var = sanitize_identifier(block.values.get("var"), "ws_default_upstream");
-            push_value_assignment!(
+            push_typed_value_assignment!(
                 rss,
                 js,
                 lua,
                 scm,
                 &var,
+                "int",
                 "vm::websocket::connection::default_upstream()".to_string(),
                 "vm.websocket.connection.default_upstream()".to_string(),
                 "vm.websocket.connection.default_upstream()".to_string(),
@@ -437,12 +456,13 @@ fn render_additional_realtime_value_block(
         }
         "webrtc_connection_new" => {
             let var = sanitize_identifier(block.values.get("var"), "webrtc_conn");
-            push_value_assignment!(
+            push_typed_value_assignment!(
                 rss,
                 js,
                 lua,
                 scm,
                 &var,
+                "int",
                 "vm::webrtc::connection::new()".to_string(),
                 "vm.webrtc.connection.new()".to_string(),
                 "vm.webrtc.connection.new()".to_string(),
@@ -452,12 +472,13 @@ fn render_additional_realtime_value_block(
         }
         "webrtc_connection_downstream" => {
             let var = sanitize_identifier(block.values.get("var"), "webrtc_downstream");
-            push_value_assignment!(
+            push_typed_value_assignment!(
                 rss,
                 js,
                 lua,
                 scm,
                 &var,
+                "int",
                 "vm::webrtc::connection::downstream()".to_string(),
                 "vm.webrtc.connection.downstream()".to_string(),
                 "vm.webrtc.connection.downstream()".to_string(),
@@ -467,12 +488,13 @@ fn render_additional_realtime_value_block(
         }
         "webrtc_connection_default_upstream" => {
             let var = sanitize_identifier(block.values.get("var"), "webrtc_default_upstream");
-            push_value_assignment!(
+            push_typed_value_assignment!(
                 rss,
                 js,
                 lua,
                 scm,
                 &var,
+                "int",
                 "vm::webrtc::connection::default_upstream()".to_string(),
                 "vm.webrtc.connection.default_upstream()".to_string(),
                 "vm.webrtc.connection.default_upstream()".to_string(),
@@ -482,12 +504,13 @@ fn render_additional_realtime_value_block(
         }
         "udp_socket_new" => {
             let var = sanitize_identifier(block.values.get("var"), "udp_socket");
-            push_value_assignment!(
+            push_typed_value_assignment!(
                 rss,
                 js,
                 lua,
                 scm,
                 &var,
+                "int",
                 "vm::udp::socket::new()".to_string(),
                 "vm.udp.socket.new()".to_string(),
                 "vm.udp.socket.new()".to_string(),
@@ -497,12 +520,13 @@ fn render_additional_realtime_value_block(
         }
         "udp_socket_downstream" => {
             let var = sanitize_identifier(block.values.get("var"), "udp_downstream");
-            push_value_assignment!(
+            push_typed_value_assignment!(
                 rss,
                 js,
                 lua,
                 scm,
                 &var,
+                "int",
                 "vm::udp::socket::downstream()".to_string(),
                 "vm.udp.socket.downstream()".to_string(),
                 "vm.udp.socket.downstream()".to_string(),
@@ -512,12 +536,13 @@ fn render_additional_realtime_value_block(
         }
         "udp_socket_default_upstream" => {
             let var = sanitize_identifier(block.values.get("var"), "udp_default_upstream");
-            push_value_assignment!(
+            push_typed_value_assignment!(
                 rss,
                 js,
                 lua,
                 scm,
                 &var,
+                "int",
                 "vm::udp::socket::default_upstream()".to_string(),
                 "vm.udp.socket.default_upstream()".to_string(),
                 "vm.udp.socket.default_upstream()".to_string(),
@@ -540,12 +565,13 @@ fn render_additional_proxy_value_block(
     let handled = match block.block_id.as_str() {
         "proxy_stream_downstream" => {
             let var = sanitize_identifier(block.values.get("var"), "proxy_downstream");
-            push_value_assignment!(
+            push_typed_value_assignment!(
                 rss,
                 js,
                 lua,
                 scm,
                 &var,
+                "int",
                 "vm::proxy::stream::downstream()".to_string(),
                 "vm.proxy.stream.downstream()".to_string(),
                 "vm.proxy.stream.downstream()".to_string(),
@@ -556,12 +582,13 @@ fn render_additional_proxy_value_block(
         "proxy_stream_exchange" => {
             let var = sanitize_identifier(block.values.get("var"), "proxy_exchange_stream");
             let exchange = render_number_expr(block_value(block, "exchange", "1"), "1");
-            push_value_assignment!(
+            push_typed_value_assignment!(
                 rss,
                 js,
                 lua,
                 scm,
                 &var,
+                "int",
                 format!("vm::proxy::stream::exchange({exchange})"),
                 format!("vm.proxy.stream.exchange({exchange})"),
                 format!("vm.proxy.stream.exchange({exchange})"),
@@ -572,12 +599,13 @@ fn render_additional_proxy_value_block(
         "proxy_stream_from_tcp" => {
             let var = sanitize_identifier(block.values.get("var"), "proxy_tcp_stream");
             let stream = render_number_expr(block_value(block, "stream", "1"), "1");
-            push_value_assignment!(
+            push_typed_value_assignment!(
                 rss,
                 js,
                 lua,
                 scm,
                 &var,
+                "int",
                 format!("vm::proxy::stream::from_tcp({stream})"),
                 format!("vm.proxy.stream.from_tcp({stream})"),
                 format!("vm.proxy.stream.from_tcp({stream})"),
@@ -588,12 +616,13 @@ fn render_additional_proxy_value_block(
         "proxy_stream_from_tls_plaintext" => {
             let var = sanitize_identifier(block.values.get("var"), "proxy_tls_stream");
             let session = render_number_expr(block_value(block, "session", "1"), "1");
-            push_value_assignment!(
+            push_typed_value_assignment!(
                 rss,
                 js,
                 lua,
                 scm,
                 &var,
+                "int",
                 format!("vm::proxy::stream::from_tls_plaintext({session})"),
                 format!("vm.proxy.stream.from_tls_plaintext({session})"),
                 format!("vm.proxy.stream.from_tls_plaintext({session})"),
@@ -604,12 +633,13 @@ fn render_additional_proxy_value_block(
         "proxy_stream_from_websocket_binary" => {
             let var = sanitize_identifier(block.values.get("var"), "proxy_ws_stream");
             let connection = render_number_expr(block_value(block, "connection", "1"), "1");
-            push_value_assignment!(
+            push_typed_value_assignment!(
                 rss,
                 js,
                 lua,
                 scm,
                 &var,
+                "int",
                 format!("vm::proxy::stream::from_websocket_binary({connection})"),
                 format!("vm.proxy.stream.from_websocket_binary({connection})"),
                 format!("vm.proxy.stream.from_websocket_binary({connection})"),
@@ -879,6 +909,7 @@ fn additional_http_flow_action(
             let exchange = render_number_expr(block_value(block, "exchange", "1"), "1");
             Some(Ok(assignment_action(
                 &var,
+                "int",
                 format!("vm::http::exchange::get_status({exchange})"),
                 format!("vm.http.exchange.get_status({exchange})"),
                 format!("vm.http.exchange.get_status({exchange})"),
@@ -891,6 +922,7 @@ fn additional_http_flow_action(
             let name = block_value(block, "name", "x-upstream");
             Some(Ok(assignment_action(
                 &var,
+                "string",
                 format!(
                     "vm::http::exchange::get_header({exchange}, {})",
                     rust_string(name)
@@ -914,6 +946,7 @@ fn additional_http_flow_action(
             let exchange = render_number_expr(block_value(block, "exchange", "1"), "1");
             Some(Ok(assignment_action(
                 &var,
+                "map<string>",
                 format!("vm::http::exchange::get_headers({exchange})"),
                 format!("vm.http.exchange.get_headers({exchange})"),
                 format!("vm.http.exchange.get_headers({exchange})"),
@@ -925,6 +958,7 @@ fn additional_http_flow_action(
             let exchange = render_number_expr(block_value(block, "exchange", "1"), "1");
             Some(Ok(assignment_action(
                 &var,
+                "string",
                 format!("vm::http::exchange::get_body({exchange})"),
                 format!("vm.http.exchange.get_body({exchange})"),
                 format!("vm.http.exchange.get_body({exchange})"),
@@ -936,6 +970,7 @@ fn additional_http_flow_action(
             let exchange = render_number_expr(block_value(block, "exchange", "1"), "1");
             Some(Ok(assignment_action(
                 &var,
+                "string",
                 format!("vm::http::exchange::get_http_version({exchange})"),
                 format!("vm.http.exchange.get_http_version({exchange})"),
                 format!("vm.http.exchange.get_http_version({exchange})"),
@@ -948,6 +983,7 @@ fn additional_http_flow_action(
             let max_bytes = render_number_expr(block_value(block, "max_bytes", "1024"), "1024");
             Some(Ok(assignment_action(
                 &var,
+                "string",
                 format!("vm::http::exchange::body::next_chunk({exchange}, {max_bytes})"),
                 format!("vm.http.exchange.body.next_chunk({exchange}, {max_bytes})"),
                 format!("vm.http.exchange.body.next_chunk({exchange}, {max_bytes})"),
@@ -959,6 +995,7 @@ fn additional_http_flow_action(
             let exchange = render_number_expr(block_value(block, "exchange", "1"), "1");
             Some(Ok(assignment_action(
                 &var,
+                "bool",
                 format!("vm::http::exchange::body::eof({exchange})"),
                 format!("vm.http.exchange.body.eof({exchange})"),
                 format!("vm.http.exchange.body.eof({exchange})"),
@@ -978,6 +1015,7 @@ fn additional_transport_flow_action(
             let stream = render_number_expr(block_value(block, "stream", "1"), "1");
             Some(Ok(assignment_action(
                 &var,
+                "bool",
                 format!("vm::tcp::stream::is_present({stream})"),
                 format!("vm.tcp.stream.is_present({stream})"),
                 format!("vm.tcp.stream.is_present({stream})"),
@@ -1033,6 +1071,7 @@ fn additional_transport_flow_action(
             let stream = render_number_expr(block_value(block, "stream", "1"), "1");
             Some(Ok(assignment_action(
                 &var,
+                "bool",
                 format!("vm::tcp::stream::connect({stream})"),
                 format!("vm.tcp.stream.connect({stream})"),
                 format!("vm.tcp.stream.connect({stream})"),
@@ -1044,6 +1083,7 @@ fn additional_transport_flow_action(
             let stream = render_number_expr(block_value(block, "stream", "1"), "1");
             Some(Ok(assignment_action(
                 &var,
+                "string",
                 format!("vm::tcp::stream::get_phase({stream})"),
                 format!("vm.tcp.stream.get_phase({stream})"),
                 format!("vm.tcp.stream.get_phase({stream})"),
@@ -1055,6 +1095,7 @@ fn additional_transport_flow_action(
             let stream = render_number_expr(block_value(block, "stream", "1"), "1");
             Some(Ok(assignment_action(
                 &var,
+                "string",
                 format!("vm::tcp::stream::get_local_addr({stream})"),
                 format!("vm.tcp.stream.get_local_addr({stream})"),
                 format!("vm.tcp.stream.get_local_addr({stream})"),
@@ -1066,6 +1107,7 @@ fn additional_transport_flow_action(
             let stream = render_number_expr(block_value(block, "stream", "1"), "1");
             Some(Ok(assignment_action(
                 &var,
+                "string",
                 format!("vm::tcp::stream::get_peer_addr({stream})"),
                 format!("vm.tcp.stream.get_peer_addr({stream})"),
                 format!("vm.tcp.stream.get_peer_addr({stream})"),
@@ -1078,6 +1120,7 @@ fn additional_transport_flow_action(
             let max_bytes = render_number_expr(block_value(block, "max_bytes", "1024"), "1024");
             Some(Ok(assignment_action(
                 &var,
+                "string",
                 format!("vm::tcp::stream::read({stream}, {max_bytes})"),
                 format!("vm.tcp.stream.read({stream}, {max_bytes})"),
                 format!("vm.tcp.stream.read({stream}, {max_bytes})"),
@@ -1090,6 +1133,7 @@ fn additional_transport_flow_action(
             let max_bytes = render_number_expr(block_value(block, "max_bytes", "1024"), "1024");
             Some(Ok(assignment_action(
                 &var,
+                "string",
                 format!("vm::tcp::stream::peek({stream}, {max_bytes})"),
                 format!("vm.tcp.stream.peek({stream}, {max_bytes})"),
                 format!("vm.tcp.stream.peek({stream}, {max_bytes})"),
@@ -1102,6 +1146,7 @@ fn additional_transport_flow_action(
             let value = block_value(block, "value", "hello");
             Some(Ok(assignment_action(
                 &var,
+                "string",
                 format!(
                     "vm::tcp::stream::write({stream}, {})",
                     render_expr_rss(value)
@@ -1119,6 +1164,7 @@ fn additional_transport_flow_action(
             let stream = render_number_expr(block_value(block, "stream", "1"), "1");
             Some(Ok(assignment_action(
                 &var,
+                "bool",
                 format!("vm::tcp::stream::eof({stream})"),
                 format!("vm.tcp.stream.eof({stream})"),
                 format!("vm.tcp.stream.eof({stream})"),
@@ -1139,6 +1185,7 @@ fn additional_transport_flow_action(
             let session = render_number_expr(block_value(block, "session", "1"), "1");
             Some(Ok(assignment_action(
                 &var,
+                "bool",
                 format!("vm::tls::session::is_present({session})"),
                 format!("vm.tls.session.is_present({session})"),
                 format!("vm.tls.session.is_present({session})"),
@@ -1150,6 +1197,7 @@ fn additional_transport_flow_action(
             let session = render_number_expr(block_value(block, "session", "1"), "1");
             Some(Ok(assignment_action(
                 &var,
+                "bool",
                 format!("vm::tls::session::handshake({session})"),
                 format!("vm.tls.session.handshake({session})"),
                 format!("vm.tls.session.handshake({session})"),
@@ -1312,6 +1360,7 @@ fn additional_transport_flow_action(
             let session = render_number_expr(block_value(block, "session", "1"), "1");
             Some(Ok(assignment_action(
                 &var,
+                "string",
                 format!("vm::tls::session::get_peer_name({session})"),
                 format!("vm.tls.session.get_peer_name({session})"),
                 format!("vm.tls.session.get_peer_name({session})"),
@@ -1323,6 +1372,7 @@ fn additional_transport_flow_action(
             let session = render_number_expr(block_value(block, "session", "1"), "1");
             Some(Ok(assignment_action(
                 &var,
+                "string",
                 format!("vm::tls::session::get_alpn({session})"),
                 format!("vm.tls.session.get_alpn({session})"),
                 format!("vm.tls.session.get_alpn({session})"),
@@ -1334,6 +1384,7 @@ fn additional_transport_flow_action(
             let session = render_number_expr(block_value(block, "session", "1"), "1");
             Some(Ok(assignment_action(
                 &var,
+                "string",
                 format!("vm::tls::session::get_phase({session})"),
                 format!("vm.tls.session.get_phase({session})"),
                 format!("vm.tls.session.get_phase({session})"),
@@ -1345,6 +1396,7 @@ fn additional_transport_flow_action(
             let session = render_number_expr(block_value(block, "session", "1"), "1");
             Some(Ok(assignment_action(
                 &var,
+                "string",
                 format!("vm::tls::session::get_peer_certificate({session})"),
                 format!("vm.tls.session.get_peer_certificate({session})"),
                 format!("vm.tls.session.get_peer_certificate({session})"),
@@ -1356,6 +1408,7 @@ fn additional_transport_flow_action(
             let session = render_number_expr(block_value(block, "session", "1"), "1");
             Some(Ok(assignment_action(
                 &var,
+                "bool",
                 format!("vm::tls::session::is_session_reused({session})"),
                 format!("vm.tls.session.is_session_reused({session})"),
                 format!("vm.tls.session.is_session_reused({session})"),
@@ -1424,13 +1477,14 @@ fn additional_proxy_flow_action(
 
 fn assignment_action(
     var: &str,
+    rss_type: &str,
     rss_expr: String,
     js_expr: String,
     lua_expr: String,
     scm_expr: String,
 ) -> FlowActionStatement {
     FlowActionStatement {
-        rustscript: format!("let {var} = {rss_expr};"),
+        rustscript: format!("let {var}: {rss_type} = {rss_expr};"),
         javascript: format!("let {var} = {js_expr};"),
         lua: format!("local {var} = {lua_expr}"),
         scheme: format!("(define {var} {scm_expr})"),
@@ -1472,9 +1526,12 @@ fn render_generic_assignment_action(
 ) -> UiRenderResult<FlowActionStatement> {
     let var = sanitize_identifier(block.values.get("var"), "value");
     let (rss_expr, js_expr, lua_expr, scm_expr) = generic_vm_call(block)?;
-    Ok(assignment_action(
-        &var, rss_expr, js_expr, lua_expr, scm_expr,
-    ))
+    Ok(FlowActionStatement {
+        rustscript: format!("let {var} = {rss_expr};"),
+        javascript: format!("let {var} = {js_expr};"),
+        lua: format!("local {var} = {lua_expr}"),
+        scheme: format!("(define {var} {scm_expr})"),
+    })
 }
 
 fn render_generic_statement_action(block: &UiBlockInstance) -> UiRenderResult<FlowActionStatement> {

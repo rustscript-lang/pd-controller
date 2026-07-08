@@ -770,7 +770,8 @@ pub(super) fn render_single_block(
         }
         "array_new" => {
             let var = sanitize_identifier(block.values.get("var"), "items");
-            rss.push(format!("let {var} = [];"));
+            let element_type = sanitize_type_name(block.values.get("element_type"), "string");
+            rss.push(format!("let {var}: [{element_type}] = [];"));
             js.push(format!("let {var} = [];"));
             lua.push(format!("local {var} = []"));
             scm.push(format!("(define {var} (vector))"));
@@ -1422,6 +1423,16 @@ pub(super) fn sanitize_status_code(value: Option<&String>, fallback: &str) -> St
     let raw = sanitize_number(value, fallback);
     match raw.parse::<u16>() {
         Ok(code) if (100..=599).contains(&code) => code.to_string(),
+        _ => fallback.to_string(),
+    }
+}
+
+pub(super) fn sanitize_type_name(value: Option<&String>, fallback: &str) -> String {
+    let raw = value.map(|v| v.trim()).unwrap_or("");
+    let candidate = if raw.is_empty() { fallback } else { raw };
+    let cleaned = sanitize_identifier(Some(&candidate.to_string()), fallback);
+    match cleaned.as_str() {
+        "bool" | "bytes" | "float" | "int" | "number" | "string" => cleaned,
         _ => fallback.to_string(),
     }
 }

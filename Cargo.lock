@@ -1938,24 +1938,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "pd-edge-http-minimal"
-version = "0.1.0"
-dependencies = [
- "bytes",
- "http-body-util",
- "hyper",
- "hyper-util",
- "mimalloc",
- "parking_lot",
- "pd-edge-abi",
- "pd-vm",
- "reqwest",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "pd-host-function"
 version = "0.1.0"
 dependencies = [
@@ -1987,16 +1969,6 @@ dependencies = [
  "syn",
  "tokio",
  "windows-sys 0.59.0",
-]
-
-[[package]]
-name = "pd-vm-wasm"
-version = "0.1.0"
-dependencies = [
- "pd-edge-abi",
- "pd-vm",
- "serde",
- "serde_json",
 ]
 
 [[package]]
