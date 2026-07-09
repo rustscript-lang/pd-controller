@@ -358,28 +358,32 @@ async fn ui_deploy_compiles_graph_code_for_all_flavors() {
             "dp-ui-rss",
             "use vm;",
             reqwest::StatusCode::ACCEPTED,
+            None,
         ),
         (
             "javascript",
             "dp-ui-js",
             "import * as vm from \"vm\";",
-            reqwest::StatusCode::ACCEPTED,
+            reqwest::StatusCode::BAD_REQUEST,
+            Some("source compile failed"),
         ),
         (
             "lua",
             "dp-ui-lua",
             "local vm = require(\"vm\")",
-            reqwest::StatusCode::ACCEPTED,
+            reqwest::StatusCode::BAD_REQUEST,
+            Some("source compile failed"),
         ),
         (
             "scheme",
             "dp-ui-scm",
             "(require (prefix-in vm. \"vm\"))",
-            reqwest::StatusCode::ACCEPTED,
+            reqwest::StatusCode::BAD_REQUEST,
+            Some("flavor must be one of"),
         ),
     ];
 
-    for (flavor, edge_id, expected_prelude, expected_status) in flavors {
+    for (flavor, edge_id, expected_prelude, expected_status, expected_error) in flavors {
         let deploy = client
             .post(format!("http://{addr}/v1/ui/deploy"))
             .json(&serde_json::json!({
@@ -419,9 +423,10 @@ async fn ui_deploy_compiles_graph_code_for_all_flavors() {
             let message = payload["error"]
                 .as_str()
                 .expect("error payload should include message");
+            let expected_error = expected_error.expect("error fragment should be set");
             assert!(
-                message.contains("source compile failed"),
-                "deploy should fail during compile, got: {message}"
+                message.contains(expected_error),
+                "deploy returned unexpected error, got: {message}"
             );
         }
     }

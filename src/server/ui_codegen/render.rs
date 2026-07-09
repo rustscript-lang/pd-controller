@@ -1237,9 +1237,8 @@ pub(super) fn parse_ui_flavor(
         "rustscript" | "rss" => Ok((SourceFlavor::RustScript, "rustscript")),
         "javascript" | "js" => Ok((SourceFlavor::JavaScript, "javascript")),
         "lua" => Ok((SourceFlavor::Lua, "lua")),
-        "scheme" | "scm" => Ok((SourceFlavor::Scheme, "scheme")),
         _ => Err(bad_request(
-            "flavor must be one of: rustscript, javascript, lua, scheme",
+            "flavor must be one of: rustscript, javascript, lua",
         )),
     }
 }
@@ -1249,7 +1248,6 @@ pub(super) fn source_for_flavor(bundle: &UiSourceBundle, flavor: SourceFlavor) -
         SourceFlavor::RustScript => bundle.rustscript.clone(),
         SourceFlavor::JavaScript => bundle.javascript.clone(),
         SourceFlavor::Lua => bundle.lua.clone(),
-        SourceFlavor::Scheme => bundle.scheme.clone(),
     }
 }
 
