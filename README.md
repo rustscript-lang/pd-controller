@@ -8,7 +8,6 @@
 - CLR VM: https://github.com/rustscript-lang/rustscript-clr-vm
 - Edge runtime and ABI: https://github.com/rustscript-lang/pd-edge
 - Controller: https://github.com/rustscript-lang/pd-controller
-- Controller Web UI: https://github.com/rustscript-lang/pd-controller-webui
 
 ## Cargo usage
 
@@ -38,7 +37,7 @@ It implements:
 - admin endpoints to enqueue commands per edge (`apply_program`, `start_debug_session`, `stop_debug_session`, `get_health`, `get_metrics`, `get_telemetry`, `ping`)
 - edge status/result query endpoints
 - `GET /healthz` and `GET /metrics`
-- optional embedded Web UI static serving on `/ui` and `/ui/*` when a `webui/dist` bundle is present at compile time
+- embedded Web UI static serving on `/ui` and `/ui/*` when `webui/dist` is built before compiling the controller
 
 ## Contents
 
@@ -64,7 +63,6 @@ It implements:
 
 ![pd-controller debugger](screenshots/debugger.jpg)
 
-
 ## Run
 
 ```powershell
@@ -87,16 +85,9 @@ Version metadata:
 cargo run -p pd-controller -- --version
 ```
 
-If Web UI assets were copied into `webui/dist` before compile, the controller serves them from:
+When the production bundle exists at `webui/dist` during compilation, the controller serves it from:
 
 - `http://127.0.0.1:9100/ui`
-
-The Web UI source lives in a standalone repository:
-
-- source: https://github.com/rustscript-lang/pd-controller-webui
-- published site: https://rustscript-lang.github.io/pd-controller-webui/
-
-To embed a local production bundle into the controller binary, build `pd-controller-webui`, then copy its `dist/` directory to `webui/dist` before compiling `pd-controller`.
 
 Env vars:
 
@@ -131,9 +122,7 @@ cargo test -p pd-controller e2e_controller_can_push_program_to_active_proxy_edge
 
 ## Web UI
 
-Web UI source lives in `pd-controller-webui` (React + shadcn components):
-
-https://github.com/rustscript-lang/pd-controller-webui
+The Web UI source lives in `webui/` (React + shadcn components).
 
 1. Start controller:
 
@@ -141,16 +130,26 @@ https://github.com/rustscript-lang/pd-controller-webui
 cargo run -p pd-controller
 ```
 
-2. Start Web UI dev server from the standalone repo:
+2. Start Web UI dev server:
 
 ```powershell
-cd ../pd-controller-webui
+cd webui
 bun install
 bun run dev
 ```
 
 By default, Vite proxies `/v1` API calls to `http://127.0.0.1:9100`.
 You can override with `VITE_CONTROLLER_URL`.
+
+To produce the embedded production UI bundle:
+
+```powershell
+cd webui
+bun install
+bun run build
+cd ..
+cargo build -p pd-controller --release
+```
 
 UI-focused APIs exposed by controller:
 
@@ -166,9 +165,9 @@ UI-focused APIs exposed by controller:
 
 ### Debug sessions in Web UI
 
-`/ui` debug sessions now support two modes:
+`/ui` debug sessions support two modes:
 
-- `interactive`: existing live edge debugger attach mode (header-triggered).
+- `interactive`: live edge debugger attach mode (header-triggered).
 - `recording`: collects one or more full VM execution recordings for a target request path, then replays locally in controller UI.
 
 For recording mode in UI:
@@ -177,6 +176,5 @@ For recording mode in UI:
 2. Set `Request Path` (for example `/api/orders`) and `Record Count` (default `1`).
 3. Start session and send matching requests to the edge.
 4. Open captured recordings from the recordings sub-list in session detail.
-5. Use the same Monaco view + toolbar commands (`where/step/next/continue/out/locals/stack/print`) during replay, including hover variable inspection.
-6. Compile-time diagnostics from the wasm linter, including inferred type mismatches such as
-   incompatible `if/else` branches, are shown directly on the debug-session source view.
+5. Use the Monaco view and toolbar commands (`where/step/next/continue/out/locals/stack/print`) during replay, including hover variable inspection.
+6. Compile-time diagnostics from the wasm linter, including inferred type mismatches such as incompatible `if/else` branches, are shown directly on the debug-session source view.
