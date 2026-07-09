@@ -8,6 +8,7 @@
 - CLR VM: https://github.com/rustscript-lang/rustscript-clr-vm
 - Edge runtime and ABI: https://github.com/rustscript-lang/pd-edge
 - Controller: https://github.com/rustscript-lang/pd-controller
+- Controller Web UI: https://github.com/rustscript-lang/pd-controller-webui
 
 ## Cargo usage
 
@@ -37,7 +38,7 @@ It implements:
 - admin endpoints to enqueue commands per edge (`apply_program`, `start_debug_session`, `stop_debug_session`, `get_health`, `get_metrics`, `get_telemetry`, `ping`)
 - edge status/result query endpoints
 - `GET /healthz` and `GET /metrics`
-- embedded WebUI static serving on `/ui` and `/ui/*`
+- optional embedded Web UI static serving on `/ui` and `/ui/*` when a `webui/dist` bundle is present at compile time
 
 ## Contents
 
@@ -48,8 +49,8 @@ It implements:
 - [Docker image](#docker-image)
 - [Example: enqueue bytecode for edge edge-1](#example-enqueue-bytecode-for-edge-edge-1)
 - [End-to-end integration test](#end-to-end-integration-test)
-- [WebUI](#webui)
-  - [Debug sessions in WebUI](#debug-sessions-in-webui)
+- [Web UI](#web-ui)
+  - [Debug sessions in Web UI](#debug-sessions-in-web-ui)
 
 ### Edge overview
 
@@ -86,26 +87,16 @@ Version metadata:
 cargo run -p pd-controller -- --version
 ```
 
-If WebUI assets were built before compile, the controller serves them from:
+If Web UI assets were copied into `webui/dist` before compile, the controller serves them from:
 
 - `http://127.0.0.1:9100/ui`
 
-To embed fresh assets into the binary locally:
+The Web UI source lives in a standalone repository:
 
-```powershell
-cd webui
-bun install
-bun run build
-cd ../..
-cargo run -p pd-controller
-```
+- source: https://github.com/rustscript-lang/pd-controller-webui
+- published site: https://rustscript-lang.github.io/pd-controller-webui/
 
-`bun run build` now also builds the browser wasm linter (`pd-vm-wasm`) and copies:
-
-- `webui/public/wasm/pd_vm_wasm.wasm`
-
-The controller serves this file under `/ui/wasm/pd_vm_wasm.wasm` for Monaco live linting in
-both code edit mode and debug-session source views.
+To embed a local production bundle into the controller binary, build `pd-controller-webui`, then copy its `dist/` directory to `webui/dist` before compiling `pd-controller`.
 
 Env vars:
 
@@ -138,9 +129,11 @@ Run the demo integration test that boots `pd-controller` + `pd-edge`, enqueues a
 cargo test -p pd-controller e2e_controller_can_push_program_to_active_proxy_edge
 ```
 
-## WebUI
+## Web UI
 
-WebUI source lives at `webui` (React + shadcn components).
+Web UI source lives in `pd-controller-webui` (React + shadcn components):
+
+https://github.com/rustscript-lang/pd-controller-webui
 
 1. Start controller:
 
@@ -148,10 +141,10 @@ WebUI source lives at `webui` (React + shadcn components).
 cargo run -p pd-controller
 ```
 
-2. Start WebUI dev server:
+2. Start Web UI dev server from the standalone repo:
 
 ```powershell
-cd webui
+cd ../pd-controller-webui
 bun install
 bun run dev
 ```
@@ -171,7 +164,7 @@ UI-focused APIs exposed by controller:
 - graph payload:
   `{"nodes":[{"id":"n1","block_id":"...","values":{...}}],"edges":[{"source":"n1","source_output":"value","target":"n2","target_input":"value"}]}`
 
-### Debug sessions in WebUI
+### Debug sessions in Web UI
 
 `/ui` debug sessions now support two modes:
 
