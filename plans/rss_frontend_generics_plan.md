@@ -421,7 +421,7 @@ Files:
 - [pd-vm/src/compiler/pipeline.rs](../pd-vm/src/compiler/pipeline.rs)
 - [pd-vm/pd-vm-wasm/src/lib.rs](../pd-vm/pd-vm-wasm/src/lib.rs)
 - [pd-vm/pd-vm-wasm/src/completions.rs](../pd-vm/pd-vm-wasm/src/completions.rs)
-- [pd-controller/webui/src/app/monaco/completionCatalog.ts](../pd-controller/webui/src/app/monaco/completionCatalog.ts)
+- [webui/src/app/monaco/completionCatalog.ts](../webui/src/app/monaco/completionCatalog.ts)
 
 Changes:
 

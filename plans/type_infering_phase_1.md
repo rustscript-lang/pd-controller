@@ -144,9 +144,9 @@ Implementation landed in:
 - [pd-vm/src/compiler/diagnostics.rs](pd-vm/src/compiler/diagnostics.rs)
 - [pd-vm/pd-vm-lint-wasm/src/analyzer.rs](pd-vm/pd-vm-lint-wasm/src/analyzer.rs)
 - [pd-vm/pd-vm-runtime-wasm/src/analyzer.rs](pd-vm/pd-vm-runtime-wasm/src/analyzer.rs)
-- [pd-controller/webui/src/app/monaco/lintMarkers.ts](pd-controller/webui/src/app/monaco/lintMarkers.ts)
-- [pd-controller/webui/src/app/components/HighlightedCode.tsx](pd-controller/webui/src/app/components/HighlightedCode.tsx)
-- [pd-controller/webui/src/app/hooks/useDebugSessions.ts](pd-controller/webui/src/app/hooks/useDebugSessions.ts)
+- [webui/src/app/monaco/lintMarkers.ts](webui/src/app/monaco/lintMarkers.ts)
+- [webui/src/app/components/HighlightedCode.tsx](webui/src/app/components/HighlightedCode.tsx)
+- [webui/src/app/hooks/useDebugSessions.ts](webui/src/app/hooks/useDebugSessions.ts)
 
 ## Notes and Constraints
 

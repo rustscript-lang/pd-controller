@@ -62,7 +62,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: oven-sh/setup-bun@v2
       - name: Build controller web UI
-        working-directory: pd-controller/pd-controller/webui
+        working-directory: webui
         run: |
           bun install --frozen-lockfile
           bun run build

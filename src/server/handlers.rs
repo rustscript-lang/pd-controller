@@ -110,7 +110,7 @@ fn ui_asset_response(path: &str) -> axum::response::Response {
     let message = if embedded_webui::has_assets() {
         "webui asset not found"
     } else {
-        "webui assets are not embedded; build pd-controller/webui before compiling pd-controller"
+        "webui assets are not embedded; build webui before compiling pd-controller"
     };
     (
         StatusCode::NOT_FOUND,
