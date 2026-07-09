@@ -35,8 +35,8 @@ const wasmTarget = "wasm32-unknown-unknown";
 const wasmName = "pd_vm_wasm.wasm";
 const cargoTargetDir = resolve(rustscriptRoot, "target");
 const compiledWasmPath = resolve(cargoTargetDir, wasmTarget, "release", wasmName);
-const rssGrammarSrc = resolve(rustscriptRoot, "pd-vm", "editor-assets", "monaco", "rss.tmLanguage.json");
-const rssConfigSrc = resolve(rustscriptRoot, "pd-vm", "editor-assets", "monaco", "rss.language-configuration.json");
+const rssGrammarSrc = resolve(rustscriptRoot, "editor-assets", "monaco", "rss.tmLanguage.json");
+const rssConfigSrc = resolve(rustscriptRoot, "editor-assets", "monaco", "rss.language-configuration.json");
 const grammarOutDir = resolve(repoRoot, "src", "app", "monaco");
 
 ensureFile(resolve(rustscriptRoot, "Cargo.toml"), "RustScript repository");
