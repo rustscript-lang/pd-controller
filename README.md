@@ -1,19 +1,17 @@
 # pd-controller
 
-`pd-controller` is the control-plane service, state model, RPC surface, remote-debug orchestration, and Web UI split from the original `project-d` history.
+`pd-controller` is the control-plane service, state model, RPC surface, remote-debug orchestration, and Web UI for `pd-edge` data planes.
 
-## Repository split
+## Related projects
 
 - RustScript core VM and standard library: https://github.com/rustscript-lang/rustscript
 - CLR VM: https://github.com/rustscript-lang/rustscript-clr-vm
 - Edge runtime and ABI: https://github.com/rustscript-lang/pd-edge
 - Controller: https://github.com/rustscript-lang/pd-controller
 
-## Local crates
+## Cargo usage
 
-The split keeps local VM and edge crates so controller tests and UI code generation tests can run before remote split crates are published.
-
-For downstream Cargo manifests, the intended repository references are:
+The workspace uses sibling RustScript and Edge crates during local development. For downstream Cargo manifests, use these repository references:
 
 ```toml
 pd-vm = { git = "https://github.com/rustscript-lang/rustscript", package = "pd-vm" }
