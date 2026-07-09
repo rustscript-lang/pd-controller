@@ -17,7 +17,7 @@ The app talks to the controller backend APIs and is intended to run from the con
 The web app expects a sibling RustScript checkout by default:
 
 ```bash
-cd /home/wow/workspace/pd-controller/webui
+cd /home/wow/rustscript/pd-controller/webui
 bun install
 bun run dev
 ```
@@ -35,7 +35,7 @@ Useful commands:
 Build `webui/dist` before compiling `pd-controller` to embed the UI into the controller binary:
 
 ```bash
-cd /home/wow/workspace/pd-controller/webui
+cd /home/wow/rustscript/pd-controller/webui
 bun install
 bun run build
 cd ..
@@ -48,5 +48,5 @@ The controller serves the embedded bundle from `/ui`.
 
 - Controller service: https://github.com/rustscript-lang/pd-controller
 - RustScript core VM and wasm runtime: https://github.com/rustscript-lang/rustscript
-- RustScript Playground: https://github.com/rustscript-lang/rustscript-playground
+- RustScript Playground: https://github.com/rustscript-lang/playground
 - Edge runtime: https://github.com/rustscript-lang/pd-edge
