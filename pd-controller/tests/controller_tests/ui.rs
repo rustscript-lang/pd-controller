@@ -1467,7 +1467,7 @@ async fn ui_render_plain_if_and_loop_flow() {
         "expected plain if compare in rustscript, got: {rustscript}"
     );
     assert!(
-        rustscript.contains("for (let mut i = 0; i < 2; i = i + 1) {"),
+        rustscript.contains("for i in 0..2 {"),
         "expected plain loop in rustscript, got: {rustscript}"
     );
     assert!(

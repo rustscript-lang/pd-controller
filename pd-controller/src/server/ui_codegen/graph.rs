@@ -779,10 +779,9 @@ fn render_flow_node(
                 render_flow_node(&done_target, graph, node_map, rendered, visiting, indent)?;
 
             let mut statements = FlowStatements::default();
-            statements.rustscript.push(indent_line(
-                indent,
-                format!("for (let mut i = 0; i < {count}; i = i + 1) {{"),
-            ));
+            statements
+                .rustscript
+                .push(indent_line(indent, format!("for i in 0..{count} {{")));
             statements.rustscript.extend(body_branch.rustscript.clone());
             statements
                 .rustscript
