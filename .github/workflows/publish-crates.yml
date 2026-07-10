@@ -33,6 +33,8 @@ jobs:
       PACKAGE_ORDER: pd-controller
       PD_VM_VERSION: ${{ inputs.pd_vm_version || '0.22.2' }}
       PD_EDGE_VERSION: ${{ inputs.pd_edge_version || '0.1.1' }}
+      PD_HOST_FUNCTION_VERSION: ${{ inputs.pd_vm_version || '0.22.2' }}
+      PD_EDGE_ABI_VERSION: ${{ inputs.pd_edge_version || '0.1.1' }}
       WORKSPACE_VERSION_OVERRIDES: pd-controller=${{ inputs.version }} rustscript=${{ inputs.pd_vm_version || '0.22.2' }} pd-edge=${{ inputs.pd_edge_version || '0.1.1' }}
     steps:
       - name: Checkout pd-controller
@@ -79,6 +81,8 @@ jobs:
               'pd-controller': version,
               'pd-vm': os.environ.get('PD_VM_VERSION') or version,
               'pd-edge': os.environ.get('PD_EDGE_VERSION') or version,
+              'pd-host-function': os.environ.get('PD_HOST_FUNCTION_VERSION') or version,
+              'pd-edge-abi': os.environ.get('PD_EDGE_ABI_VERSION') or version,
           }
           workspace_versions = {}
           for item in os.environ.get('WORKSPACE_VERSION_OVERRIDES', '').split():
