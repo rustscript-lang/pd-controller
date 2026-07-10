@@ -14,6 +14,8 @@ edition.workspace = true
 version.workspace = true
 description = "Controller service for RustScript edge deployments"
 license = "MIT"
+homepage = "https://rustscript.org/"
+repository = "https://github.com/rustscript-lang/pd-controller"
 build = "build.rs"
 
 [dependencies]
