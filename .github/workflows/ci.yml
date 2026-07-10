@@ -38,7 +38,7 @@ jobs:
         run: cargo clippy --workspace --all-targets --all-features
       - name: Tests
         working-directory: pd-controller
-        run: cargo test --workspace --jobs 4
+        run: cargo test --workspace
 
   controller:
     name: pd-controller binary (${{ matrix.os }})
