@@ -24,8 +24,8 @@ pd-controller = { git = "https://github.com/rustscript-lang/pd-controller", pack
 ## Test
 
 ```bash
-cargo test --workspace --jobs 4
-cargo build --workspace --release --jobs 4
+cargo test --workspace 
+cargo build --workspace --release 
 ```
 
 ## Service guide
