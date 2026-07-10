@@ -1,5 +1,7 @@
 # pd-controller
 
+[![pd-controller on crates.io](https://img.shields.io/crates/v/pd-controller.svg)](https://crates.io/crates/pd-controller)
+
 `pd-controller` is the control-plane service, state model, RPC surface, remote-debug orchestration, and Web UI for `pd-edge` data planes.
 
 ## Related projects
