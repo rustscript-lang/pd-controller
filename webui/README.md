@@ -43,10 +43,3 @@ cargo build -p pd-controller --release
 ```
 
 The controller serves the embedded bundle from `/ui`.
-
-## Related projects
-
-- Controller service: https://github.com/rustscript-lang/pd-controller
-- RustScript core VM and wasm runtime: https://github.com/rustscript-lang/rustscript
-- RustScript Playground: https://github.com/rustscript-lang/playground
-- Edge runtime: https://github.com/rustscript-lang/pd-edge

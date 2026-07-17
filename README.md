@@ -4,13 +4,6 @@
 
 `pd-controller` is the control-plane service, state model, RPC surface, remote-debug orchestration, and Web UI for `pd-edge` data planes.
 
-## Related projects
-
-- RustScript core VM and standard library: https://github.com/rustscript-lang/rustscript
-- IronRust: https://github.com/rustscript-lang/IronRust
-- Edge runtime and ABI: https://github.com/rustscript-lang/pd-edge
-- Controller: https://github.com/rustscript-lang/pd-controller
-
 ## Cargo usage
 
 The workspace uses sibling RustScript and Edge crates during local development. For downstream Cargo manifests, use these repository references:
