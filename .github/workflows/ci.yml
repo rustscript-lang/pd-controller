@@ -26,6 +26,8 @@ jobs:
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - name: Tests
         run: cargo test --workspace -- --test-threads=1
+      - name: Tests with mqtt
+        run: cargo test --workspace --features mqtt -- --test-threads=1
 
   controller:
     name: pd-controller binary (${{ matrix.os }})

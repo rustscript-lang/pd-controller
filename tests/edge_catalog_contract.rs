@@ -27,12 +27,16 @@ const TLS_FROM_SOCKET: &str = "use tcp;\nuse tls;\nlet stream = tcp::stream::new
 const WEBSOCKET_NEW: &str = "use websocket;\nlet ws = websocket::connection::new();\n";
 const UDP_NEW: &str = "use udp;\nlet socket = udp::socket::new();\n";
 const PROXY_DOWNSTREAM: &str = "use proxy;\nlet downstream = proxy::stream::downstream();\n";
+#[cfg(feature = "mqtt")]
 const MQTT_READ_EVENT: &str = r#"
 use mqtt;
 let connection = mqtt::connection::new();
 let event = mqtt::connection::read_event(connection);
 "#;
-const WEBRTC_UI_SOURCE: &str = "let rtc: int = vm::webrtc::connection::new();\n";
+#[cfg(not(feature = "mqtt"))]
+const MQTT_UNBOUND_SOURCE: &str =
+    "use mqtt;\nmqtt::connection::new();\nmqtt::connection::read_event(0);\n";
+const WEBRTC_UI_SOURCE: &str = "use vm;\nlet rtc: int = vm::webrtc::connection::new();\n";
 
 fn compile_rss(source: &str) -> vm::CompiledProgram {
     compile_edge_source_with_flavor(source, SourceFlavor::RustScript).unwrap_or_else(|err| {
@@ -76,6 +80,55 @@ fn assert_exact_catalog_imports(program: &vm::Program, expected_names: &[&str]) 
             .as_ref()
             .unwrap_or_else(|| panic!("{name} must have Some(schema) with the ABI25 fingerprint"));
         assert_exact_catalog_schema(schema, name);
+    }
+}
+
+fn protocol_import_matches(name: &str, root: &str) -> bool {
+    name.starts_with(&format!("{root}::")) || name.contains(&format!("::{root}::"))
+}
+
+fn assert_unbound_protocol_imports(program: &vm::Program, root: &str) {
+    let schemas = program.host_import_schemas();
+    assert_eq!(
+        schemas.len(),
+        program.imports.len(),
+        "host import schemas must stay aligned with imports"
+    );
+    let mut seen = 0usize;
+    for (import, schema) in program.imports.iter().zip(schemas.iter()) {
+        if !protocol_import_matches(&import.name, root) {
+            continue;
+        }
+        seen += 1;
+        assert!(
+            schema.is_none(),
+            "{} must remain unbound (None schema) when {root} is omitted from the catalog, got {schema:?}",
+            import.name
+        );
+    }
+    assert!(
+        seen > 0,
+        "compiled source must include {root} imports to prove unbound None schemas; imports={:?}",
+        program
+            .imports
+            .iter()
+            .map(|import| import.name.as_str())
+            .collect::<Vec<_>>()
+    );
+}
+
+fn assert_fail_closed_protocol_error(err: impl std::fmt::Display, root: &str) {
+    let message = err.to_string();
+    assert!(
+        message.contains("unknown host function") || message.contains(root),
+        "fail-closed {root} compile error must identify the omitted host, got: {message}"
+    );
+}
+
+fn assert_default_off_protocol_compile(source: &str, root: &str) {
+    match compile_edge_source_with_flavor(source, SourceFlavor::RustScript) {
+        Err(err) => assert_fail_closed_protocol_error(err, root),
+        Ok(compiled) => assert_unbound_protocol_imports(&compiled.program, root),
     }
 }
 
@@ -200,53 +253,13 @@ fn edge_catalog_fingerprint_is_golden_and_stable() {
 fn mqtt_is_absent_from_the_default_production_catalog() {
     assert!(function_by_name("mqtt::connection::read_event").is_none());
     assert!(function_by_name("mqtt::connection::new").is_none());
-    match compile_edge_source_with_flavor(MQTT_READ_EVENT, SourceFlavor::RustScript) {
-        Err(_) => {}
-        Ok(compiled) => {
-            let schemas = compiled.program.host_import_schemas();
-            let mqtt_bound = compiled
-                .program
-                .imports
-                .iter()
-                .zip(schemas.iter())
-                .any(|(import, schema)| import.name.starts_with("mqtt::") && schema.is_some());
-            panic!(
-                "default mqtt-off catalog must not compile or catalog-bind MQTT; bound={mqtt_bound}; imports={:?}",
-                compiled
-                    .program
-                    .imports
-                    .iter()
-                    .map(|import| import.name.as_str())
-                    .collect::<Vec<_>>()
-            );
-        }
-    }
+    assert_default_off_protocol_compile(MQTT_UNBOUND_SOURCE, "mqtt");
 }
 
 #[test]
-fn webrtc_ui_source_cannot_compile_or_catalog_bind_when_default_off() {
+fn webrtc_ui_source_is_unbound_when_default_off() {
     assert!(function_by_name("webrtc::connection::new").is_none());
-    match compile_edge_source_with_flavor(WEBRTC_UI_SOURCE, SourceFlavor::RustScript) {
-        Err(_) => {}
-        Ok(compiled) => {
-            let schemas = compiled.program.host_import_schemas();
-            let webrtc_bound = compiled
-                .program
-                .imports
-                .iter()
-                .zip(schemas.iter())
-                .any(|(import, schema)| import.name.contains("webrtc") && schema.is_some());
-            panic!(
-                "default-off webrtc UI source must not compile or catalog-bind through stale ABI24; bound={webrtc_bound}; imports={:?}",
-                compiled
-                    .program
-                    .imports
-                    .iter()
-                    .map(|import| import.name.as_str())
-                    .collect::<Vec<_>>()
-            );
-        }
-    }
+    assert_default_off_protocol_compile(WEBRTC_UI_SOURCE, "webrtc");
 }
 
 #[cfg(feature = "mqtt")]

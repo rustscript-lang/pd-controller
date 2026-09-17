@@ -1,5 +1,51 @@
 use super::support::*;
 
+fn protocol_import_matches(name: &str, root: &str) -> bool {
+    name.starts_with(&format!("{root}::")) || name.contains(&format!("::{root}::"))
+}
+
+fn assert_default_off_protocol_unbound_or_fail_closed(source: &str, root: &str) {
+    match edge::compile_edge_source_with_flavor(source, SourceFlavor::RustScript) {
+        Err(err) => {
+            let message = err.to_string();
+            assert!(
+                message.contains("unknown host function") || message.contains(root),
+                "fail-closed {root} compile error must identify the omitted host, got: {message}"
+            );
+        }
+        Ok(compiled) => {
+            let schemas = compiled.program.host_import_schemas();
+            assert_eq!(
+                schemas.len(),
+                compiled.program.imports.len(),
+                "host import schemas must stay aligned with imports"
+            );
+            let mut seen = 0usize;
+            for (import, schema) in compiled.program.imports.iter().zip(schemas.iter()) {
+                if !protocol_import_matches(&import.name, root) {
+                    continue;
+                }
+                seen += 1;
+                assert!(
+                    schema.is_none(),
+                    "{} must remain unbound (None schema) when {root} is omitted, got {schema:?}",
+                    import.name
+                );
+            }
+            assert!(
+                seen > 0,
+                "compiled source must include {root} imports to prove unbound None schemas; imports={:?}",
+                compiled
+                    .program
+                    .imports
+                    .iter()
+                    .map(|import| import.name.as_str())
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+}
+
 #[tokio::test]
 async fn ui_blocks_and_deploy_endpoints_work() {
     let (addr, handle, _state) = spawn_controller(ControllerConfig::default()).await;
@@ -1135,6 +1181,10 @@ async fn ui_render_extended_abi_blocks_generate_expected_calls() {
     assert!(
         rustscript.contains("vm::websocket::connection::set_target(ws, \"ws://127.0.0.1:8081\");")
     );
+    assert!(
+        rustscript.lines().any(|line| line.trim() == "use vm;"),
+        "UI rustscript must include production `use vm;`, got:\n{rustscript}"
+    );
     assert!(rustscript.contains("let rtc: int = vm::webrtc::connection::new();"));
     assert!(rustscript.contains("let udp: int = vm::udp::socket::new();"));
     assert!(
@@ -1154,23 +1204,18 @@ async fn ui_render_extended_abi_blocks_generate_expected_calls() {
             "expected rustscript ABI render without webrtc to compile, got: {err}\nsource:\n{without_webrtc}"
         );
     }
-    match edge::compile_edge_source_with_flavor(
-        "let rtc: int = vm::webrtc::connection::new();\n",
-        SourceFlavor::RustScript,
-    ) {
-        Err(_) => {}
-        Ok(compiled) => {
-            let webrtc_bound = compiled
-                .program
-                .imports
-                .iter()
-                .zip(compiled.program.host_import_schemas().iter())
-                .any(|(import, schema)| import.name.contains("webrtc") && schema.is_some());
-            panic!(
-                "default-off webrtc UI source must not compile or catalog-bind; bound={webrtc_bound}"
-            );
+    let mut webrtc_ui_source = String::from("use vm;\n");
+    for line in rustscript.lines() {
+        if line.contains("webrtc") {
+            webrtc_ui_source.push_str(line.trim());
+            webrtc_ui_source.push('\n');
         }
     }
+    assert!(
+        webrtc_ui_source.contains("let rtc: int = vm::webrtc::connection::new();"),
+        "UI rustscript must emit production webrtc shape with `use vm;`, got:\n{rustscript}"
+    );
+    assert_default_off_protocol_unbound_or_fail_closed(&webrtc_ui_source, "webrtc");
 
     let javascript = render_json["source"]["javascript"]
         .as_str()
