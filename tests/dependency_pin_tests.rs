@@ -6,10 +6,10 @@
 use std::path::PathBuf;
 
 const PD_EDGE_GIT: &str = "https://github.com/rustscript-lang/pd-edge.git";
-const PD_EDGE_REV: &str = "6320847098530ab78b0d3cd438b714e699caa8db";
+const PD_EDGE_REV: &str = "5f4f889e349bdfbd5534deb42bd13b616a6114f5";
 const RUSTSCRIPT_GIT: &str = "https://github.com/rustscript-lang/rustscript.git";
 const RUSTSCRIPT_REV: &str = "b1d6cffede77f49410bf63525f30b9a46b02dc01";
-const ABBREVIATED_EDGE_REV: &str = "6320847";
+const ABBREVIATED_EDGE_REV: &str = "5f4f889";
 const ABBREVIATED_RUSTSCRIPT_REV: &str = "b1d6cff";
 
 fn manifest() -> String {
@@ -60,6 +60,10 @@ fn assert_full_sha_pin(dependency: &str, crate_name: &str, expected: &str, abbre
     assert!(
         !dependency.contains("path ="),
         "{crate_name} must not depend on sibling checkout state: {dependency}"
+    );
+    assert!(
+        !dependency.contains("branch ="),
+        "{crate_name} must not pin a git branch: {dependency}"
     );
 }
 
@@ -183,21 +187,6 @@ fn lockfile_pins_pd_edge_and_rustscript_crates_per_package() {
     assert_lock_source(&packages, "pd-host-function", "0.1.0", &rustscript_source);
     assert_lock_source(&packages, "pd-host-schema", "0.1.0", &rustscript_source);
 
-    // Frozen pd-edge `http` enables `vm/edge-abi`, and frozen pd-vm's optional
-    // `edge-abi` feature still depends on the published ABI crate. Keep that
-    // crates.io line distinct from the git 0.1.0 catalog used by pd-edge.
-    assert_lock_source(
-        &packages,
-        "pd-edge-abi",
-        "0.1.1",
-        "registry+https://github.com/rust-lang/crates.io-index",
-    );
-    assert_lock_source(
-        &packages,
-        "pd-host-function",
-        "0.22.7",
-        "registry+https://github.com/rust-lang/crates.io-index",
-    );
     let registry_family: Vec<&LockPackage> = packages
         .iter()
         .filter(|package| {
@@ -205,21 +194,14 @@ fn lockfile_pins_pd_edge_and_rustscript_crates_per_package() {
                 .source
                 .as_deref()
                 .is_some_and(|source| source.starts_with("registry+"))
-                && matches!(
-                    package.name.as_str(),
-                    "pd-edge"
-                        | "pd-edge-abi"
-                        | "pd-edge-host-function"
-                        | "pd-vm"
-                        | "pd-host-function"
-                        | "pd-host-schema"
-                )
+                && (package.name.starts_with("pd-edge")
+                    || package.name.starts_with("pd-host-")
+                    || package.name.starts_with("pd-vm"))
         })
         .collect();
-    assert_eq!(
-        registry_family.len(),
-        2,
-        "only frozen pd-vm edge-abi published crates may remain on crates.io, found {registry_family:?}"
+    assert!(
+        registry_family.is_empty(),
+        "lockfile must not resolve registry pd-edge*/pd-host-*/pd-vm* packages, found {registry_family:?}"
     );
 
     for package in &packages {
