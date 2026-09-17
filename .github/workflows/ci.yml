@@ -17,28 +17,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          path: pd-controller
-      - uses: actions/checkout@v4
-        with:
-          repository: rustscript-lang/pd-edge
-          path: pd-edge
-      - uses: actions/checkout@v4
-        with:
-          repository: rustscript-lang/rustscript
-          path: rustscript
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
       - name: Format check
-        working-directory: pd-controller
         run: cargo fmt --all -- --check
       - name: Clippy
-        working-directory: pd-controller
-        run: cargo clippy --workspace --all-targets --all-features
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - name: Tests
-        working-directory: pd-controller
-        run: cargo test --workspace
+        run: cargo test --workspace -- --test-threads=1
 
   controller:
     name: pd-controller binary (${{ matrix.os }})
@@ -53,11 +40,8 @@ jobs:
           path: pd-controller
       - uses: actions/checkout@v4
         with:
-          repository: rustscript-lang/pd-edge
-          path: pd-edge
-      - uses: actions/checkout@v4
-        with:
           repository: rustscript-lang/rustscript
+          ref: b1d6cffede77f49410bf63525f30b9a46b02dc01
           path: rustscript
       - uses: dtolnay/rust-toolchain@stable
       - uses: oven-sh/setup-bun@v2

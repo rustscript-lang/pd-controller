@@ -45,11 +45,13 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: rustscript-lang/rustscript
+          ref: b1d6cffede77f49410bf63525f30b9a46b02dc01
           path: rustscript
       - name: Checkout pd-edge dependency
         uses: actions/checkout@v4
         with:
           repository: rustscript-lang/pd-edge
+          ref: 6320847098530ab78b0d3cd438b714e699caa8db
           path: pd-edge
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -105,7 +107,7 @@ jobs:
                   if section in ('[workspace.package]', '[package]') and stripped.startswith('version = '):
                       line = re.sub(r'version\s*=\s*"[^"]*"', f'version = "{manifest_version}"', line)
                   match = dep_re.match(line)
-                  if match and 'path' in match.group(3):
+                  if match and ('path' in match.group(3) or 'git' in match.group(3)):
                       prefix, key, body, suffix = match.groups()
                       package_match = re.search(r'package\s*=\s*"([^"]+)"', body)
                       dep_name = package_match.group(1) if package_match else key
@@ -118,6 +120,10 @@ jobs:
                               if body and not body.endswith(','):
                                   body += ','
                               body += f' version = "{dep_version}"'
+                          body = re.sub(r'\s*,?\s*path\s*=\s*"[^"]*"', '', body)
+                          body = re.sub(r'\s*,?\s*git\s*=\s*"[^"]*"', '', body)
+                          body = re.sub(r'\s*,?\s*rev\s*=\s*"[^"]*"', '', body)
+                          body = body.strip().strip(',')
                           line = prefix + body + suffix
                   out.append(line)
               path.write_text('\n'.join(out) + '\n')
