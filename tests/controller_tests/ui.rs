@@ -705,7 +705,7 @@ async fn ui_render_extended_value_blocks_work_with_flow_graph() {
         rustscript.contains("vm::http::response::set_body(status_plus_len);"),
         "expected data edge into flow action, got: {rustscript}"
     );
-    if let Err(err) = compile_source_with_flavor(rustscript, SourceFlavor::RustScript) {
+    if let Err(err) = edge::compile_edge_source_with_flavor(rustscript, SourceFlavor::RustScript) {
         panic!("expected generated rustscript to compile, got: {err}\nsource:\n{rustscript}");
     }
 
@@ -1487,7 +1487,7 @@ async fn ui_render_plain_if_and_loop_flow() {
         rustscript.contains("vm::http::response::set_status(403);"),
         "expected if false branch action in rustscript, got: {rustscript}"
     );
-    if let Err(err) = compile_source_with_flavor(rustscript, SourceFlavor::RustScript) {
+    if let Err(err) = edge::compile_edge_source_with_flavor(rustscript, SourceFlavor::RustScript) {
         panic!("expected flow rustscript to compile, got: {err}\nsource:\n{rustscript}");
     }
 

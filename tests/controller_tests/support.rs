@@ -16,7 +16,7 @@ pub(crate) use pd_controller::{
 };
 pub(crate) use tokio::task::JoinHandle;
 pub(crate) use uuid::Uuid;
-pub(crate) use vm::{SourceFlavor, compile_source_with_flavor, decode_program};
+pub(crate) use vm::{SourceFlavor, decode_program};
 
 static TEST_STATE_PATH_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
