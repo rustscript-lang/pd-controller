@@ -1142,8 +1142,34 @@ async fn ui_render_extended_abi_blocks_generate_expected_calls() {
     );
     assert!(rustscript.contains("let upstream_proxy: int = upstream::as_stream();"));
     assert!(rustscript.contains("let upstream_all = upstream_response::read_all();"));
-    if let Err(err) = edge::compile_edge_source_with_flavor(rustscript, SourceFlavor::RustScript) {
-        panic!("expected rustscript ABI render to compile, got: {err}\nsource:\n{rustscript}");
+    let without_webrtc = rustscript
+        .lines()
+        .filter(|line| !line.contains("webrtc"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    if let Err(err) =
+        edge::compile_edge_source_with_flavor(&without_webrtc, SourceFlavor::RustScript)
+    {
+        panic!(
+            "expected rustscript ABI render without webrtc to compile, got: {err}\nsource:\n{without_webrtc}"
+        );
+    }
+    match edge::compile_edge_source_with_flavor(
+        "let rtc: int = vm::webrtc::connection::new();\n",
+        SourceFlavor::RustScript,
+    ) {
+        Err(_) => {}
+        Ok(compiled) => {
+            let webrtc_bound = compiled
+                .program
+                .imports
+                .iter()
+                .zip(compiled.program.host_import_schemas().iter())
+                .any(|(import, schema)| import.name.contains("webrtc") && schema.is_some());
+            panic!(
+                "default-off webrtc UI source must not compile or catalog-bind; bound={webrtc_bound}"
+            );
+        }
     }
 
     let javascript = render_json["source"]["javascript"]

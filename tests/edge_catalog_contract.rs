@@ -4,20 +4,35 @@ use std::{
 };
 
 use edge::{ABI_VERSION, HOST_FUNCTION_COUNT, compile_edge_source_with_flavor, function_by_name};
-use vm::{HostTypeSchema, SourceFlavor};
+#[cfg(feature = "mqtt")]
+use vm::HostTypeSchema;
+use vm::SourceFlavor;
 
-/// Exact hex form of the default pd-edge compile catalog fingerprint.
-/// Bump together with [`EDGE_CATALOG_FINGERPRINT_U64`] when the frozen edge
-/// ABI surface or pd-vm fingerprint encoding changes.
+/// Exact hex form of the compile catalog fingerprint for the active feature set.
+/// Default (mqtt-off) stays on the frozen ABI25 HTTP/TLS/WS catalog. Enabling
+/// `mqtt` joins MQTT hosts, so the catalog identity changes with that feature.
+#[cfg(not(feature = "mqtt"))]
 const EDGE_CATALOG_FINGERPRINT_HEX: &str = "ff4fc9ca114a15c1";
+#[cfg(not(feature = "mqtt"))]
 const EDGE_CATALOG_FINGERPRINT_U64: u64 = 0xff4fc9ca114a15c1;
+#[cfg(feature = "mqtt")]
+const EDGE_CATALOG_FINGERPRINT_HEX: &str = "b5660b84004c864c";
+#[cfg(feature = "mqtt")]
+const EDGE_CATALOG_FINGERPRINT_U64: u64 = 0xb5660b84004c864c;
 
 const HTTP_SHORT_CIRCUIT: &str = "use http;\nhttp::response::set_body(\"catalog-contract\");\n";
+const HTTP_SET_STATUS: &str = "use http;\nhttp::response::set_status(204);\n";
+const TCP_NEW: &str = "use tcp;\nlet stream = tcp::stream::new();\n";
+const TLS_FROM_SOCKET: &str = "use tcp;\nuse tls;\nlet stream = tcp::stream::new();\nlet session = tls::session::from_socket(stream);\n";
+const WEBSOCKET_NEW: &str = "use websocket;\nlet ws = websocket::connection::new();\n";
+const UDP_NEW: &str = "use udp;\nlet socket = udp::socket::new();\n";
+const PROXY_DOWNSTREAM: &str = "use proxy;\nlet downstream = proxy::stream::downstream();\n";
 const MQTT_READ_EVENT: &str = r#"
 use mqtt;
 let connection = mqtt::connection::new();
 let event = mqtt::connection::read_event(connection);
 "#;
+const WEBRTC_UI_SOURCE: &str = "let rtc: int = vm::webrtc::connection::new();\n";
 
 fn compile_rss(source: &str) -> vm::CompiledProgram {
     compile_edge_source_with_flavor(source, SourceFlavor::RustScript).unwrap_or_else(|err| {
@@ -25,10 +40,53 @@ fn compile_rss(source: &str) -> vm::CompiledProgram {
     })
 }
 
+fn assert_exact_catalog_schema(schema: &vm::HostImportSchema, expected_name: &str) {
+    assert_eq!(schema.name, expected_name);
+    assert_eq!(
+        format!("{}", schema.fingerprint),
+        EDGE_CATALOG_FINGERPRINT_HEX
+    );
+    assert_eq!(schema.fingerprint.as_u64(), EDGE_CATALOG_FINGERPRINT_U64);
+}
+
+fn assert_exact_catalog_imports(program: &vm::Program, expected_names: &[&str]) {
+    let schemas = program.host_import_schemas();
+    assert_eq!(
+        schemas.len(),
+        program.imports.len(),
+        "host import schemas must stay aligned with imports"
+    );
+    for (import, schema) in program.imports.iter().zip(schemas.iter()) {
+        let schema = schema.as_ref().unwrap_or_else(|| {
+            panic!(
+                "{} must carry an exact ABI25 catalog schema, not a missing/stale fallback",
+                import.name
+            )
+        });
+        assert_exact_catalog_schema(schema, &import.name);
+    }
+    for name in expected_names {
+        let (index, _) = program
+            .imports
+            .iter()
+            .enumerate()
+            .find(|(_, import)| import.name == *name)
+            .unwrap_or_else(|| panic!("fixture must import {name}"));
+        let schema = schemas[index]
+            .as_ref()
+            .unwrap_or_else(|| panic!("{name} must have Some(schema) with the ABI25 fingerprint"));
+        assert_exact_catalog_schema(schema, name);
+    }
+}
+
 fn catalog_fingerprint(program: &vm::Program) -> vm::HostApiFingerprint {
     let schemas = program.host_import_schemas();
+    assert_eq!(schemas.len(), program.imports.len());
     let mut fingerprint = None;
-    for schema in schemas.iter().flatten() {
+    for (import, schema) in program.imports.iter().zip(schemas.iter()) {
+        let schema = schema
+            .as_ref()
+            .unwrap_or_else(|| panic!("{} must carry an exact catalog schema", import.name));
         match fingerprint {
             None => fingerprint = Some(schema.fingerprint),
             Some(existing) => assert_eq!(
@@ -66,6 +124,52 @@ fn walk_rss_files(root: &Path, files: &mut Vec<PathBuf>) {
     }
 }
 
+#[cfg(feature = "mqtt")]
+fn assert_mqtt_event_fields(schema: &HostTypeSchema) {
+    match schema {
+        HostTypeSchema::Named { name, fields } => {
+            assert_eq!(name, "MqttEvent");
+            let expected = [
+                ("kind", HostTypeSchema::String),
+                (
+                    "topic",
+                    HostTypeSchema::Optional(Box::new(HostTypeSchema::String)),
+                ),
+                (
+                    "payload_text",
+                    HostTypeSchema::Optional(Box::new(HostTypeSchema::String)),
+                ),
+                (
+                    "payload_base64",
+                    HostTypeSchema::Optional(Box::new(HostTypeSchema::String)),
+                ),
+                (
+                    "qos",
+                    HostTypeSchema::Optional(Box::new(HostTypeSchema::Int)),
+                ),
+                (
+                    "retain",
+                    HostTypeSchema::Optional(Box::new(HostTypeSchema::Bool)),
+                ),
+                (
+                    "dup",
+                    HostTypeSchema::Optional(Box::new(HostTypeSchema::Bool)),
+                ),
+                (
+                    "reason",
+                    HostTypeSchema::Optional(Box::new(HostTypeSchema::String)),
+                ),
+            ];
+            assert_eq!(fields.len(), expected.len(), "MqttEvent field count");
+            for (field, (expected_name, expected_ty)) in fields.iter().zip(expected) {
+                assert_eq!(field.name, expected_name);
+                assert_eq!(field.ty, expected_ty);
+            }
+        }
+        other => panic!("expected Named MqttEvent, got {other:?}"),
+    }
+}
+
 #[test]
 fn published_abi_is_version_25() {
     assert_eq!(ABI_VERSION, 25);
@@ -91,16 +195,72 @@ fn edge_catalog_fingerprint_is_golden_and_stable() {
     assert_eq!(fingerprint.as_u64(), EDGE_CATALOG_FINGERPRINT_U64);
 }
 
+#[cfg(not(feature = "mqtt"))]
 #[test]
-fn named_mqtt_event_is_the_exact_catalog_binding_when_present() {
+fn mqtt_is_absent_from_the_default_production_catalog() {
+    assert!(function_by_name("mqtt::connection::read_event").is_none());
+    assert!(function_by_name("mqtt::connection::new").is_none());
+    match compile_edge_source_with_flavor(MQTT_READ_EVENT, SourceFlavor::RustScript) {
+        Err(_) => {}
+        Ok(compiled) => {
+            let schemas = compiled.program.host_import_schemas();
+            let mqtt_bound = compiled
+                .program
+                .imports
+                .iter()
+                .zip(schemas.iter())
+                .any(|(import, schema)| import.name.starts_with("mqtt::") && schema.is_some());
+            panic!(
+                "default mqtt-off catalog must not compile or catalog-bind MQTT; bound={mqtt_bound}; imports={:?}",
+                compiled
+                    .program
+                    .imports
+                    .iter()
+                    .map(|import| import.name.as_str())
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+}
+
+#[test]
+fn webrtc_ui_source_cannot_compile_or_catalog_bind_when_default_off() {
+    assert!(function_by_name("webrtc::connection::new").is_none());
+    match compile_edge_source_with_flavor(WEBRTC_UI_SOURCE, SourceFlavor::RustScript) {
+        Err(_) => {}
+        Ok(compiled) => {
+            let schemas = compiled.program.host_import_schemas();
+            let webrtc_bound = compiled
+                .program
+                .imports
+                .iter()
+                .zip(schemas.iter())
+                .any(|(import, schema)| import.name.contains("webrtc") && schema.is_some());
+            panic!(
+                "default-off webrtc UI source must not compile or catalog-bind through stale ABI24; bound={webrtc_bound}; imports={:?}",
+                compiled
+                    .program
+                    .imports
+                    .iter()
+                    .map(|import| import.name.as_str())
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+}
+
+#[cfg(feature = "mqtt")]
+#[test]
+fn named_mqtt_event_is_the_exact_catalog_binding() {
+    let spec = function_by_name("mqtt::connection::read_event")
+        .expect("canonical mqtt::connection::read_event must be published when mqtt is enabled");
+    assert_eq!(spec.name, "mqtt::connection::read_event");
+    assert!(function_by_name("mqtt::connection::new").is_some());
+
     let compiled = compile_rss(MQTT_READ_EVENT);
-    assert!(
-        compiled
-            .program
-            .imports
-            .iter()
-            .any(|import| import.name == "mqtt::connection::read_event"),
-        "migrated edge compile catalog must bind mqtt::connection::read_event"
+    assert_exact_catalog_imports(
+        &compiled.program,
+        &["mqtt::connection::new", "mqtt::connection::read_event"],
     );
 
     let schema = compiled
@@ -108,35 +268,13 @@ fn named_mqtt_event_is_the_exact_catalog_binding_when_present() {
         .host_import_schemas()
         .iter()
         .flatten()
-        .find(|schema| schema.name == "mqtt::connection::read_event");
-
-    match (function_by_name("mqtt::connection::read_event"), schema) {
-        (Some(spec), Some(schema)) => {
-            assert_eq!(spec.name, "mqtt::connection::read_event");
-            match &schema.return_type {
-                HostTypeSchema::Named { name, .. } => {
-                    assert_eq!(name, "MqttEvent");
-                }
-                other => panic!("expected Named MqttEvent, got {other:?}"),
-            }
-            assert_eq!(
-                format!("{}", schema.fingerprint),
-                EDGE_CATALOG_FINGERPRINT_HEX
-            );
-        }
-        (None, None) => {
-            assert_eq!(ABI_VERSION, 25);
-            assert!(
-                function_by_name("http::response::set_body").is_some(),
-                "default controller catalog keeps HTTP hosts when MQTT stays ABI-gated"
-            );
-        }
-        (abi, exact) => panic!(
-            "mqtt ABI publication and exact catalog schema must stay aligned; abi={:?} exact={}",
-            abi.map(|spec| spec.name),
-            exact.is_some()
-        ),
-    }
+        .find(|schema| schema.name == "mqtt::connection::read_event")
+        .expect("mqtt::connection::read_event must have Some(schema)");
+    assert_mqtt_event_fields(&schema.return_type);
+    assert_eq!(
+        format!("{}", schema.fingerprint),
+        EDGE_CATALOG_FINGERPRINT_HEX
+    );
 }
 
 #[test]
@@ -150,33 +288,29 @@ fn checked_in_rss_and_controller_fixtures_compile_through_the_edge_catalog() {
         "pd-controller has no checked-in RSS fixtures; found {files:?}"
     );
 
-    let fixtures = [
-        HTTP_SHORT_CIRCUIT,
-        "use http;\nhttp::response::set_status(204);\n",
-        "use vm;\nvm::http::response::set_body(\"vm-ns\");\n",
-        "use tcp;\nlet stream = tcp::stream::new();\n",
-        "use tcp;\nuse tls;\nlet stream = tcp::stream::new();\nlet session = tls::session::from_socket(stream);\n",
-        "use websocket;\nlet ws = websocket::connection::new();\n",
-        "use udp;\nlet socket = udp::socket::new();\n",
-        "use proxy;\nlet downstream = proxy::stream::downstream();\n",
-        MQTT_READ_EVENT,
+    let fixtures: &[(&str, &[&str])] = &[
+        (HTTP_SHORT_CIRCUIT, &["http::response::set_body"]),
+        (HTTP_SET_STATUS, &["http::response::set_status"]),
+        (TCP_NEW, &["tcp::stream::new"]),
+        (
+            TLS_FROM_SOCKET,
+            &["tcp::stream::new", "tls::session::from_socket"],
+        ),
+        (WEBSOCKET_NEW, &["websocket::connection::new"]),
+        (UDP_NEW, &["udp::socket::new"]),
+        (PROXY_DOWNSTREAM, &["proxy::stream::downstream"]),
     ];
-    for source in fixtures {
+    for (source, expected) in fixtures {
         let compiled = compile_rss(source);
-        assert!(
-            !compiled.program.host_import_schemas().is_empty()
-                || compiled
-                    .program
-                    .imports
-                    .iter()
-                    .any(|import| import.name.contains("http")
-                        || import.name.contains("tcp")
-                        || import.name.contains("tls")
-                        || import.name.contains("websocket")
-                        || import.name.contains("udp")
-                        || import.name.contains("proxy")
-                        || import.name.contains("response")),
-            "fixture must record host imports:\n{source}"
+        assert_exact_catalog_imports(&compiled.program, expected);
+    }
+
+    #[cfg(feature = "mqtt")]
+    {
+        let compiled = compile_rss(MQTT_READ_EVENT);
+        assert_exact_catalog_imports(
+            &compiled.program,
+            &["mqtt::connection::new", "mqtt::connection::read_event"],
         );
     }
 }
