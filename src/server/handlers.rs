@@ -730,7 +730,7 @@ pub(super) async fn list_debug_sessions_handler(
             .map(DebugSessionRecord::to_summary)
             .collect::<Vec<_>>()
     };
-    sessions.sort_by(|lhs, rhs| rhs.updated_unix_ms.cmp(&lhs.updated_unix_ms));
+    sessions.sort_by_key(|lhs| std::cmp::Reverse(lhs.updated_unix_ms));
     Json(DebugSessionListResponse { sessions })
 }
 
@@ -1065,10 +1065,10 @@ pub(super) async fn run_debug_command_handler(
                             debug_sessions_changed = true;
                         }
                     }
-                    DebugCommandRequest::ClearLine { line } => {
-                        if session.breakpoints.remove(&line) {
-                            debug_sessions_changed = true;
-                        }
+                    DebugCommandRequest::ClearLine { line }
+                        if session.breakpoints.remove(&line) =>
+                    {
+                        debug_sessions_changed = true;
                     }
                     _ => {}
                 }
