@@ -18,17 +18,20 @@ homepage = "https://rustscript.org/"
 repository = "https://github.com/rustscript-lang/pd-controller"
 build = "build.rs"
 
+[features]
+mqtt = ["edge/mqtt"]
+
 [dependencies]
 axum = { version = "0.8", features = ["ws"] }
 base64 = "0.22"
-edge = { package = "pd-edge", path = "../pd-edge", version = "0.1.0" }
+edge = { package = "pd-edge", git = "https://github.com/rustscript-lang/pd-edge.git", rev = "5f4f889e349bdfbd5534deb42bd13b616a6114f5", version = "0.1.0" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 uuid = { version = "1", features = ["v4"] }
-vm = { package = "pd-vm", path = "../rustscript", version = "0.1.0" }
+vm = { package = "pd-vm", git = "https://github.com/rustscript-lang/rustscript.git", rev = "b1d6cffede77f49410bf63525f30b9a46b02dc01", version = "0.1.0" }
 
 [dev-dependencies]
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }

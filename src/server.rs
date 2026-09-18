@@ -620,7 +620,7 @@ impl ControllerState {
                 .and_then(|session_id| guard.get(session_id).map(DebugSessionRecord::to_detail));
             (sessions, selected_session)
         };
-        sessions.sort_by(|lhs, rhs| rhs.updated_unix_ms.cmp(&lhs.updated_unix_ms));
+        sessions.sort_by_key(|lhs| std::cmp::Reverse(lhs.updated_unix_ms));
         DebugSessionsStreamSnapshot {
             kind: "snapshot",
             sessions,

@@ -1,5 +1,51 @@
 use super::support::*;
 
+fn protocol_import_matches(name: &str, root: &str) -> bool {
+    name.starts_with(&format!("{root}::")) || name.contains(&format!("::{root}::"))
+}
+
+fn assert_default_off_protocol_unbound_or_fail_closed(source: &str, root: &str) {
+    match edge::compile_edge_source_with_flavor(source, SourceFlavor::RustScript) {
+        Err(err) => {
+            let message = err.to_string();
+            assert!(
+                message.contains("unknown host function") || message.contains(root),
+                "fail-closed {root} compile error must identify the omitted host, got: {message}"
+            );
+        }
+        Ok(compiled) => {
+            let schemas = compiled.program.host_import_schemas();
+            assert_eq!(
+                schemas.len(),
+                compiled.program.imports.len(),
+                "host import schemas must stay aligned with imports"
+            );
+            let mut seen = 0usize;
+            for (import, schema) in compiled.program.imports.iter().zip(schemas.iter()) {
+                if !protocol_import_matches(&import.name, root) {
+                    continue;
+                }
+                seen += 1;
+                assert!(
+                    schema.is_none(),
+                    "{} must remain unbound (None schema) when {root} is omitted, got {schema:?}",
+                    import.name
+                );
+            }
+            assert!(
+                seen > 0,
+                "compiled source must include {root} imports to prove unbound None schemas; imports={:?}",
+                compiled
+                    .program
+                    .imports
+                    .iter()
+                    .map(|import| import.name.as_str())
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+}
+
 #[tokio::test]
 async fn ui_blocks_and_deploy_endpoints_work() {
     let (addr, handle, _state) = spawn_controller(ControllerConfig::default()).await;
@@ -705,7 +751,7 @@ async fn ui_render_extended_value_blocks_work_with_flow_graph() {
         rustscript.contains("vm::http::response::set_body(status_plus_len);"),
         "expected data edge into flow action, got: {rustscript}"
     );
-    if let Err(err) = compile_source_with_flavor(rustscript, SourceFlavor::RustScript) {
+    if let Err(err) = edge::compile_edge_source_with_flavor(rustscript, SourceFlavor::RustScript) {
         panic!("expected generated rustscript to compile, got: {err}\nsource:\n{rustscript}");
     }
 
@@ -1135,6 +1181,10 @@ async fn ui_render_extended_abi_blocks_generate_expected_calls() {
     assert!(
         rustscript.contains("vm::websocket::connection::set_target(ws, \"ws://127.0.0.1:8081\");")
     );
+    assert!(
+        rustscript.lines().any(|line| line.trim() == "use vm;"),
+        "UI rustscript must include production `use vm;`, got:\n{rustscript}"
+    );
     assert!(rustscript.contains("let rtc: int = vm::webrtc::connection::new();"));
     assert!(rustscript.contains("let udp: int = vm::udp::socket::new();"));
     assert!(
@@ -1142,9 +1192,30 @@ async fn ui_render_extended_abi_blocks_generate_expected_calls() {
     );
     assert!(rustscript.contains("let upstream_proxy: int = upstream::as_stream();"));
     assert!(rustscript.contains("let upstream_all = upstream_response::read_all();"));
-    if let Err(err) = edge::compile_edge_source_with_flavor(rustscript, SourceFlavor::RustScript) {
-        panic!("expected rustscript ABI render to compile, got: {err}\nsource:\n{rustscript}");
+    let without_webrtc = rustscript
+        .lines()
+        .filter(|line| !line.contains("webrtc"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    if let Err(err) =
+        edge::compile_edge_source_with_flavor(&without_webrtc, SourceFlavor::RustScript)
+    {
+        panic!(
+            "expected rustscript ABI render without webrtc to compile, got: {err}\nsource:\n{without_webrtc}"
+        );
     }
+    let mut webrtc_ui_source = String::from("use vm;\n");
+    for line in rustscript.lines() {
+        if line.contains("webrtc") {
+            webrtc_ui_source.push_str(line.trim());
+            webrtc_ui_source.push('\n');
+        }
+    }
+    assert!(
+        webrtc_ui_source.contains("let rtc: int = vm::webrtc::connection::new();"),
+        "UI rustscript must emit production webrtc shape with `use vm;`, got:\n{rustscript}"
+    );
+    assert_default_off_protocol_unbound_or_fail_closed(&webrtc_ui_source, "webrtc");
 
     let javascript = render_json["source"]["javascript"]
         .as_str()
@@ -1487,7 +1558,7 @@ async fn ui_render_plain_if_and_loop_flow() {
         rustscript.contains("vm::http::response::set_status(403);"),
         "expected if false branch action in rustscript, got: {rustscript}"
     );
-    if let Err(err) = compile_source_with_flavor(rustscript, SourceFlavor::RustScript) {
+    if let Err(err) = edge::compile_edge_source_with_flavor(rustscript, SourceFlavor::RustScript) {
         panic!("expected flow rustscript to compile, got: {err}\nsource:\n{rustscript}");
     }
 

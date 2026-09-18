@@ -8,7 +8,7 @@ use pd_controller::{
     ControllerConfig, ControllerState, EnqueueCommandResponse, build_controller_app,
 };
 use tokio::task::JoinHandle;
-use vm::{Program, compile_source, encode_program};
+use vm::{Program, SourceFlavor, encode_program};
 
 #[derive(serde::Deserialize)]
 struct ResultsResponse {
@@ -27,9 +27,12 @@ async fn spawn_server(app: axum::Router) -> (SocketAddr, JoinHandle<()>) {
 }
 
 fn build_short_circuit_program(body: &str) -> Program {
-    compile_source(&format!("use http;\nhttp::response::set_body({body:?});\n"))
-        .expect("short-circuit e2e source should compile")
-        .program
+    edge::compile_edge_source_with_flavor(
+        &format!("use http;\nhttp::response::set_body({body:?});\n"),
+        SourceFlavor::RustScript,
+    )
+    .expect("short-circuit e2e source should compile through the edge catalog")
+    .program
 }
 
 #[tokio::test]
